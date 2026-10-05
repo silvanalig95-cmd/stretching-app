@@ -8,8 +8,9 @@ import {
   fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA, PROXY_BASE,
 } from './youtube.js';
 import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
-import { applyDiscovery, addManualVideo, importRecords, followChannel } from './state.js';
-import { attachComments } from './analyze.js';
+import { applyDiscovery, addManualVideo, addAnalyzedVideo, importRecords, followChannel } from './state.js';
+import { attachComments, analyzeVideoText } from './analyze.js';
+import { buildReport } from './report.js';
 import { SearchIndex } from './index.js';
 import { areaLabel } from './lexicon.js';
 
@@ -33,6 +34,7 @@ export const ctx = {
     combos: null,          // the last combo search: {combos, bestSingle} or null
     combo: null,           // the combo being followed: {ids, index, title}
     verifiedTried: false,
+    analysis: null,        // the video last looked at in Library > "Look at a video first": {video, report, notes}
   },
   get state() { return this.store.state; },
   /** True when searching YouTube is possible: either the person's own key, or one the server keeps for everybody. */
@@ -277,6 +279,51 @@ export async function growLibrary(areaIds) {
 // ---------------------------------------------------------------- bringing things in
 
 /** Split pasted text into items: one per line (names have spaces), or several links on one line. */
+/**
+ * Look at ONE pasted video link without keeping anything: read its details, its chapters and (with a key)
+ * its comments, analyse them, and return a report. Nothing is stored until commitAnalysis().
+ * @returns {Promise<{error?:string, video?:object, report?:object, notes:string[]}>}
+ */
+export async function analyzeLink(text, { progress = () => {} } = {}) {
+  const input = String(text ?? '').trim();
+  const notes = [];
+  if (!input) return { error: 'Paste a YouTube video link first.', notes };
+  const src = parseSourceInput(input);
+  if (src.type !== 'video') {
+    return { error: src.type === 'search' ? 'That doesn’t look like a YouTube video link. Paste the address of one video (youtube.com/watch?v=… or youtu.be/…).' : 'That’s a playlist or a teacher, not a single video. Use “Add videos, playlists or teachers” below for those.', notes };
+  }
+  const id = src.value;
+  const known = ctx.state.videos[id];
+  const api = client();
+  let video, subscribers = null;
+  if (api) {
+    progress('Reading the video…');
+    const [rec] = await api.videos([id]);
+    if (!rec) return { error: 'No public video was found at that link (it may be private, deleted or not embeddable).', notes };
+    let comments = [];
+    progress('Reading what viewers say…');
+    try { comments = await api.comments(id); } catch (e) { if (e instanceof QuotaError || e instanceof KeyError) throw e; notes.push('The comments couldn’t be read.'); }
+    video = attachComments({ ...rec, source: 'manual' }, comments);
+    if (rec.channelId) {
+      try { const ch = (await api.channels([rec.channelId]))[rec.channelId]; subscribers = ch?.subscribers ?? null; if (subscribers != null) video.subscribers = subscribers; } catch (e) { if (e instanceof QuotaError || e instanceof KeyError) throw e; }
+    }
+  } else {
+    progress('Reading the title…');
+    const meta = await fetchOEmbed(id);
+    video = { id, title: meta?.title || known?.title || 'Video (title unknown)', channel: meta?.channel || known?.channel || '', description: known?.description ?? '', tags: known?.tags ?? [], durationSec: known?.durationSec ?? null, views: known?.views ?? null, likes: known?.likes ?? null, embeddable: true, verified: false, source: 'manual' };
+    video.profile = analyzeVideoText(video);
+    notes.push('Without a YouTube key I can only read the title, so this analysis is thin. Add a free key in Settings for chapters, tags, length and viewer comments.');
+  }
+  return { video, report: buildReport(video, { state: ctx.state, subscribers }), notes };
+}
+
+/** Keep an analysed video (see analyzeLink): into the index, and into the library unless told otherwise. */
+export function commitAnalysis(video, { toLibrary = true } = {}) {
+  const rec = addAnalyzedVideo(ctx.state, video, { toLibrary });
+  ctx.store.save();
+  return rec;
+}
+
 export function splitInputs(text) {
   const items = [];
   for (const line of String(text ?? '').split(/\r?\n/)) {

@@ -10,6 +10,7 @@ import { toggleLibrary, blockVideo, unblockVideo, updateLibraryItem, allTags, un
 import { buildModel, coverage } from '../model.js';
 import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
+import { analyzePanel } from './analyze.js';
 
 const LEN = { '': null, short: [0, 10], mid: [10, 20], long: [20, 30], xl: [30, 999] };
 const TABS = [['mine', 'My library'], ['discovered', 'Discovered'], ['suggestions', 'Suggestions']];
@@ -307,6 +308,7 @@ export function mountLibrary(root) {
         h('div', null, h('h3', null, 'Add to your library'), addForm, followSlot),
         h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
           h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).')))),
+    analyzePanel({ onChange: () => rerender() }),
     tabsSlot, covSlot, h('section', { class: 'panel' }, controls, tips, interpSlot, savedSlot, tagSlot), listSlot);
   rerender();
 }

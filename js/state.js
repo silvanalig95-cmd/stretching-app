@@ -270,6 +270,14 @@ export function addManualVideo(state, rec, { toLibrary = true } = {}) {
 }
 
 /** Records from a channel/playlist import: into the index, optionally into the library. */
+/** Keep a video that has already been analysed (profile, evidence and comment sample intact), optionally in the library. */
+export function addAnalyzedVideo(state, video, { toLibrary = true } = {}) {
+  const merged = mergeVideo(state.videos[video.id], { addedAt: Date.now(), ...video, source: 'manual' });
+  state.videos[video.id] = merged;
+  if (toLibrary) addToLibrary(state, video.id);
+  return merged;
+}
+
 export function importRecords(state, records, { toLibrary = false } = {}) {
   let added = 0;
   for (const r of records) {

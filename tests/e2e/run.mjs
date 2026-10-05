@@ -129,6 +129,20 @@ console.log('\nWorld 1: first run, no YouTube key');
     await goto(page, 'today');
   });
 
+  await step('Look at a video first, with no key: it reads the title, says the analysis is thin, and stores nothing', async () => {
+    await goto(page, 'library');
+    const before = await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length }));
+    await page.fill('#analyze-input', 'https://youtu.be/dQw4w9WgXcQ');
+    await page.click('#analyze-btn');
+    await page.waitForSelector('#analysis', { timeout: 10000 });
+    ok((await page.locator('#analyze-status').innerText()).includes('Without a YouTube key'), await page.locator('#analyze-status').innerText());
+    ok((await page.locator('#analysis-title').innerText()).includes('Pasted video about hips'));
+    ok(await page.locator('#analysis .a-area[data-area=hip_flexors], #analysis .a-area[data-area=glutes]').count() >= 1, 'the title alone still points at the hips');
+    eq(await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length })), before);
+    await page.click('#analysis-discard');
+    await goto(page, 'today');
+  });
+
   await step('the player reports the real length, which corrects the guess', async () => {
     await waitFeatured(page);
     const id = await featuredId(page);
@@ -736,6 +750,54 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     await page.click('#grow');
     await page.waitForSelector('.toast.success:has-text("Found")', { timeout: 15000 });
     ok(await U(page, () => Object.keys(window.__unfurl.state.videos).length) >= before, 'no loss');
+  });
+
+  await step('Look at a video first: paste a link, read the full analysis, and nothing is kept until you say so', async () => {
+    await goto(page, 'library');
+    const id = await U(page, (ids) => ids.find((i) => !(i in window.__unfurl.state.videos)), VIDEOS.map((v) => v.id));
+    ok(id, 'a video the app has not seen yet');
+    page.analyzeId = id;
+    const before = await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length }));
+    await page.fill('#analyze-input', `https://youtu.be/${id}`);
+    await page.click('#analyze-btn');
+    await page.waitForSelector('#analysis', { timeout: 10000 });
+    ok((await page.locator('#analysis-summary').innerText()).length > 10, 'a one-line verdict');
+    ok(await page.locator('#analysis .a-area').count() >= 1, 'muscles listed, each with a bar');
+    ok((await page.locator('#analysis').innerText()).includes('What viewers say'), 'comments section');
+    ok((await page.locator('#analysis .a-limits').innerText()).includes('can’t watch the footage'), 'honest about its limits');
+    eq(await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length })), before, 'nothing kept yet');
+    ok(await page.locator('#analysis-add').isEnabled(), 'Add is offered');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => { t.style.display = 'none'; }));
+    await page.locator('#analyze-panel').screenshot({ path: path.join(SHOTS, '22-analysis.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scrolling on a phone');
+    await page.locator('#analyze-panel').screenshot({ path: path.join(SHOTS, '22-analysis-mobile.png') });
+    await page.setViewportSize({ width: 1280, height: 900 });
+  });
+
+  await step('adding from the report puts the video, with its analysis and comments, into My library', async () => {
+    const id = page.analyzeId;
+    const libBefore = await libCount(page);
+    await page.click('#analysis-add');
+    eq(await libCount(page), libBefore + 1);
+    const v = await U(page, (i) => { const x = window.__unfurl.state.videos[i]; return { src: x.source, comments: x.comments?.length, ev: x.evidence?.n, areas: Object.keys(x.profile.areas).length }; }, id);
+    ok(v.src === 'manual' && v.comments > 0 && v.ev > 0 && v.areas > 0, JSON.stringify(v));
+    ok(await page.locator('#analysis-add').isDisabled(), 'the button now says it is done');
+    ok((await page.locator('#analysis-add').innerText()).includes('In your library'));
+    ok(await page.locator('#lib-list').innerText().then((t) => t.length > 0));
+    await page.click('#analysis-discard');
+    eq(await page.locator('#analysis').count(), 0, 'closing removes the report');
+  });
+
+  await step('a playlist or a nonsense link in that box is explained, not analysed', async () => {
+    await page.fill('#analyze-input', 'https://www.youtube.com/playlist?list=PLabcdefghijk');
+    await page.click('#analyze-btn');
+    await page.waitForFunction(() => document.getElementById('analyze-status').textContent.includes('playlist or a teacher'));
+    await page.fill('#analyze-input', 'not a link at all');
+    await page.click('#analyze-btn');
+    await page.waitForFunction(() => document.getElementById('analyze-status').textContent.includes('doesn’t look like a YouTube video link'));
+    eq(await page.locator('#analysis').count(), 0);
+    await goto(page, 'today');
   });
 
   await step('quota usage is tracked and shown', async () => {

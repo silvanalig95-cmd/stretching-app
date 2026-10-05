@@ -20,6 +20,8 @@ Your library, history and ratings are never left behind by an update:
 **Sharper keyword search.**
 - Phrases, `-exclusions`, field filters (`teacher:` `pose:` `tag:` `for:` `title:` `len:`), field-weighted ranking (BM25F), typo tolerance, synonyms and word stems, "did you mean", suggestions while typing, and an "understood as" line. Saved searches.
 
+**Look at a video first.** Paste one video link in the Library and get a readable analysis before deciding whether to keep it: muscles worked and why, exercises found, chapters, what viewers say, quality, and how it fits your body spots and library gaps. Nothing is stored until you add it; adding keeps the exact analysis that was shown.
+
 **Combos.** When you pick several muscle areas and no single video covers them within your time, it assembles 2–3 short ones that do, and plays them in sequence.
 
 **Hosting.** `serve.py` can now run as a shared, internal website: listen address and port, allowed host names, logins (one shared or several, hashed passwords, brute-force lock-out, or a trusted login proxy), a separate library per person, an optional server-held YouTube key with a per-person daily cap, security headers, `/healthz`, and a build id so open pages can offer a reload. It refuses to listen on a network without a login. New `deploy/` kit: **self-updating from a git branch** with self-test, health check and automatic rollback; systemd, Docker and installer. See `deploy/README.md`. Running it on your own computer works exactly as before.
