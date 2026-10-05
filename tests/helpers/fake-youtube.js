@@ -7,12 +7,12 @@
 
 
 // topic -> {title, desc, comments[]}
-import { STARTER_VIDEOS } from '../../data/starter.js';
+import { SUGGESTIONS } from '../../data/suggestions.js';
 
-// The starter videos "exist" on this fake YouTube (with slightly different lengths, so
+// The suggested videos "exist" on this fake YouTube (with slightly different lengths, so
 // verification visibly corrects them) except GONE, which behave like deleted videos.
 export const GONE = new Set(['uQohpNbzyUg', '9GiLEupJq40']);
-const STARTER = new Map(STARTER_VIDEOS.map((s) => [s.id, s]));
+const STARTER = new Map(SUGGESTIONS.map((s) => [s.id, s]));
 
 const T = {
   hips: {
@@ -82,18 +82,29 @@ const ROWS = [
   for (let i = 21; i <= 80; i++) {
     const topic = topics[i % topics.length];
     const views = Math.round(2000 * 1.35 ** (i % 17)), likeRatio = 0.012 + ((i * 7) % 30) / 1000;
-    ROWS.push([`TESTvid${String(i).padStart(4, '0')}`, topic, mins[i % mins.length], i % 3 === 0 ? `Small Channel ${i}` : ['Calm Hips Studio', 'Big Channel Yoga', 'Tiny Yoga Room', 'Desk Yoga Co'][i % 4],
-      views, Math.round(views * likeRatio), i % 3 === 0 ? 1500 + i * 120 : 300000]);
+    const SUBS = { 'Calm Hips Studio': 800000, 'Big Channel Yoga': 3000000, 'Tiny Yoga Room': 4200, 'Desk Yoga Co': 150000 };
+    const channel = i % 3 === 0 ? `Small Channel ${i}` : ['Calm Hips Studio', 'Big Channel Yoga', 'Tiny Yoga Room', 'Desk Yoga Co'][i % 4];
+    ROWS.push([`TESTvid${String(i).padStart(4, '0')}`, topic, mins[i % mins.length], channel, views, Math.round(views * likeRatio), SUBS[channel] ?? 1500 + i * 120]);
   }
 }
 
-export const CHANNELS = Object.fromEntries(ROWS.map((r) => [`UC_${r[3].replace(/\W/g, '')}`, { title: r[3], subs: r[6] }]));
-const chId = (name) => `UC_${name.replace(/\W/g, '')}`;
+// Real channel ids are "UC" + 22 chars; uploads playlists are "UU" + the same 22. Derive both deterministically from the name.
+export const chId = (name) => {
+  let h = 2166136261, out = '';
+  for (let i = 0; out.length < 22; i++) { h = Math.imul(h ^ (name.charCodeAt(i % name.length) + i), 16777619) >>> 0; out += h.toString(36).padStart(7, '0').slice(-5); }
+  return `UC${out.slice(0, 22)}`;
+};
+export const uploadsOf = (channelId) => `UU${channelId.slice(2)}`;
+export const handleOf = (name) => `@${name.toLowerCase().replace(/\W/g, '')}`;
+export const CHANNELS = Object.fromEntries(ROWS.map((r) => [chId(r[3]), { title: r[3], subs: r[6], handle: handleOf(r[3]) }]));
 
 export const VIDEOS = ROWS.map(([id, topic, min, channel, views, likes]) => ({
   id, topic, min, channel, views, likes, channelId: chId(channel),
   title: T[topic].title(min), desc: T[topic].desc, comments: T[topic].comments,
 }));
+
+export const PLAYLIST_ID = 'PLTESTPLAYLIST00000000000000000001';
+export const PLAYLIST_VIDEOS = VIDEOS.filter((v) => v.topic === 'hips').slice(0, 12).map((v) => v.id);
 
 const KEYWORDS = {
   hips: ['hip', 'hips', 'flexor', 'flexors', 'psoas', 'opener'],
@@ -133,6 +144,12 @@ export function handle(urlString) {
     return err(400, 'badRequest', 'API key not valid. Please pass a valid API key.', 'API_KEY_INVALID');
   }
   if (fault.quota) return err(403, 'quotaExceeded', 'The request cannot be completed because you have exceeded your quota.');
+
+  if (endpoint === 'search' && p('type') === 'channel') {
+    const q = (p('q') ?? '').toLowerCase().replace(/\W/g, '');
+    const hits = Object.entries(CHANNELS).filter(([, c]) => c.title.toLowerCase().replace(/\W/g, '').includes(q) || q.includes(c.title.toLowerCase().replace(/\W/g, '')));
+    return ok({ items: hits.slice(0, 5).map(([id, c]) => ({ id: { kind: 'youtube#channel', channelId: id }, snippet: { channelId: id, channelTitle: c.title, title: c.title } })) });
+  }
 
   if (endpoint === 'search') {
     const terms = (p('q') ?? '').toLowerCase().split(/\W+/).filter(Boolean);
@@ -187,14 +204,40 @@ export function handle(urlString) {
   }
 
   if (endpoint === 'channels') {
-    const ids = (p('id') ?? '').split(',');
+    const ids = (p('id') ?? '').split(',').filter(Boolean);
+    const handle = p('forHandle');
+    let found = ids.filter((id) => CHANNELS[id]);
+    if (handle) found = Object.keys(CHANNELS).filter((id) => CHANNELS[id].handle === handle.toLowerCase());
+    if (p('forUsername')) found = [];
     return ok({
-      items: ids.filter((id) => CHANNELS[id]).map((id) => ({
+      items: found.map((id) => ({
         kind: 'youtube#channel', id, snippet: { title: CHANNELS[id].title },
         statistics: { subscriberCount: String(CHANNELS[id].subs), hiddenSubscriberCount: false },
+        contentDetails: { relatedPlaylists: { uploads: uploadsOf(id) } },
       })),
     });
   }
+
+  if (endpoint === 'playlistItems') {
+    const pl = p('playlistId') ?? '';
+    let ids;
+    if (pl === PLAYLIST_ID) ids = PLAYLIST_VIDEOS;
+    else if (pl.startsWith('UU')) ids = VIDEOS.filter((v) => v.channelId === `UC${pl.slice(2)}`).map((v) => v.id).reverse(); // newest first
+    else return err(404, 'playlistNotFound', 'The playlist identified with the request\'s playlistId parameter cannot be found.');
+    const start = Number((p('pageToken') ?? 'i0').slice(1)) || 0;
+    const size = Math.min(8, Number(p('maxResults') ?? 5)); // small pages, so clients must paginate
+    return ok({
+      kind: 'youtube#playlistItemListResponse',
+      ...(start + size < ids.length ? { nextPageToken: `i${start + size}` } : {}),
+      items: ids.slice(start, start + size).map((id) => ({ kind: 'youtube#playlistItem', contentDetails: { videoId: id } })),
+    });
+  }
+
+  if (endpoint === 'playlists') {
+    if (p('id') !== PLAYLIST_ID) return ok({ items: [] });
+    return ok({ items: [{ id: PLAYLIST_ID, snippet: { title: 'My favourite hip routines', channelId: VIDEOS[0].channelId, channelTitle: VIDEOS[0].channel } }] });
+  }
+
   return err(404, 'notFound', `Unknown endpoint ${endpoint}`);
 }
 

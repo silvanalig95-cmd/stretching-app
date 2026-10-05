@@ -182,3 +182,62 @@ test('intensity feedback nudges level: repeatedly "too hard" favours beginner vi
   const r = rankCandidates({ videos: [gentle, hard], filters: F([{ id: 'hip_flexors', mode: 'tight' }]), model: buildModel(hist, byId(other)), adventure: 0, today: '2026-10-05' });
   assert.equal(r[0].video.id, gentle.id);
 });
+
+test('free-text terms: typed alone they must match; alongside muscles they boost; with no matches they do nothing', () => {
+  const pigeon = vid('Hip flow', { description: '0:00 a\n1:00 Pigeon pose\n5:00 b\n8:00 c' });
+  const other = vid('Hip flow two', { description: 'Just lunges' });
+  const neck = vid('Neck release');
+  const m = buildModel([], {});
+  const scores = new Map([[pigeon.id, 1], [other.id, 0.2]]);
+  const only = rankCandidates({ videos: [pigeon, other, neck], filters: { areas: [], minMin: 5, maxMin: 40, styles: [], terms: ['pigeon'] }, model: m, textScores: scores });
+  assert.deepEqual(only.map((r) => r.video.id), [pigeon.id, other.id], 'free text alone excludes non-matches');
+  assert.match(only[0].reasons[0], /Matches what you typed/);
+  const both = rankCandidates({ videos: [pigeon, other, neck], filters: F([{ id: 'hip_flexors', mode: 'tight' }], { terms: ['pigeon'] }), model: m, textScores: scores, adventure: 0 });
+  assert.equal(both[0].video.id, pigeon.id);
+  assert.ok(!both.some((r) => r.video.id === neck.id), 'muscles still required');
+  const ignored = rankCandidates({ videos: [pigeon, other, neck], filters: { areas: [], minMin: 5, maxMin: 40, styles: [], terms: ['pigeon'] }, model: m, textScores: null });
+  assert.equal(ignored.length, 3, 'no text scores supplied (nothing matched) => terms ignored');
+});
+
+test('scope: library-only and discovered-only', () => {
+  const a = vid('Hip flexor stretch A'), b = vid('Hip flexor stretch B');
+  const lib = new Set([a.id]);
+  const ids = (source) => rankCandidates({ videos: [a, b], filters: F([{ id: 'hip_flexors', mode: 'tight' }], { source }), model: buildModel([], {}), libraryIds: lib }).map((r) => r.video.id);
+  assert.deepEqual(ids('library'), [a.id]);
+  assert.deepEqual(ids('discovered'), [b.id]);
+  assert.equal(ids('all').length, 2);
+  const r = rankCandidates({ videos: [a, b], filters: F([{ id: 'hip_flexors', mode: 'tight' }]), model: buildModel([], {}), libraryIds: lib });
+  assert.equal(r.find((x) => x.video.id === a.id).flags.inLibrary, true);
+  assert.equal(r.find((x) => x.video.id === b.id).flags.inLibrary, false);
+});
+
+import { areaHeat, neglectedAreas } from '../../js/model.js';
+const hs = (date, areas, ratings = {}) => ({ id: `s${date}${areas.join('')}`, date, videoId: 'x', areas: areas.map((id) => ({ id, mode: 'tight' })), ratings });
+
+test('areaHeat: counts recent sessions, last-done and how much it helped, per muscle', () => {
+  const heat = areaHeat([
+    hs('2026-09-01', ['glutes'], { glutes: 'much' }),
+    hs('2026-10-01', ['glutes', 'neck'], { glutes: 'some' }),
+    hs('2026-10-04', ['neck']),
+  ], { today: '2026-10-05', days: 28 });
+  assert.equal(heat.glutes.sessions, 1, 'the September one is outside the 28-day window');
+  assert.equal(heat.glutes.daysAgo, 4);
+  assert.equal(heat.glutes.helped, 0.75);
+  assert.equal(heat.neck.sessions, 2); assert.equal(heat.neck.daysAgo, 1); assert.equal(heat.neck.helped, null);
+});
+
+test('neglectedAreas: standing spots by how long since you worked them; never-worked comes first; weak wins ties', () => {
+  const focus = [{ id: 'neck', mode: 'tight' }, { id: 'glutes', mode: 'weak' }, { id: 'calves', mode: 'tight' }, { id: 'core', mode: 'weak' }];
+  const hist = [hs('2026-10-04', ['neck']), hs('2026-09-20', ['glutes'])];
+  const r = neglectedAreas(focus, hist, { today: '2026-10-05', n: 4 });
+  assert.deepEqual(r.map((x) => x.id), ['core', 'calves', 'glutes', 'neck'], 'never-done first (weak before tight), then oldest');
+  assert.equal(r[2].daysAgo, 15); assert.equal(r[0].daysAgo, null);
+  assert.equal(neglectedAreas(focus, hist, { today: '2026-10-05', n: 2 }).length, 2);
+});
+
+test('with no standing spots set, the areas you work most often stand in', () => {
+  const hist = [hs('2026-10-01', ['glutes']), hs('2026-10-02', ['glutes']), hs('2026-09-30', ['neck']), hs('2026-10-04', ['full_body'])];
+  const r = neglectedAreas([], hist, { today: '2026-10-05', n: 5 });
+  assert.deepEqual(r.map((x) => x.id), ['neck', 'glutes'], 'neck was longest ago; full body is not a muscle to neglect');
+  assert.deepEqual(neglectedAreas([], [], { today: '2026-10-05' }), []);
+});

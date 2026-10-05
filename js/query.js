@@ -4,7 +4,8 @@
 // every query it has used (and the result page it reached), and prefers
 // phrasings/teachers/sort orders it hasn't tried yet.
 
-import { AREA_TERMS, STYLE_TERMS, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
+import { AREA_TERMS, STYLE_TERMS, POSE_TERMS, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
+import { STOP_WORDS } from './index.js';
 
 // ---------------------------------------------------------------- video URLs
 
@@ -42,7 +43,7 @@ const HINT_WORDS = ['morning', 'evening', 'bedtime', 'beginner', 'beginners', 'a
  */
 export function parseCommand(text) {
   const raw = String(text ?? '').toLowerCase();
-  const out = { areas: [], minMin: null, maxMin: null, styles: [], hints: [], understood: false };
+  const out = { areas: [], minMin: null, maxMin: null, styles: [], hints: [], terms: [], understood: false };
 
   // --- length
   const num = '(\\d{1,3})';
@@ -89,7 +90,17 @@ export function parseCommand(text) {
   out.hints = HINT_WORDS.filter((w) => words.has(w));
   if (out.hints.some((h) => ['bedtime', 'evening'].includes(h)) && !out.styles.includes('restorative')) out.styles.push('restorative');
 
-  out.understood = !!(out.areas.length || out.minMin != null || out.styles.length || out.hints.length);
+  // --- whatever is left over ("pigeon", a teacher's name, "sphinx") is searched for as free text
+  let rest = ` ${normalize(raw)} `;
+  for (const compiled of [AREA_TERMS, STYLE_TERMS]) {
+    for (const m of scan(compiled, raw)) rest = rest.replace(new RegExp(`\\b${m.phrase}s?\\b`, 'g'), ' ');
+  }
+  const noise = new Set([...HINT_WORDS, 'half', 'hour', 'hours', 'quick', 'short', 'long', 'extended', 'brief', 'few', 'under', 'over', 'around', 'about', 'approximately', 'roughly', 'least', 'most', 'than', 'less', 'more', 'within', 'max', 'maximum', 'minimum', 'one', 'today', 'tonight']);
+  const leftover = rest.split(' ').filter((w) => w.length > 2 && !noise.has(w) && !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+  out.terms = [...new Set(leftover)].slice(0, 6);
+
+  const namedPose = scan(POSE_TERMS, raw).length > 0;
+  out.understood = !!(out.areas.length || out.minMin != null || out.styles.length || out.hints.length || namedPose);
   return out;
 }
 
@@ -128,7 +139,9 @@ function videoDurationParam(minMin, maxMin) {
  */
 export function buildQueries(filters, ctx) {
   const { queryLog = {}, rng, n = 2, teachers = TEACHERS, knownTeachers = new Set(), adventure = 0.35 } = ctx;
-  const areas = filters.areas?.length ? filters.areas : [{ id: 'full_body', mode: 'tight' }];
+  const terms = (filters.terms ?? []).join(' ');
+  // With free-text terms and no muscles ("pigeon pose"), search for the terms alone rather than defaulting to full body.
+  const areas = filters.areas?.length ? filters.areas : terms ? [] : [{ id: 'full_body', mode: 'tight' }];
   const styles = filters.styles ?? [];
   const hints = filters.hints ?? [];
   const unseen = teachers.filter((t) => !knownTeachers.has(normalize(t.name).replace(/ /g, '')));
@@ -138,8 +151,9 @@ export function buildQueries(filters, ctx) {
     // 1-2 areas per search keeps queries natural; across searches we cover them all.
     const k = areas.length > 1 && rng() < 0.55 ? 2 : 1;
     const shuffled = [...areas].sort(() => rng() - 0.5).slice(0, Math.min(k, areas.length));
-    const A = areaPhrase(shuffled, rng);
-    const weak = shuffled.every((a) => a.mode === 'weak');
+    const A0 = shuffled.length ? areaPhrase(shuffled, rng) : '';
+    const A = [terms, A0].filter(Boolean).join(' ');
+    const weak = shuffled.length > 0 && shuffled.every((a) => a.mode === 'weak');
     const dur = rng() < 0.8 ? durationPhrase(filters.minMin, filters.maxMin, rng) : '';
     const mod = hints.length && rng() < 0.7 ? pick(hints, rng) : pick(MODIFIERS, rng);
 

@@ -3,7 +3,7 @@
 import { h, fill } from '../dom.js';
 import { ctx, play } from '../ctx.js';
 import { areaLabel } from '../lexicon.js';
-import { buildModel, insights, localDate } from '../model.js';
+import { buildModel, insights, localDate, areaHeat, neglectedAreas } from '../model.js';
 import { deleteSession } from '../state.js';
 import { formatDuration } from '../analyze.js';
 
@@ -32,6 +32,8 @@ export function mountJournal(root) {
     h('div', { class: 'tiles' },
       tile(state.history.length, 'routines done'), tile(`${minutes}`, 'minutes of practice'), tile(streak(state.history), 'day streak'),
       tile(model.channelDone.size, 'teachers tried'), tile(model.ratings, '“did it help?” answers'), tile(poseCount, 'exercises learned')),
+
+    heatmap(state),
 
     h('section', { class: 'panel' },
       h('h2', null, 'What’s working for you'),
@@ -63,4 +65,30 @@ export function mountJournal(root) {
             } }, 'Delete'));
         }))
         : h('p', { class: 'empty-note' }, 'No routines logged yet.')));
+}
+
+/** Which muscles you've been working lately, and which of your standing spots have gone quiet. */
+function heatmap(state) {
+  const focus = state.prefs.focus;
+  if (!state.history.length && !focus.length) return '';
+  const heat = areaHeat(state.history, { days: 28 });
+  const ids = [...new Set([...focus.map((f) => f.id), ...Object.keys(heat)])].filter((a) => a !== 'full_body');
+  if (!ids.length) return '';
+  const rows = ids.map((id) => ({ id, ...(heat[id] ?? { sessions: 0, daysAgo: null, helped: null }), spot: focus.find((f) => f.id === id) }))
+    .sort((a, b) => (b.sessions - a.sessions) || ((b.daysAgo ?? 1e6) - (a.daysAgo ?? 1e6)));
+  const max = Math.max(3, ...rows.map((r) => r.sessions));
+  const quiet = neglectedAreas(focus, state.history, { n: 3 }).filter((n) => n.daysAgo == null || n.daysAgo >= 7);
+  return h('section', { class: 'panel', id: 'heatmap' },
+    h('h2', null, 'Your body, last 4 weeks'),
+    quiet.length ? h('p', { class: 'nudge' }, 'Gone quiet: ', quiet.map((n) => `${areaLabel(n.id)} (${n.daysAgo == null ? 'never worked' : `${n.daysAgo} days`})`).join(', '), '.') : null,
+    h('div', { class: 'heat' }, rows.map((r) => {
+      const bar = h('span', { class: 'bar' }, h('i'));
+      bar.firstChild.style.width = `${Math.max(r.sessions ? 6 : 0, (r.sessions / max) * 100)}%`;
+      return h('div', { class: `heat-row${r.spot ? ' spot' : ''}`, 'data-area': r.id },
+        h('span', { class: 'c-label' }, areaLabel(r.id), r.spot ? h('small', { class: `mode ${r.spot.mode}` }, r.spot.mode === 'weak' ? 'weak spot' : 'tight spot') : null),
+        bar,
+        h('span', { class: 'c-n' }, `${r.sessions}×`),
+        h('span', { class: 'heat-last' }, r.daysAgo == null ? 'never' : r.daysAgo === 0 ? 'today' : `${r.daysAgo}d ago`),
+        h('span', { class: 'heat-help' }, r.helped == null ? '' : `${Math.round(r.helped * 100)}% helped`));
+    })));
 }

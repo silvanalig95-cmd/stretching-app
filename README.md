@@ -16,32 +16,38 @@ It opens <http://localhost:8765>. (macOS: double-click `start.command`. Windows:
 
 It works immediately from a small built-in starter shelf. To let it **search the whole of YouTube on its own**, add a free YouTube key (below).
 
-> Why a local server rather than just opening `index.html`? YouTube won't play embedded videos on pages opened straight from disk, and the server also keeps your history in files that survive clearing your browser.
+> Why a local server rather than just opening `index.html`? YouTube won't play embedded videos on pages opened straight from disk, and the server also keeps your data in files that survive clearing your browser and updating the app.
 
 ## Getting a YouTube key (free, about 3 minutes)
 
 1. Go to <https://console.cloud.google.com/>, sign in, create a project (any name).
 2. **APIs & Services → Library** → search **YouTube Data API v3** → **Enable**.
 3. **APIs & Services → Credentials → Create credentials → API key**. Copy it.
-4. (Recommended) Edit the key and restrict it to *YouTube Data API v3*.
+4. Under **API restrictions** choose **Restrict key → YouTube Data API v3**. Leave *Application restrictions* on **None** (the app calls YouTube from your own browser).
 5. In Unfurl: **Settings → paste → Save & test**.
 
 The free allowance is 10,000 units a day. A web search costs about 100–400 units depending on how much digging it does (the app shows a running total in Settings), so a few dozen searches a day.
 
-The key is stored only on your computer (`userdata/config.json`) and only ever sent to Google's YouTube API.
+The key is stored only on your computer (in your data folder, below) and only ever sent to Google's YouTube API.
 
 ## Using it
 
-- **Today**: type what you need, or tap quick picks / muscles. Tap a muscle once for *tight* (wants stretching), twice for *weak* (wants strengthening), a third time to clear it. Press **Find my routine**.
-- **Another one ↻** gives a different good option; **Not for me** hides a video for good; **I did it ✓** asks whether it helped.
-- **Library**: everything the app knows. It grows every time you search. **Grow library where it's thin** targets the muscle areas you have the fewest videos for. You can also paste a YouTube link you found yourself.
-- **Journal**: your history, plus per-muscle patterns: which exercises and teachers have helped which muscles for *you*.
-- **Settings**: the key, how adventurous the app is (favourites ↔ surprise me), trusted teachers, backup/restore.
+- **Today**: type what you need ("*15–20 min, tight hips and weak glutes, desk posture*"; add a pose or a teacher too: "*pigeon pose, 20 min*", "*Kassandra neck*"), or tap muscles. Tap a muscle once for *tight* (wants stretching), twice for *weak* (wants strengthening), a third time to clear it. Press **Find my routine**.
+  - **Another one ↻** gives a different good option; **＋ Add to library** keeps it; **Not for me** hides it for good; **I did it ✓** asks whether it helped.
+  - **Your body**: "Use my usual spots", and "What have I been neglecting?", which aims at the spots you've gone longest without working.
+  - **Pick from**: everything the app knows, or only your library.
+- **Library**: yours to build, in three shelves:
+  - **My library**: videos you chose. Starts empty. Add by pasting links, pressing "＋ Library" anywhere, or just doing a routine. Add tags and notes; search covers them.
+  - **Discovered**: everything the app's searches and imports found. Used for suggestions; promote the ones you like.
+  - **Suggestions**: a small starter shelf of well-known routines.
+  - The box at the top takes **video links, playlists, and teachers** (a channel link, an @handle, or just a name). A teacher's whole catalogue costs about 1 quota unit per 50 videos; you can **follow** a teacher and check for new uploads later.
+- **Journal**: your history, what's working for you per muscle, and a 4-week map of which muscles you've been working.
+- **Settings**: the key, your standing tight/weak spots, how adventurous the app is, auto-add, backups.
 
 ## How it works
 
 ```
-what you typed ─► parse (muscles, tight/weak, length, style)
+what you typed ─► parse (muscles, tight/weak, length, style, free-text words)
         │
         ▼
   query generator ─► YouTube search (varied wording, teachers, sort order,
@@ -54,7 +60,9 @@ what you typed ─► parse (muscles, tight/weak, length, style)
   viewer comments ─► which muscles do people say it helped? ("my sciatica is
         │            so much better", "didn't help my hips"), pace, benefits
         ▼
-  ranking = how well it matches your muscles
+  local search index ─► BM25 over all of the above + your tags and notes
+        ▼
+  ranking = how well it matches your muscles (+ typed words)
           + quality (likes, views, comment sentiment, teacher trust)
           + what YOUR history predicts
           + novelty (new teachers, "hidden gems"), then length / style / recency
@@ -64,24 +72,48 @@ Every suggestion shows **why** it was picked (which exercises, which comments) a
 
 ### What it learns from you
 
-When you finish a routine you say, per muscle, *much better / a little / not really*, plus intensity and "show again?". The app credits that answer to the **specific exercises in the video that work that muscle**, the teacher, and the style. So if pigeon pose keeps helping your glutes, *other* videos containing pigeon pose rise for glutes, and the Journal says so. Ratings are rebuilt from your history each time, so deleting an entry removes its influence. "Too hard" answers nudge it toward gentler videos; "Never show again" is permanent.
+When you finish a routine you say, per muscle, *much better / a little / not really*, plus intensity and "show again?". The app credits that answer to the **specific exercises in the video that work that muscle**, the teacher, and the style. So if pigeon pose keeps helping your glutes, *other* videos containing pigeon pose rise for glutes, and the Journal says so. Ratings are rebuilt from your history each time, so deleting an entry removes its influence. "Too hard" answers nudge it toward gentler videos; "Never show again" removes the video from your library and blocks it.
+
+## Your data, and updating the app
+
+Your data is **outside the app folder**, so updating, replacing or re-downloading the app can't touch it:
+
+| OS | Folder |
+| --- | --- |
+| macOS | `~/Library/Application Support/Unfurl` |
+| Windows | `%APPDATA%\Unfurl` |
+| Linux | `~/.local/share/unfurl` |
+
+The exact path is printed when the server starts and shown under **Settings → Your data**. Override it with `--data-dir /some/folder` or the `UNFURL_DATA` environment variable.
+
+```
+profile.json   your library, history, ratings, preferences  (small; this is what's backed up)
+index.json     every video the app has discovered + its analysis (rebuildable)
+config.json    your API key (private)
+backups/       a daily backup of profile.json, plus one before every data-format upgrade
+```
+
+- **Upgrading from 0.1**: on first launch your old `./userdata` files are copied to the new location and converted (the originals stay where they were). Videos you saved or did, and ones you pasted, become your library.
+- **A new version that changes the data format** upgrades it automatically *after* backing up the old format. Run an older app on newer data and it opens it **read-only** instead of risking damage.
+- **Damaged file?** It's set aside (never deleted) and the latest backup is restored automatically. **Settings → Your data** lists all backups with one-click restore (what you replace is kept too).
+- **Moving to another computer**: copy the data folder, or use **Export backup / Import backup**. Backups never contain your API key.
+- The analysis keeps getting better: when it changes, the app re-analyses everything you already have from the text and comments it stored; nothing is re-fetched.
+
+See `CHANGELOG.md` for the exact promise.
 
 ## Honest limitations
 
 - **English only** for now (search and text analysis).
 - The "intelligence" is transparent keyword and heuristic analysis (anatomy tables in `js/lexicon.js`), not a language model. It can be fooled by clickbait titles; the comment evidence and your own ratings are what correct it. Comments are noisy; small sample sizes are labelled "early signal".
-- The built-in starter videos came from web search results, not the YouTube API, so their channel names and lengths are best guesses until verified. The app checks them against YouTube the first time you search with a key, fixes them, and hides any that no longer exist; the player also corrects a video's length when you open it.
+- The suggested starter videos came from web search results, not the YouTube API, so their channel names and lengths are best guesses until verified. The app checks them against YouTube the first time you search with a key, fixes them, and hides any that no longer exist; the player also corrects a video's length when you open it.
+- **Sources**: YouTube only, through its official API. Reddit and other forums, Vimeo, Instagram etc. are not included: they have no reliable open API for this (Reddit now needs its own credentials; the rest are not searchable for exercise content).
 - Muscle tags are inferred, not medically reviewed. **This isn't medical advice**: stop if something hurts, and see a professional for persistent pain, numbness or sciatica.
 - Uses only the official YouTube Data API and embedded player. It doesn't scrape YouTube or download video.
-
-## Your data
-
-Everything lives in `userdata/` (git-ignored): `state.json` (library, history, learned data) and `config.json` (your key). **Settings → Export backup** gives a JSON file (never containing the key). If you open the app without the server it falls back to browser storage.
 
 ## Development
 
 ```
-npm test           # 68 unit tests, no dependencies (Node 18+)
+npm test           # unit + storage-server tests, no dependencies (Node 18+, needs python3 for the server tests)
 npm i && npm run test:e2e   # real Chromium + real server (needs Playwright)
 ```
 
@@ -94,8 +126,16 @@ js/analyze.js          video text + comment analysis → profiles
 js/query.js            command parser, query generator
 js/youtube.js          Data API client, discovery pipeline, quota
 js/model.js            ranking + learning
-js/state.js, store.js  data shape and persistence
+js/index.js            local BM25 search index
+js/state.js            data shape, upgrades between versions, library rules
+js/store.js            saving/loading (server files or browser storage), backups
 js/views/              Today, Library, Journal, Settings, feedback dialog
 serve.py               local server (static files + saving to disk)
 data/starter.js        the small starter shelf
 ```
+
+### Changing the analysis or the data format
+
+- Changed how videos are analysed (lexicon, weights, parsing)? **Bump `ANALYSIS_VERSION`** in `js/analyze.js`. Users' stored videos are re-analysed on next launch.
+- Changed the shape of the profile? **Bump `SCHEMA`** in `js/state.js`, add a step to `PROFILE_MIGRATIONS`, and add a test with a saved sample of the old shape. Never edit old steps.
+- Added suggested videos? Bump `SUGGESTIONS_VERSION` in `data/suggestions.js`; new ids are added to existing installs and nothing else changes.

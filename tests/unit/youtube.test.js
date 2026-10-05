@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { YouTubeClient, toApiError, QuotaError, KeyError, CommentsDisabledError, YouTubeError, discover, verifyVideos, fetchOEmbed, quotaDay, quotaUsed, spendQuota, estimateRunCost } from '../../js/youtube.js';
-import { normalizeState, applyDiscovery, logSession } from '../../js/state.js';
+import { freshState, applyDiscovery, logSession } from '../../js/state.js';
 import { mulberry32 } from '../../js/model.js';
 import { fakeFetch, fault, VIDEOS } from '../helpers/fake-youtube.js';
 
@@ -61,7 +61,7 @@ test('videos(): maps duration, stats and embeddability', async () => {
 
 test('discover(): finds new videos, reads comments for the best, and builds profiles', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   const res = await discover({ client: client(), filters: hips, state, rng: mulberry32(11), opts: { queries: 2, commentVideos: 6 } });
   assert.equal(res.report.queries.length, 2);
   assert.ok(res.records.length >= 3, `found ${res.records.length}`);
@@ -81,7 +81,7 @@ test('discover(): finds new videos, reads comments for the best, and builds prof
 
 test('discover() filters out unusable results (too short, not embeddable, live)', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   const orig = VIDEOS[0].min; VIDEOS[0].min = 1; // a 1-minute "short"
   try {
     const res = await discover({ client: client(), filters: hips, state, rng: mulberry32(11), opts: { queries: 3 } });
@@ -91,7 +91,7 @@ test('discover() filters out unusable results (too short, not embeddable, live)'
 
 test('repeated discovery keeps finding NEW videos (queries and result pages rotate)', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   const seen = new Set();
   const queries = new Set();
   let newPerRun = [];
@@ -110,7 +110,7 @@ test('repeated discovery keeps finding NEW videos (queries and result pages rota
 
 test('if the allowance runs out on the 2nd search, the 1st search\'s results are still returned with a warning', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   let searches = 0;
   const flaky = new YouTubeClient({ key: 'k', base: 'http://fake.local/youtube/v3', fetchFn: async (u) => {
     if (String(u).includes('/search') && ++searches === 2) {
@@ -126,25 +126,25 @@ test('if the allowance runs out on the 2nd search, the 1st search\'s results are
 
 test('if the very first call is over quota, the error says why', async () => {
   reset(); fault.quota = true;
-  await assert.rejects(() => discover({ client: client(), filters: hips, state: normalizeState(null), rng: mulberry32(3) }), /allowance is used up/);
+  await assert.rejects(() => discover({ client: client(), filters: hips, state: freshState(), rng: mulberry32(3) }), /allowance is used up/);
   reset();
 });
 
 test('comments disabled on some videos does not stop discovery', async () => {
   reset(); VIDEOS.slice(0, 6).forEach((v) => fault.commentsOff.add(v.id));
-  const res = await discover({ client: client(), filters: hips, state: normalizeState(null), rng: mulberry32(11), opts: { queries: 2, commentVideos: 10 } });
+  const res = await discover({ client: client(), filters: hips, state: freshState(), rng: mulberry32(11), opts: { queries: 2, commentVideos: 10 } });
   assert.ok(res.records.length > 0);
   reset();
 });
 
 test('verifyVideos corrects starter metadata and flags videos that no longer exist', async () => {
   reset();
-  const real = { id: VIDEOS[0].id, title: 'wrong', channel: '', durationSec: 60, source: 'starter', verified: false };
-  const gone = { id: 'GONEGONE123', title: 'Deleted video', source: 'starter', verified: false };
+  const real = { id: VIDEOS[0].id, title: 'wrong', channel: '', durationSec: 60, source: 'suggestion', verified: false };
+  const gone = { id: 'GONEGONE123', title: 'Deleted video', source: 'suggestion', verified: false };
   const [a, b] = await verifyVideos({ client: client(), videos: [real, gone], readComments: true });
   assert.equal(a.title, VIDEOS[0].title);
   assert.equal(a.durationSec, 900);
-  assert.equal(a.source, 'starter'); // provenance kept
+  assert.equal(a.source, 'suggestion'); // provenance kept
   assert.equal(a.verified, true);
   assert.ok(a.evidence && a.profile.areas.hip_flexors > 0.5);
   assert.equal(b.broken, true);
@@ -157,7 +157,7 @@ test('fetchOEmbed: best effort, never throws', async () => {
 });
 
 test('quota bookkeeping resets each Pacific day and estimates a run', () => {
-  const s = normalizeState(null);
+  const s = freshState();
   const d1 = new Date('2026-10-05T20:00:00Z'), d2 = new Date('2026-10-06T20:00:00Z');
   spendQuota(s, 300, d1); spendQuota(s, 50, d1);
   assert.equal(quotaUsed(s, d1), 350);
@@ -169,7 +169,7 @@ test('quota bookkeeping resets each Pacific day and estimates a run', () => {
 
 test('end to end: rate a session, and the next discovery run ranks it using what you told it', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   const res = await discover({ client: client(), filters: hips, state, rng: mulberry32(11), opts: { queries: 3, commentVideos: 8 } });
   applyDiscovery(state, res);
   const done = state.videos['TESTvid0004'] ?? Object.values(state.videos).find((v) => v.source === 'search');
@@ -182,7 +182,7 @@ test('end to end: rate a session, and the next discovery run ranks it using what
 
 test('mostly-familiar results make discovery look one page further down (and count the query once)', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   // Pass 1: learn what page one of this query returns, then forget the query log so the same query is generated again.
   const first = await discover({ client: client(), filters: hips, state, rng: mulberry32(77), opts: { queries: 1, commentVideos: 0, extraPages: 0 } });
   applyDiscovery(state, first);
@@ -202,7 +202,7 @@ test('mostly-familiar results make discovery look one page further down (and cou
 
 test('extraPages: 0 never fetches a second page', async () => {
   reset();
-  const state = normalizeState(null);
+  const state = freshState();
   const res = await discover({ client: client(), filters: hips, state, rng: mulberry32(5), opts: { queries: 2, commentVideos: 0, extraPages: 0 } });
   assert.ok(res.report.queries.every((q) => q.pages === 1));
   assert.equal(fault.calls.filter((c) => c.endpoint === 'search').length, 2);
@@ -213,7 +213,7 @@ test('across many seeds, repeated searches keep adding new videos and never repe
   const filters = { areas: [{ id: 'hip_flexors', mode: 'tight' }, { id: 'glutes', mode: 'tight' }, { id: 'adductors', mode: 'tight' }], minMin: 10, maxMin: 30, styles: [] };
   let grew = 0, seeds = 60, repeats = 0;
   for (let seed = 1; seed <= seeds; seed++) {
-    const state = normalizeState(null);
+    const state = freshState();
     const seen = new Set();
     let sizeAfterTwo = 0;
     for (let run = 0; run < 4; run++) {

@@ -10,7 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { handle as fakeApi, fault, VIDEOS, GONE } from '../helpers/fake-youtube.js';
+import { handle as fakeApi, fault, VIDEOS, GONE, chId, PLAYLIST_ID } from '../helpers/fake-youtube.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -31,17 +31,17 @@ const ok = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 
-async function startServer() {
+async function startServer({ dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-')), legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-')) } = {}) {
   const port = await freePort();
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-'));
-  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', legacyDir], { stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '';
+  proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
   for (let i = 0; i < 50; i++) {
     try { if ((await fetch(`http://127.0.0.1:${port}/api/ping`, { headers: { 'X-Unfurl': '1' } })).ok) break; } catch { /* not up yet */ }
     await new Promise((r) => setTimeout(r, 100));
   }
-  return { port, dataDir, url: `http://localhost:${port}/`, stop: () => proc.kill(), log: () => log };
+  return { port, dataDir, legacyDir, url: `http://localhost:${port}/`, stop: () => proc.kill(), log: () => log };
 }
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
@@ -98,22 +98,38 @@ const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.p
 // ------------------------------------------------------------------ the run
 
 const browser = await chromium.launch();
+const libCount = (page) => U(page, () => Object.keys(window.__unfurl.state.library).length);
+const readJson = (dir, name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+const goto = async (page, tab) => { await page.click(`nav a[data-tab=${tab}]`); };
 
-// ================================================================== World 1: no API key
+// ================================================================== World 1: first run, no key
 console.log('\nWorld 1: first run, no YouTube key');
 {
   const server = await startServer();
   const page = await newPage(browser, server);
 
-  await step('first load shows a suggested routine from the starter shelf, in an embedded player', async () => {
+  await step('first load: an EMPTY library, with a suggested routine from the suggestions shelf in an embedded player', async () => {
     await waitFeatured(page);
     const id = await featuredId(page);
     ok(id, 'a featured video was chosen');
     await page.waitForSelector(`iframe[data-video="${id}"]`);
-    ok(await page.locator('.badge.warn', { hasText: 'unverified' }).count() > 0, 'starter videos are flagged unverified');
+    eq(await libCount(page), 0, 'library starts empty');
+    ok(await page.locator('.featured .badge', { hasText: 'Suggested' }).count() === 1, 'labelled as a suggestion');
+    ok(await page.locator('.badge.warn', { hasText: 'unverified' }).count() > 0, 'suggestions are flagged unverified');
+  });
+
+  await step('Library tabs: empty "My library", 46 suggestions, nothing discovered yet', async () => {
+    await goto(page, 'library');
+    eq(await page.locator('#tab-mine .count').innerText(), '0');
+    eq(await page.locator('#tab-suggestions .count').innerText(), '46');
+    eq(await page.locator('#tab-discovered .count').innerText(), '0');
+    ok((await page.locator('.empty-note').first().innerText()).includes('Your library is empty'), 'friendly empty state');
+    await shot(page, '10-library-empty');
+    await goto(page, 'today');
   });
 
   await step('the player reports the real length, which corrects the guess', async () => {
+    await waitFeatured(page);
     const id = await featuredId(page);
     await page.waitForFunction((i) => window.__unfurl.state.videos[i].durationApprox === false, id);
     eq(await U(page, (i) => window.__unfurl.state.videos[i].durationSec, id), 777);
@@ -131,6 +147,24 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok((await page.locator('#cmd-note').innerText()).startsWith('Understood'), 'echoes what it understood');
   });
 
+  await step('free text: a teacher\'s name narrows results; an unknown word is ignored (and says so)', async () => {
+    await page.fill('#command', 'Kassandra neck');
+    await page.press('#command', 'Enter');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy && window.__unfurl.ui.filters.terms.includes('kassandra'));
+    await waitFeatured(page);
+    eq(await U(page, () => window.__unfurl.state.videos[window.__unfurl.ui.featuredId].channel), 'Yoga With Kassandra');
+    ok(await page.locator('#clear-terms').count() === 1, 'shows what it is also matching');
+    ok((await page.locator('.why').innerText()).includes('Matches what you typed'), 'explains the text match');
+    await page.fill('#command', 'neck sphinxwhale');
+    await page.press('#command', 'Enter');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy && window.__unfurl.ui.filters.terms.includes('sphinxwhale'));
+    ok(await U(page, () => window.__unfurl.ui.termsIgnored), 'unknown word flagged');
+    ok((await page.locator('.log').innerText()).includes('Nothing I know yet mentions'), 'tells the user');
+    ok(await page.locator('.featured h2').count() === 1, 'still returns neck routines');
+    await page.click('#clear-terms');
+    eq(await U(page, () => window.__unfurl.ui.filters.terms.length), 0);
+  });
+
   await step('weak vs tight: tapping a chip twice marks it as a weak spot', async () => {
     await page.click('.chip.area:has-text("Core")'); await page.click('.chip.area:has-text("Core")');
     eq(await U(page, () => window.__unfurl.ui.filters.areas.find((a) => a.id === 'core').mode), 'weak');
@@ -143,7 +177,7 @@ console.log('\nWorld 1: first run, no YouTube key');
     await page.click('#find');
     await page.waitForFunction(() => !window.__unfurl.ui.busy);
     await waitFeatured(page);
-    const areas = await U(page, () => { const v = window.__unfurl.state.videos[window.__unfurl.ui.featuredId]; return v.profile.areas; });
+    const areas = await U(page, () => window.__unfurl.state.videos[window.__unfurl.ui.featuredId].profile.areas);
     ok(['neck', 'upper_back', 'shoulders', 'chest'].some((a) => (areas[a] ?? 0) >= 0.5), `profile ${JSON.stringify(areas)}`);
     ok(await page.locator('.why li').count() > 0, 'explains why it was chosen');
     await shot(page, '01-today-desktop');
@@ -160,8 +194,21 @@ console.log('\nWorld 1: first run, no YouTube key');
     }
   });
 
-  await step('finishing a video opens the feedback dialog; answers are logged and learned from', async () => {
+  await step('"＋ Add to library" puts the video in YOUR library (and the badge appears)', async () => {
     const id = await featuredId(page);
+    eq(await libCount(page), 0);
+    await page.click('#lib-toggle');
+    eq(await libCount(page), 1);
+    ok(await U(page, (i) => i in window.__unfurl.state.library, id), 'this video');
+    ok((await page.locator('#lib-toggle').innerText()).includes('In library'), 'button reflects it');
+    ok(await page.locator('.featured .badge.lib').count() === 1, 'badge shown');
+  });
+
+  await step('finishing a video opens the feedback dialog; answers are logged, learned from, and the video joins the library', async () => {
+    await page.click('#another');
+    const id = await featuredId(page);
+    ok(!(await U(page, (i) => i in window.__unfurl.state.library, id)), 'not in library before doing it');
+    await page.waitForSelector(`iframe[data-video="${id}"]`);
     await U(page, () => window.__players.at(-1).__end());
     await page.waitForSelector('[role=dialog]');
     await page.click('.rate-row .choice:has-text("Much better")');
@@ -171,22 +218,35 @@ console.log('\nWorld 1: first run, no YouTube key');
     await page.waitForSelector('.toast');
     const h = await U(page, () => window.__unfurl.state.history);
     eq(h.length, 1); eq(h[0].videoId, id); eq(h[0].intensity, 'right'); ok(Object.values(h[0].ratings)[0] === 'much', 'rating stored');
+    ok(h[0].title && h[0].title.length > 3, 'history keeps a title snapshot');
+    ok(await U(page, (i) => i in window.__unfurl.state.library, id), 'doing it adds it to the library');
+    eq(await libCount(page), 2);
     ok((await page.locator('.toast').first().innerText()).startsWith('Noted:'), 'tells you what it learned');
     ok(await page.locator('[role=dialog]').count() === 0, 'dialog closed');
   });
 
-  await step('Journal shows the entry and the per-muscle insight', async () => {
-    await page.click('nav a[data-tab=journal]');
+  await step('Journal: history, per-muscle insight (flagged as an early signal), and the 4-week heat-map', async () => {
+    await goto(page, 'journal');
     await page.waitForSelector('.hist-item');
     eq(await page.locator('.hist-item').count(), 1);
     ok(await page.locator('.insight').count() >= 1, 'an insight card exists');
     ok((await page.locator('.insight .big').first().innerText()).startsWith('100%'), 'one "much better" = 100% helpful');
+    ok((await page.locator('.insight').first().innerText()).includes('early signal'), 'honest about a tiny sample');
     ok((await page.locator('.note-text').innerText()).includes('<b>great</b>'), 'note shown as literal text');
+    ok(await page.locator('#heatmap .heat-row').count() >= 1, 'heat-map rows');
+    ok((await page.locator('#heatmap .heat-row').first().innerText()).includes('today'), 'worked today');
     await shot(page, '02-journal');
   });
 
+  await step('"What have I been neglecting?" aims at areas you have gone longest without', async () => {
+    await goto(page, 'today');
+    await page.click('.chip.quick:has-text("What have I been neglecting?")');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy);
+    ok(await U(page, () => window.__unfurl.ui.filters.areas.length) >= 1, 'filled the request');
+    ok(await page.locator('.toast', { hasText: 'Aiming at' }).count() >= 1, 'says what it chose');
+  });
+
   await step('"Not for me" hides a video for good (with undo)', async () => {
-    await page.click('nav a[data-tab=today]');
     await waitFeatured(page);
     const id = await featuredId(page);
     await page.click('button:has-text("Not for me")');
@@ -198,7 +258,6 @@ console.log('\nWorld 1: first run, no YouTube key');
 
   await step('embedding refused (error 150): shows a YouTube link and never suggests it again', async () => {
     await U(page, () => { const r = window.__unfurl.ui.ranked.find((x) => x.video.id !== window.__unfurl.ui.featuredId); window.__errorIds[r.video.id] = 150; window.__bad = r.video.id; });
-    // step through suggestions until the bad one is offered
     for (let i = 0; i < 12 && (await featuredId(page)) !== (await U(page, () => window.__bad)); i++) await page.click('#another');
     ok((await featuredId(page)) === (await U(page, () => window.__bad)), 'reached the bad video');
     await page.waitForSelector('.player-problem a[href*="youtube.com/watch"]');
@@ -222,47 +281,127 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok((await page.locator('.featured h2').innerText()).includes('<img src=x'), 'title shown literally');
   });
 
-  await step('Library: filter by muscle, hide/unhide, and add a video by pasted link', async () => {
-    await page.click('nav a[data-tab=library]');
-    await page.waitForSelector('.row-card');
-    const all = await page.locator('.row-card').count();
-    await page.selectOption('#lib-area', 'calves');
-    const calves = await page.locator('.row-card').count();
-    ok(calves > 0 && calves < all, `${calves} of ${all}`);
-    await page.selectOption('#lib-area', '');
-    await page.fill('#add-link', 'https://youtu.be/ABCDEFGHIJK?si=zzz');
+  await step('Library: search finds videos by teacher and by word forms; add suggestions; paste a link', async () => {
+    await goto(page, 'library');
+    await page.click('#tab-suggestions');
+    ok(await page.locator('.row-card').count() > 10, 'suggestions listed');
+    await page.fill('#lib-q', 'kassandra');
+    const rows = await page.locator('.row-card').count();
+    ok(rows >= 3 && rows < 15, `${rows} rows for a teacher`);
+    ok((await page.locator('.row-card .meta').first().innerText()).includes('Kassandra'), 'all by that teacher');
+    await page.fill('#lib-q', 'calf');
+    ok(/calf|calves/i.test(await page.locator('.row-card h4').first().innerText()), 'plural/stem matching: "calf" finds "Calves"');
+    await page.fill('#lib-q', '');
+    // add one suggestion to the library
+    const before = await libCount(page);
+    await page.locator('.row-card').first().locator('[data-action=toggle-library]').click();
+    eq(await libCount(page), before + 1);
+    ok(await page.locator('.row-card').first().locator('.badge', { hasText: 'in your library' }).count() === 1, 'marked as in your library');
+    // paste a link (no key => title from oEmbed)
+    await page.fill('#add-text', 'https://youtu.be/ABCDEFGHIJK?si=zzz');
     await page.click('#add-btn');
     await page.waitForFunction(() => window.__unfurl.state.videos.ABCDEFGHIJK);
     eq(await U(page, () => window.__unfurl.state.videos.ABCDEFGHIJK.source), 'manual');
-    eq(await U(page, () => window.__unfurl.state.videos.ABCDEFGHIJK.title), 'Pasted video about hips'); // via oEmbed
-    ok(await U(page, () => window.__unfurl.state.videos.ABCDEFGHIJK.profile.areas.hip_flexors > 0.5), 'and analysed from that title');
-    await page.fill('#add-link', 'not a link'); await page.click('#add-btn');
-    ok((await page.locator('.toast.error').last().innerText()).includes('doesn’t look like'), 'rejects junk');
+    eq(await U(page, () => window.__unfurl.state.videos.ABCDEFGHIJK.title), 'Pasted video about hips');
+    ok(await U(page, () => 'ABCDEFGHIJK' in window.__unfurl.state.library), 'pasted links go to the library');
+    ok(await U(page, () => window.__unfurl.state.videos.ABCDEFGHIJK.profile.areas.hip_flexors > 0.5), 'analysed from that title');
+    await page.fill('#add-text', 'PLabcdefghijklmnopqrstuvwxyz012345');
+    await page.click('#add-btn');
+    await page.waitForFunction(() => document.getElementById('add-status').textContent.includes('needs a YouTube key'));
     await shot(page, '03-library');
   });
 
-  await step('data is saved to disk files; the key file does not exist; reload keeps history', async () => {
+  await step('Library: tags and notes — editable, searchable, filterable', async () => {
+    await page.click('#tab-mine');
+    const row = page.locator('.row-card[data-video="ABCDEFGHIJK"]');
+    await row.locator('[data-action=edit]').click();
+    await row.locator('.editor input').fill('Morning, hips');
+    await row.locator('.editor textarea').fill('my go-to when stiff');
+    await row.locator('[data-action=save-edit]').click();
+    eq(await U(page, () => window.__unfurl.state.library.ABCDEFGHIJK.tags), ['morning', 'hips']);
+    ok(await row.locator('.badge.tag', { hasText: '#morning' }).count() === 1, 'tag shown');
+    ok((await row.innerText()).includes('my go-to when stiff'), 'note shown');
+    await page.fill('#lib-q', 'stiff');       // found through the note
+    eq(await page.locator('.row-card').count(), 1);
+    await page.fill('#lib-q', '');
+    await page.click('.tagbar .chip:has-text("morning")');
+    eq(await page.locator('.row-card').count(), 1);
+    await page.click('.tagbar .chip:has-text("morning")');
+    // remove from library
+    const n = await libCount(page);
+    await row.locator('[data-action=toggle-library]').click();
+    eq(await libCount(page), n - 1);
+    await page.click('#tab-discovered');
+    ok(await page.locator('.row-card[data-video="ABCDEFGHIJK"]').count() === 1, 'removed videos remain in the index (Discovered)');
+  });
+
+  await step('My body: standing spots in Settings drive "Use my usual spots" and the Journal', async () => {
+    await goto(page, 'settings');
+    await page.click('#spots .chip:has-text("Calves")'); await page.click('#spots .chip:has-text("Calves")');
+    await page.click('#spots .chip:has-text("Hamstrings")');
+    eq(await U(page, () => window.__unfurl.state.prefs.focus), [{ id: 'calves', mode: 'weak' }, { id: 'hamstrings', mode: 'tight' }]);
+    await goto(page, 'today');
+    await page.click('.chip.quick:has-text("Use my usual spots")');
+    eq(await U(page, () => window.__unfurl.ui.filters.areas), [{ id: 'calves', mode: 'weak' }, { id: 'hamstrings', mode: 'tight' }]);
+    await goto(page, 'journal');
+    ok(await page.locator('#heatmap .heat-row.spot', { hasText: 'Calves' }).count() === 1, 'standing spot shown even though never worked');
+    ok((await page.locator('#heatmap .nudge').innerText()).includes('Gone quiet'), 'nudges about spots that went quiet');
+  });
+
+  await step('Settings → Your data shows where it lives and the versions', async () => {
+    await goto(page, 'settings');
+    const where = await page.locator('#data-where').innerText();
+    ok(where.includes(fs.realpathSync(server.dataDir)) || where.includes(server.dataDir), where);
+    ok((await page.locator('#versions').innerText()).includes('data format 2'), await page.locator('#versions').innerText());
+  });
+
+  await step('data is saved as separate profile + index files outside the app; no old state.json; no key file', async () => {
     await page.waitForTimeout(700); // debounce
-    const state = JSON.parse(fs.readFileSync(path.join(server.dataDir, 'state.json'), 'utf8'));
-    eq(state.history.length, 1);
+    const profile = readJson(server.dataDir, 'profile.json'), index = readJson(server.dataDir, 'index.json');
+    eq(profile.schema, 2); eq(profile.history.length, 1);
+    ok(Object.keys(profile.library).length >= 2, 'library saved');
+    ok(!('videos' in profile) && !('history' in index), 'profile and index kept apart');
+    ok(Object.keys(index.videos).length > 40, 'index has the videos');
+    ok(!fs.existsSync(path.join(server.dataDir, 'state.json')), 'no v1 file');
     ok(!fs.existsSync(path.join(server.dataDir, 'config.json')), 'no config yet');
+    ok(!server.dataDir.startsWith(ROOT), 'data lives outside the app folder');
+  });
+
+  await step('reload keeps everything', async () => {
     await page.reload(); await page.waitForSelector('#nav a');
     eq(await U(page, () => window.__unfurl.state.history.length), 1);
+    ok(await libCount(page) >= 2, 'library survived');
   });
 
   await step('mobile layout has no horizontal scroll', async () => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.click('nav a[data-tab=today]'); await waitFeatured(page);
-    const overflow = await U(page, () => document.documentElement.scrollWidth - window.innerWidth);
-    ok(overflow <= 1, `horizontal overflow ${overflow}px`);
+    for (const tab of ['today', 'library', 'journal', 'settings']) {
+      await goto(page, tab);
+      const overflow = await U(page, () => document.documentElement.scrollWidth - window.innerWidth);
+      ok(overflow <= 1, `${tab}: horizontal overflow ${overflow}px`);
+    }
+    await goto(page, 'today'); await waitFeatured(page);
     await shot(page, '04-today-mobile');
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 
   await step('dark mode renders (screenshot)', async () => {
     await page.emulateMedia({ colorScheme: 'dark' });
-    await shot(page, '05-today-dark');
+    await goto(page, 'journal'); await shot(page, '05-journal-dark');
     await page.emulateMedia({ colorScheme: 'light' });
+  });
+
+  await step('backups: the settings list them, and one click restores — keeping a copy of what it replaced', async () => {
+    await goto(page, 'settings');
+    await page.waitForSelector('#backups-slot summary');
+    await page.click('#backups-slot summary');
+    const n = await page.locator('[data-restore]').count();
+    ok(n >= 1, 'a daily backup exists');
+    const daily = await page.locator('[data-restore]').first().getAttribute('data-restore');
+    await Promise.all([page.waitForNavigation(), page.locator(`[data-restore="${daily}"]`).click()]);
+    await page.waitForSelector('#nav a');
+    eq(await U(page, () => window.__unfurl.state.history.length), 0, 'back to the earlier state');
+    ok(fs.readdirSync(path.join(server.dataDir, 'backups')).some((f) => f.startsWith('profile-before-restore-')), 'the replaced state was kept');
   });
 
   await page.context_.close();
@@ -270,13 +409,13 @@ console.log('\nWorld 1: first run, no YouTube key');
 }
 
 // ================================================================== World 2: with a YouTube key
-console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth, learning)');
+console.log('\nWorld 2: with a YouTube key (live search, comments, imports, growth, learning)');
 {
   const server = await startServer();
   const page = await newPage(browser, server);
 
   await step('Settings: a bad key is rejected with a clear message; a good key is saved to config.json only', async () => {
-    await page.click('nav a[data-tab=settings]');
+    await goto(page, 'settings');
     await page.fill('#api-key', 'INVALID'); await page.click('#save-key');
     await page.waitForFunction(() => document.getElementById('key-status').textContent.includes('✗'));
     ok((await page.locator('#key-status').innerText()).includes('isn’t valid'), await page.locator('#key-status').innerText());
@@ -284,15 +423,16 @@ console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth
     await page.waitForFunction(() => document.getElementById('key-status').textContent.includes('✓'));
     await page.waitForTimeout(500);
     ok(fs.readFileSync(path.join(server.dataDir, 'config.json'), 'utf8').includes('TESTKEY'), 'key in config.json');
-    await page.click('#export'); // exporting must not leak the key
-    ok(!JSON.stringify(await U(page, () => window.__unfurl.state)).includes('TESTKEY'), 'key not in state');
+    await page.click('#export');
+    const keep = JSON.stringify(await U(page, () => window.__unfurl.state)) + fs.readFileSync(path.join(server.dataDir, 'profile.json'), 'utf8') + fs.readFileSync(path.join(server.dataDir, 'index.json'), 'utf8');
+    ok(!keep.includes('TESTKEY'), 'key is in neither the profile nor the index');
     await shot(page, '06-settings');
   });
 
   const startCount = await U(page, () => Object.keys(window.__unfurl.state.videos).length);
 
-  await step('Find with web search: searches, verifies starters, reads comments, grows the library', async () => {
-    await page.click('nav a[data-tab=today]');
+  await step('Find with web search: searches, verifies suggestions, reads comments — and your library stays yours', async () => {
+    await goto(page, 'today');
     await page.click('.chip.quick:has-text("Tight hips")');
     await page.fill('#min-len', '10'); await page.fill('#max-len', '30'); await page.press('#max-len', 'Tab');
     ok(await page.locator('#web-toggle').isChecked(), 'web search is on by default once a key exists');
@@ -302,47 +442,141 @@ console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth
     const s = await U(page, () => {
       const st = window.__unfurl.state, vids = Object.values(st.videos);
       return { n: vids.length, searched: vids.filter((v) => v.source === 'search').length, withComments: vids.filter((v) => v.evidence?.n > 0).length,
-        queries: Object.keys(st.queryLog).length, broken: vids.filter((v) => v.broken).map((v) => v.id), verifiedStarters: vids.filter((v) => v.source === 'starter' && v.verified).length,
-        log: window.__unfurl.ui.log };
+        raw: vids.filter((v) => v.comments?.length > 0).length, queries: Object.keys(st.queryLog).length, broken: vids.filter((v) => v.broken).map((v) => v.id),
+        verified: vids.filter((v) => v.source === 'suggestion' && v.verified).length, lib: Object.keys(st.library).length, log: window.__unfurl.ui.log };
     });
-    ok(s.n > startCount, `library grew ${startCount} -> ${s.n}`);
+    ok(s.n > startCount, `index grew ${startCount} -> ${s.n}`);
     ok(s.searched >= 3, `${s.searched} search results stored`);
-    ok(s.withComments >= 1, 'comments were read and analysed');
+    ok(s.withComments >= 1 && s.raw >= 1, 'comments read, raw sample kept for future re-indexing');
     eq(s.queries, 2, 'two searches logged');
-    eq(s.broken.sort(), [...GONE].sort(), 'deleted starters flagged');
-    ok(s.verifiedStarters > 30, `${s.verifiedStarters} starters verified`);
+    eq(s.broken.sort(), [...GONE].sort(), 'deleted suggestions flagged');
+    ok(s.verified > 30, `${s.verified} suggestions verified`);
+    eq(s.lib, 0, 'search results do NOT go into your library');
     ok(s.log.some((l) => /Searching YouTube for/.test(l)) && s.log.some((l) => /^Done:/.test(l)), s.log.join(' | '));
     ok(['search', 'videos', 'commentThreads', 'channels'].every((e) => page.apiCalls.includes(e)), `API calls: ${[...new Set(page.apiCalls)]}`);
     await shot(page, '07-today-after-search');
   });
 
+  await step('finds appear under "Discovered"; they can be promoted to the library with one click', async () => {
+    await goto(page, 'library');
+    await page.click('#tab-discovered');
+    ok(Number(await page.locator('#tab-discovered .count').innerText()) >= 3, 'discovered count');
+    ok(await page.locator('.row-card').count() >= 3, 'rows shown');
+    const id = await page.locator('.row-card').first().getAttribute('data-video');
+    await page.locator('.row-card').first().locator('[data-action=toggle-library]').click();
+    ok(await U(page, (i) => i in window.__unfurl.state.library, id), 'promoted');
+    await page.click('#tab-mine');
+    eq(await page.locator('.row-card').count(), 1);
+    await page.click('.row-card [data-action=toggle-library]');   // and back out, to keep later counts simple
+    eq(await libCount(page), 0);
+  });
+
   await step('new finds are labelled (new teacher / hidden gem / comments read) and explained from comments', async () => {
-    await page.click('nav a[data-tab=library]');
-    await page.selectOption('#lib-sort', 'new');
-    ok(await page.locator('.badge', { hasText: 'found by search' }).count() >= 3, 'found-by-search badges');
-    await page.click('nav a[data-tab=today]'); await waitFeatured(page);
+    await goto(page, 'today'); await waitFeatured(page);
     const info = await U(page, () => window.__unfurl.ui.ranked.slice(0, 8).map((r) => ({ id: r.video.id, flags: r.flags, reasons: r.reasons })));
     ok(info.some((i) => i.flags.newChannel), 'some results come from teachers you have not tried');
     ok(info.some((i) => i.flags.commentsRead), 'some results have their comments read');
     ok(info.some((i) => i.reasons.some((r) => /comments about it are positive|Viewers report/.test(r))), 'reasons cite viewer comments');
   });
 
-  await step('searching again goes to NEW places: different queries, more videos, no repeats', async () => {
-    await page.click('nav a[data-tab=today]');
+  await step('searching again goes to NEW places: different queries, result pages remembered', async () => {
     const q0 = new Set(await U(page, () => Object.values(window.__unfurl.state.queryLog).map((q) => q.q)));
     const n0 = await U(page, () => Object.keys(window.__unfurl.state.videos).length);
     for (let i = 0; i < 2; i++) { await page.click('#find'); await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 15000 }); }
     const q1 = await U(page, () => Object.values(window.__unfurl.state.queryLog).map((q) => q.q));
     ok(q1.length >= q0.size + 3, `queries ${q0.size} -> ${q1.length}`);
-    ok(await U(page, () => Object.keys(window.__unfurl.state.videos).length) >= n0, 'library did not shrink (growth itself is covered statistically in the unit tests)');
+    ok(await U(page, () => Object.keys(window.__unfurl.state.videos).length) >= n0, 'index did not shrink (growth itself is covered statistically in the unit tests)');
     ok(await U(page, () => Object.values(window.__unfurl.state.queryLog).some((q) => q.nextPageToken)), 'result pages remembered for going deeper');
   });
 
+  await step('import a whole teacher by @handle: cheap (a few units), lands in Discovered, followed', async () => {
+    await goto(page, 'library');
+    const q0 = await U(page, () => window.__unfurl.state.quota.used);
+    const lib0 = await libCount(page);
+    const have = await U(page, () => Object.keys(window.__unfurl.state.videos).length);
+    await page.fill('#add-text', '@tinyyogaroom');
+    await page.click('#add-btn');
+    await page.waitForFunction(() => document.getElementById('add-status').textContent.includes('imported from Tiny Yoga Room'), null, { timeout: 15000 });
+    await page.waitForTimeout(300);
+    const spent = (await U(page, () => window.__unfurl.state.quota.used)) - q0;
+    ok(spent > 0 && spent <= 12, `a whole catalogue cost ${spent} units`);
+    eq(await libCount(page), lib0, 'imported catalogues go to Discovered, not the library');
+    ok(await U(page, () => Object.values(window.__unfurl.state.videos).filter((v) => v.source === 'channel').length) >= 5, 'channel videos stored');
+    ok(await U(page, () => Object.values(window.__unfurl.state.videos).some((v) => v.source === 'channel' && !v.comments)), 'comments not read in bulk (cost control)');
+    eq(await U(page, () => window.__unfurl.state.following.map((f) => f.name)), ['Tiny Yoga Room']);
+    ok(await page.locator('#follow-slot .chip', { hasText: 'Tiny Yoga Room' }).count() === 1, 'followed teacher shown');
+    ok((await U(page, () => Object.keys(window.__unfurl.state.videos).length)) > have, 'index grew');
+  });
+
+  await step('a playlist link goes straight into the library when asked; single video links are added with their comments read', async () => {
+    const lib0 = await libCount(page);
+    await page.check('#import-to-library');
+    await page.fill('#add-text', `https://www.youtube.com/playlist?list=${PLAYLIST_ID}`);
+    await page.click('#add-btn');
+    await page.waitForFunction(() => document.getElementById('add-status').textContent.includes('My favourite hip routines'), null, { timeout: 15000 });
+    ok((await libCount(page)) - lib0 >= 10, `playlist added ${(await libCount(page)) - lib0}`);
+    await page.uncheck('#import-to-library');
+    await page.fill('#add-text', `https://youtu.be/${VIDEOS[40].id}\n${VIDEOS[41].id}`);
+    await page.click('#add-btn');
+    await page.waitForFunction((a) => window.__unfurl.state.library[a]?.snapshot, VIDEOS[40].id);
+    for (const v of [VIDEOS[40], VIDEOS[41]]) ok(await U(page, (id) => window.__unfurl.state.videos[id].comments?.length > 0, v.id), 'comments attached');
+  });
+
+  await step('"Check for new uploads" from followed teachers (nothing new => says so)', async () => {
+    await page.click('#refresh-following');
+    await page.waitForSelector('.toast:has-text("Nothing new")', { timeout: 10000 });
+  });
+
+  await step('Library search finds poses from chapter lists and what viewers wrote', async () => {
+    await page.click('#tab-discovered');
+    await page.fill('#lib-q', 'pigeon');
+    ok(await page.locator('.row-card').count() >= 1, 'pose found via chapters');
+    await page.fill('#lib-q', 'sciatica');
+    ok(await page.locator('.row-card').count() >= 1, 'found via the muscle/condition the analysis inferred');
+    await page.fill('#lib-q', '');
+  });
+
+  await step('free text in the command box: "pigeon pose" finds videos that contain it', async () => {
+    await goto(page, 'today');
+    await page.fill('#command', 'pigeon pose, 10-30 min');
+    await page.press('#command', 'Enter');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 15000 });
+    await waitFeatured(page);
+    const r = await U(page, () => ({ terms: window.__unfurl.ui.filters.terms, hasPigeon: window.__unfurl.state.videos[window.__unfurl.ui.featuredId].profile.poses.some((p) => p.id === 'pigeon'), reason: window.__unfurl.ui.ranked[0]?.reasons[0] }));
+    eq(r.terms, ['pigeon']); ok(r.hasPigeon, 'featured video contains pigeon pose'); ok(/Matches what you typed/.test(r.reason), r.reason);
+  });
+
+  await step('lazy comment enrichment: contenders without comments get theirs read when they rank high', async () => {
+    const r = await U(page, async () => {
+      const c = window.__unfurl;
+      c.ui.filters.terms = []; c.ui.filters.areas = [{ id: 'hip_flexors', mode: 'tight' }];
+      const first = c.rankNow().slice(0, 3).map((x) => x.video.id);
+      for (const id of first) { delete c.state.videos[id].comments; delete c.state.videos[id].evidence; }
+      // exactly the videos the app should now pick: the best-ranked ones that have no comments read yet
+      const expected = c.rankNow().map((x) => x.video).filter((v) => !v.comments && !(v.evidence?.n > 0) && v.verified).slice(0, 3).map((v) => v.id);
+      const done = await c.enrichTop(3);
+      return { done, expected: expected.length, all: expected.length > 0 && expected.every((id) => c.state.videos[id].comments?.length > 0) };
+    });
+    ok(r.done >= 1 && r.all, JSON.stringify(r));
+  });
+
+  await step('auto-add setting: when on, new finds go into the library too', async () => {
+    await goto(page, 'settings');
+    await page.check('#auto-library');
+    eq(await U(page, () => window.__unfurl.state.prefs.autoLibrary), true);
+    await goto(page, 'today');
+    const lib0 = await libCount(page);
+    await U(page, () => { window.__unfurl.ui.filters.terms = []; window.__unfurl.ui.filters.areas = [{ id: 'neck', mode: 'tight' }]; });
+    await page.click('#find'); await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 15000 });
+    ok((await libCount(page)) > lib0, `library ${lib0} -> ${await libCount(page)}`);
+    await goto(page, 'settings'); await page.uncheck('#auto-library');
+  });
+
   await step('rating a video teaches the app: related videos show "📈" evidence from your history', async () => {
-    // Do a hips video with pigeon pose twice and say it helped both times.
     const target = await U(page, () => Object.values(window.__unfurl.state.videos).find((v) => v.source === 'search' && v.profile.poses.some((p) => p.id === 'pigeon'))?.id);
     ok(target, 'found a search result with pigeon pose');
-    await page.click('nav a[data-tab=today]');
+    await goto(page, 'today');
+    await U(page, () => { window.__unfurl.ui.filters.areas = [{ id: 'glutes', mode: 'tight' }, { id: 'hip_flexors', mode: 'tight' }]; });
     for (let round = 1; round <= 2; round++) {
       await U(page, (id) => window.__unfurl.play(id), target);
       await page.waitForSelector(`iframe[data-video="${target}"]`);
@@ -354,7 +588,7 @@ console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth
     }
     const learned = await U(page, (id) => {
       const c = window.__unfurl;
-      c.ui.filters.areas = [{ id: 'glutes', mode: 'tight' }, { id: 'hip_flexors', mode: 'tight' }];
+      c.ui.filters.terms = []; c.ui.filters.areas = [{ id: 'glutes', mode: 'tight' }, { id: 'hip_flexors', mode: 'tight' }];
       c.ui.filters.minMin = 3; c.ui.filters.maxMin = 120;
       return c.rankNow().filter((r) => r.video.id !== id && r.reasons.some((x) => x.startsWith('📈'))).map((r) => r.reasons.find((x) => x.startsWith('📈')));
     }, target);
@@ -362,24 +596,32 @@ console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth
     ok(learned.some((t) => /Pigeon has helped your/.test(t)), learned.join(' | '));
   });
 
-  await step('Grow library targets the thinnest muscle areas', async () => {
-    await page.click('nav a[data-tab=library]');
+  await step('"Re-analyse everything" re-derives profiles from stored raw text and comments', async () => {
+    await goto(page, 'settings');
+    const before = await U(page, () => JSON.stringify(Object.values(window.__unfurl.state.videos).filter((v) => v.comments).slice(0, 5).map((v) => v.profile.areas)));
+    await page.click('#reanalyze');
+    await page.waitForSelector('.toast:has-text("Re-analysed")');
+    eq(await U(page, () => JSON.stringify(Object.values(window.__unfurl.state.videos).filter((v) => v.comments).slice(0, 5).map((v) => v.profile.areas))), before, 'identical result: analysis is reproducible from what is stored');
+  });
+
+  await step('Search for the muscles I have least of (library-aware growth)', async () => {
+    await goto(page, 'library');
     const before = await U(page, () => Object.keys(window.__unfurl.state.videos).length);
     await page.click('#grow');
-    await page.waitForSelector('.toast.success:has-text("Added")', { timeout: 15000 });
+    await page.waitForSelector('.toast.success:has-text("Found")', { timeout: 15000 });
     ok(await U(page, () => Object.keys(window.__unfurl.state.videos).length) >= before, 'no loss');
   });
 
   await step('quota usage is tracked and shown', async () => {
     const used = await U(page, () => window.__unfurl.state.quota.used);
     ok(used >= 400, `quota used ${used}`);
-    await page.click('nav a[data-tab=settings]');
+    await goto(page, 'settings');
     ok((await page.locator('.quota').innerText()).includes(used.toLocaleString('en-US')), 'shown in Settings');
   });
 
-  await step('when the daily allowance is gone: clear message, and the library still works', async () => {
+  await step('when the daily allowance is gone: clear message, and everything already known still works', async () => {
     fault.quota = true;
-    await page.click('nav a[data-tab=today]');
+    await goto(page, 'today');
     await page.click('#find');
     await page.waitForFunction(() => !window.__unfurl.ui.busy);
     ok((await page.locator('.log').innerText()).includes('allowance is used up'), 'explains in the log');
@@ -387,15 +629,144 @@ console.log('\nWorld 2: with a YouTube key (live search, comment reading, growth
     fault.quota = false;
   });
 
-  await step('persistence: reload keeps library, history, queries and learned data', async () => {
+  await step('persistence: reload keeps library, history, queries, followed teachers and learned data', async () => {
     await page.waitForTimeout(700);
-    const before = await U(page, () => ({ v: Object.keys(window.__unfurl.state.videos).length, h: window.__unfurl.state.history.length, q: Object.keys(window.__unfurl.state.queryLog).length }));
+    const snap = () => U(page, () => ({ v: Object.keys(window.__unfurl.state.videos).length, h: window.__unfurl.state.history.length, q: Object.keys(window.__unfurl.state.queryLog).length, l: Object.keys(window.__unfurl.state.library).length, f: window.__unfurl.state.following.length }));
+    const before = await snap();
     await page.reload(); await page.waitForSelector('#nav a');
-    eq(await U(page, () => ({ v: Object.keys(window.__unfurl.state.videos).length, h: window.__unfurl.state.history.length, q: Object.keys(window.__unfurl.state.queryLog).length })), before);
+    eq(await snap(), before);
+    eq(await U(page, () => window.__unfurl.store.config.apiKey), 'TESTKEY');
   });
 
   await page.context_.close();
   server.stop();
+}
+
+// ================================================================== World 3: upgrading from version 1
+console.log('\nWorld 3: upgrading an existing version-1 install (data must survive)');
+{
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-'));
+  const v1 = {
+    version: 1, starterVersion: 1,
+    videos: {
+      SAVEDSAVED1: { id: 'SAVEDSAVED1', title: 'Saved hip routine', channel: 'Calm Hips Studio', durationSec: 900, source: 'search', verified: true, views: 1000, likes: 50, embeddable: true },
+      DONEDONE111: { id: 'DONEDONE111', title: 'Neck release I did', channel: 'Desk Yoga Co', durationSec: 600, source: 'search', verified: true, embeddable: true },
+      FOUNDONLY11: { id: 'FOUNDONLY11', title: 'Found but never kept', channel: 'X', durationSec: 700, source: 'search', verified: true, embeddable: true },
+      zPzSkLHp9ws: { id: 'zPzSkLHp9ws', title: 'Yoga for Calves and Shins', channel: '', durationSec: 600, source: 'starter', verified: false, embeddable: true, durationApprox: true },
+    },
+    channels: {}, queryLog: { 'yoga for tight hips': { count: 3, order: 'relevance', nextPageToken: 'p5', q: 'yoga for tight hips' } }, quota: { day: '2026-10-05', used: 700 },
+    saved: ['SAVEDSAVED1'], blocked: ['BLOCKEDBLK1'],
+    history: [{ id: 'old-1', at: '2026-10-01T09:00:00.000Z', date: '2026-10-01', videoId: 'DONEDONE111', areas: [{ id: 'neck', mode: 'tight' }], ratings: { neck: 'much' }, intensity: 'right', repeat: null, note: 'from the old version' }],
+    prefs: { trusted: ['Yoga With Adriene'], adventure: 0.8, minMin: 15, maxMin: 30, searchWeb: true, queriesPerRun: 3, commentVisible: 1, commentVideos: 8 },
+  };
+  fs.writeFileSync(path.join(legacyDir, 'state.json'), JSON.stringify(v1));
+  fs.writeFileSync(path.join(legacyDir, 'config.json'), JSON.stringify({ apiKey: 'OLDKEY' }));
+  const server = await startServer({ legacyDir });
+  const page = await newPage(browser, server);
+
+  await step('first launch of the new version copies the old files and says so', async () => {
+    ok(/Copied your existing data/.test(server.log()), server.log());
+    ok(fs.existsSync(path.join(legacyDir, 'state.json')), 'originals left in place');
+  });
+
+  await step('the old data is upgraded in place: saved + done videos form the library, history and prefs intact', async () => {
+    await page.waitForFunction(() => window.__unfurl?.state);
+    const s = await U(page, () => { const st = window.__unfurl.state; return { lib: Object.keys(st.library).sort(), hist: st.history.map((h) => [h.id, h.title, h.note]), blocked: st.blocked, adv: st.prefs.adventure, minMin: st.prefs.minMin, q: st.queryLog['yoga for tight hips']?.count, used: st.quota.used, sugg: st.videos.zPzSkLHp9ws.source, found: !!st.videos.FOUNDONLY11, inLib: 'FOUNDONLY11' in st.library, key: window.__unfurl.store.config.apiKey }; });
+    eq(s.lib, ['DONEDONE111', 'SAVEDSAVED1']);
+    eq(s.hist, [['old-1', 'Neck release I did', 'from the old version']]);
+    eq(s.blocked, ['BLOCKEDBLK1']); eq(s.adv, 0.8); eq(s.minMin, 15); eq(s.q, 3); eq(s.used, 700);
+    eq(s.sugg, 'suggestion'); ok(s.found && !s.inLib, 'discovered stays out of the library'); eq(s.key, 'OLDKEY');
+    ok((await page.locator('.toast', { hasText: 'Upgraded your data' }).count()) >= 1, 'tells the user');
+  });
+
+  await step('the upgrade is saved in the new layout, and the old file is archived (not deleted)', async () => {
+    await page.waitForTimeout(700);
+    const profile = readJson(server.dataDir, 'profile.json');
+    eq(profile.schema, 2); eq(Object.keys(profile.library).sort(), ['DONEDONE111', 'SAVEDSAVED1']);
+    ok(!fs.existsSync(path.join(server.dataDir, 'state.json')), 'old file moved away');
+    ok(fs.existsSync(path.join(server.dataDir, 'backups', 'profile-legacy-state-v1.json')), 'and kept as a backup');
+    ok(Object.keys(readJson(server.dataDir, 'index.json').videos).length > 40, 'index written');
+  });
+
+  await step('Library shows the migrated items; Journal shows the old session', async () => {
+    await goto(page, 'library');
+    eq(await page.locator('#tab-mine .count').innerText(), '2');
+    eq(await page.locator('#tab-discovered .count').innerText(), '1');
+    await goto(page, 'journal');
+    ok((await page.locator('.hist-item').innerText()).includes('from the old version'));
+  });
+
+  await page.context_.close();
+  server.stop();
+}
+
+// ================================================================== World 4: a new app version, same data; and data from a NEWER version
+console.log('\nWorld 4: data outlives the app (new app copy, same data folder) and is protected from older versions');
+{
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-persist-'));
+  let server = await startServer({ dataDir });
+  let page = await newPage(browser, server);
+  await waitFeatured(page);
+
+  await step('use the app: add a video to the library, do a routine, set a body spot', async () => {
+    await page.click('#lib-toggle');
+    const id = await featuredId(page);
+    await U(page, () => window.__players.at(-1).__end());
+    await page.waitForSelector('[role=dialog]');
+    await page.click('.rate-row .choice:has-text("A little")');
+    await page.click('#save-feedback');
+    await page.waitForFunction(() => window.__unfurl.state.history.length === 1);
+    await goto(page, 'settings'); await page.click('#spots .chip:has-text("Neck")');
+    await page.waitForTimeout(700);
+    eq(readJson(dataDir, 'profile.json').history.length, 1);
+    page.__id = id;
+  });
+  await page.context_.close(); server.stop();
+
+  await step('a brand-new server (as if you had unzipped a newer app copy elsewhere) finds all of it', async () => {
+    server = await startServer({ dataDir });
+    page = await newPage(browser, server);
+    const s = await U(page, () => { const st = window.__unfurl.state; return { h: st.history.length, lib: Object.keys(st.library).length, focus: st.prefs.focus }; });
+    eq(s.h, 1); ok(s.lib >= 1, 'library'); eq(s.focus, [{ id: 'neck', mode: 'tight' }]);
+    eq((await page.locator('.toast', { hasText: 'Upgraded' }).count()), 0, 'no upgrade needed, nothing announced');
+  });
+  await page.context_.close(); server.stop();
+
+  await step('data written by a NEWER version is shown read-only and never modified', async () => {
+    const future = { ...readJson(dataDir, 'profile.json'), schema: 99, hello: 'from the future' };
+    fs.writeFileSync(path.join(dataDir, 'profile.json'), JSON.stringify(future));
+    const idxBefore = fs.readFileSync(path.join(dataDir, 'index.json'), 'utf8');
+    const profBefore = fs.readFileSync(path.join(dataDir, 'profile.json'), 'utf8');
+    server = await startServer({ dataDir });
+    page = await newPage(browser, server);
+    ok(await page.locator('#banner .banner', { hasText: 'newer version' }).count() === 1, 'banner explains');
+    ok(await U(page, () => window.__unfurl.store.readOnly), 'read-only');
+    eq(await U(page, () => window.__unfurl.state.history.length), 1, 'data still readable');
+    // try to change things
+    await waitFeatured(page);
+    await page.click('#lib-toggle');
+    await page.click('#find'); await page.waitForFunction(() => !window.__unfurl.ui.busy);
+    await goto(page, 'settings'); await page.click('#spots .chip:has-text("Hamstrings")');
+    ok(await page.locator('#reset').isDisabled(), 'Reset is disabled for data from a newer version');
+    await page.waitForTimeout(900);
+    eq(fs.readFileSync(path.join(dataDir, 'profile.json'), 'utf8'), profBefore, 'profile untouched');
+    eq(fs.readFileSync(path.join(dataDir, 'index.json'), 'utf8'), idxBefore, 'index untouched');
+  });
+  await page.context_.close(); server.stop();
+
+  await step('a damaged profile file is recovered from the latest backup, and the user is told', async () => {
+    // make sure there is a good backup, then corrupt the profile
+    const good = { app: 'unfurl', schema: 2, library: {}, history: [], blocked: [], following: [], prefs: {} };
+    fs.mkdirSync(path.join(dataDir, 'backups'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'backups', 'profile-2026-10-04.json'), JSON.stringify({ ...good, library: { RECOVERED111: { addedAt: 1, tags: [], note: 'back from backup' } } }));
+    fs.writeFileSync(path.join(dataDir, 'profile.json'), '{"schema": 2, "library": {');
+    server = await startServer({ dataDir });
+    page = await newPage(browser, server);
+    ok(await page.locator('.toast', { hasText: 'restored from the backup' }).count() >= 1, 'announces the recovery');
+    ok(await U(page, () => 'RECOVERED111' in window.__unfurl.state.library), 'library recovered');
+    ok(fs.readdirSync(dataDir).some((f) => f.startsWith('profile.corrupt-')), 'damaged file kept for inspection');
+  });
+  await page.context_.close(); server.stop();
 }
 
 // ------------------------------------------------------------------ report

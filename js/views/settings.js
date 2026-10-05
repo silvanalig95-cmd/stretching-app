@@ -1,9 +1,12 @@
-// Settings: YouTube key, how adventurous the app is, backups.
+// Settings: YouTube key, how it searches, your standing tight/weak spots, and
+// your data (where it lives, backups, versions).
 
 import { h, fill } from '../dom.js';
-import { ctx, client, quotaInfo } from '../ctx.js';
-import { exportData, mergeImport } from '../state.js';
+import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
+import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel } from '../state.js';
 import { verifyVideos } from '../youtube.js';
+import { ANALYSIS_VERSION } from '../analyze.js';
+import { AREAS, GROUPS } from '../lexicon.js';
 import { toast } from '../modal.js';
 import { localDate } from '../model.js';
 
@@ -11,10 +14,11 @@ export function mountSettings(root) {
   const { state, store } = ctx;
   const prefs = state.prefs;
   const qi = quotaInfo();
+  let backupsSlot;
 
   // ---------------------------------------------------------------- key
   const keyInput = h('input', { type: 'password', id: 'api-key', value: store.config.apiKey, placeholder: 'Paste your YouTube Data API key', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'YouTube API key' });
-  const keyStatus = h('p', { class: 'hint', id: 'key-status', 'aria-live': 'polite' }, store.config.apiKey ? 'A key is saved.' : 'No key yet. The app still works from your library, but can’t search the web.');
+  const keyStatus = h('p', { class: 'hint', id: 'key-status', 'aria-live': 'polite' }, store.config.apiKey ? 'A key is saved.' : 'No key yet. The app still works from what it already knows, but can’t search the web.');
   const saveKey = async () => {
     store.config.apiKey = keyInput.value.trim();
     await store.saveConfig();
@@ -24,7 +28,7 @@ export function mountSettings(root) {
     keyStatus.textContent = 'Testing…';
     try {
       const api = client();
-      const sample = Object.values(state.videos).find((v) => v.source === 'starter');
+      const sample = Object.values(state.videos).find((v) => v.source === 'suggestion');
       await api.videos([sample?.id ?? 'dQw4w9WgXcQ']);
       keyStatus.textContent = '✓ The key works. Web search is on.';
       toast('YouTube key saved and working.', 'success');
@@ -37,7 +41,7 @@ export function mountSettings(root) {
       h('li', null, 'Go to ', h('a', { href: 'https://console.cloud.google.com/', target: '_blank', rel: 'noopener noreferrer' }, 'console.cloud.google.com'), ' and sign in with a Google account. Create a project (any name).'),
       h('li', null, h('strong', null, 'APIs & Services → Library'), ', search for “YouTube Data API v3”, and press ', h('strong', null, 'Enable'), '.'),
       h('li', null, h('strong', null, 'APIs & Services → Credentials → Create credentials → API key'), '. Copy the key.'),
-      h('li', null, 'Recommended: click the key, choose “Restrict key”, and allow only “YouTube Data API v3”.'),
+      h('li', null, 'Under “API restrictions” choose ', h('strong', null, 'Restrict key → YouTube Data API v3'), '. Leave “Application restrictions” on None.'),
       h('li', null, 'Paste it above and press Save. The free allowance is 10,000 units a day; one web search here costs 100 to 400.')));
 
   // ---------------------------------------------------------------- prefs
@@ -51,6 +55,18 @@ export function mountSettings(root) {
     onchange: (e) => { prefs.commentVideos = Math.max(0, Math.min(25, Number(e.target.value) || 0)); store.save(); } });
   const trusted = h('textarea', { id: 'trusted', rows: 6, 'aria-label': 'Trusted teachers, one per line',
     onchange: (e) => { prefs.trusted = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean); store.save(); toast('Trusted teachers updated.'); } }, prefs.trusted.join('\n'));
+  const auto = h('input', { type: 'checkbox', id: 'auto-library', checked: prefs.autoLibrary, onchange: (e) => { prefs.autoLibrary = e.target.checked; store.save(); } });
+
+  // ---------------------------------------------------------------- body profile
+  const spotsSlot = h('div', { id: 'spots' });
+  const renderSpots = () => fill(spotsSlot, h('div', { class: 'groups' }, GROUPS.map((g) => h('fieldset', { class: 'group' },
+    h('legend', null, g.label),
+    h('div', { class: 'chips' }, AREAS.filter((a) => a.group === g.id && a.id !== 'full_body').map((a) => {
+      const m = prefs.focus.find((f) => f.id === a.id)?.mode;
+      return h('button', { type: 'button', class: `chip area${m ? ` on ${m}` : ''}`, 'aria-pressed': !!m, 'aria-label': `${a.label}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not set'}`,
+        onclick: () => { cycleArea(a.id, prefs.focus); store.save(); renderSpots(); } },
+      a.label, m ? h('small', { class: 'mode' }, m === 'weak' ? 'weak' : 'tight') : null);
+    }))))));
 
   // ---------------------------------------------------------------- data
   const importInput = h('input', { type: 'file', accept: 'application/json,.json', hidden: true, id: 'import-file', onchange: async (e) => {
@@ -59,6 +75,7 @@ export function mountSettings(root) {
     try {
       const data = JSON.parse(await file.text());
       if (data.app !== 'unfurl') throw new Error('This file isn’t an Unfurl backup.');
+      await store.snapshot('before-import');
       const before = state.history.length;
       mergeImport(state, data);
       store.save();
@@ -66,7 +83,7 @@ export function mountSettings(root) {
       mountSettings(root);
     } catch (err) { toast(`Couldn’t import: ${err.message}`, 'error'); }
   } });
-  const verifyBtn = h('button', { class: 'btn', type: 'button', disabled: !ctx.hasKey, onclick: async () => {
+  const verifyBtn = h('button', { class: 'btn', type: 'button', disabled: !ctx.hasKey || store.readOnly, onclick: async () => {
     verifyBtn.disabled = true;
     try {
       const todo = Object.values(state.videos).filter((v) => !v.verified && !v.broken).slice(0, 100);
@@ -78,42 +95,75 @@ export function mountSettings(root) {
     verifyBtn.disabled = !ctx.hasKey;
   } }, 'Check unverified videos now');
 
-  fill(root, 
+  const fmtDate = (t) => new Date(t * 1000).toLocaleString();
+  async function renderBackups() {
+    const list = await store.listBackups();
+    fill(backupsSlot, store.mode !== 'server'
+      ? h('p', { class: 'hint' }, 'Automatic backups need the local server (serve.py). Export a backup file now and then instead.')
+      : list.length
+        ? h('details', { class: 'steps' }, h('summary', null, `${list.length} automatic backup${list.length > 1 ? 's' : ''} (daily, plus one before every data-format upgrade)`),
+          h('ul', { class: 'backups' }, list.slice(0, 40).map((b) => h('li', null, h('span', null, b.name, h('small', { class: 'muted' }, ` · ${fmtDate(b.modified)}`)),
+            h('button', { class: 'btn small', type: 'button', 'data-restore': b.name, onclick: async () => {
+              if (!confirm(`Restore your library and history from “${b.name}”? What you have now is saved as a backup first.`)) return;
+              if (await store.restoreBackup(b.name)) { toast('Restored. Reloading…', 'success'); setTimeout(() => location.reload(), 600); } else toast('Couldn’t restore that backup.', 'error');
+            } }, 'Restore')))))
+        : h('p', { class: 'hint' }, 'No backups yet; the first is made the next time your data changes.'));
+  }
+
+  const dataPanel = h('section', { class: 'panel', id: 'data-panel' },
+    h('h2', null, 'Your data'),
+    store.readOnly ? h('p', { class: 'banner' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Read-only.') : null,
+    h('dl', { class: 'facts' },
+      h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? `In files on this computer: ${store.server.dataDir}` : 'In this browser only (run serve.py to keep it in files).'),
+      h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `Unfurl ${store.server.version ?? '(browser mode)'} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
+      h('dt', null, 'Kept apart'), h('dd', null, 'Your library, history and ratings (“profile”) are saved separately from the videos the app has discovered (“index”). The index can always be rebuilt; the profile is what\'s backed up. Your API key is in a third, private file.')),
+    h('p', { class: 'hint' }, 'Updating or replacing the app never touches this folder. When a new version changes how data is stored, it upgrades yours automatically and keeps a backup of the old format.'),
+    backupsSlot = h('div', { id: 'backups-slot' }),
+    h('div', { class: 'actions' },
+      h('button', { class: 'btn', id: 'export', type: 'button', onclick: () => {
+        const url = URL.createObjectURL(new Blob([exportData(state)], { type: 'application/json' }));
+        const a = h('a', { href: url, download: `unfurl-backup-${localDate()}.json` });
+        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } }, 'Export backup'),
+      h('button', { class: 'btn', type: 'button', disabled: store.readOnly, onclick: () => importInput.click() }, 'Import backup'), importInput,
+      h('button', { class: 'btn', id: 'reanalyze', type: 'button', disabled: store.readOnly, onclick: () => { reindexAll(state); store.save(); toast(`Re-analysed ${Object.keys(state.videos).length} videos from their stored text and comments.`, 'success'); } }, 'Re-analyse everything'),
+      verifyBtn,
+      h('button', { class: 'btn danger', id: 'reset', type: 'button', disabled: store.readOnly, title: store.readOnly ? 'Disabled: this data came from a newer version' : undefined, onclick: async () => {
+        if (!confirm('Erase your library, history and ratings and start over? A backup is kept first, and your API key stays.')) return;
+        await store.snapshot('before-reset');
+        await store.replace(null); ctx.ui.ranked = []; ctx.ui.featuredId = null; toast('Everything reset (a backup was kept).'); mountSettings(root);
+      } }, 'Reset everything')),
+    store.lastError ? h('p', { class: 'hint warn' }, store.lastError) : null);
+
+  fill(root,
     h('h1', null, 'Settings'),
     h('section', { class: 'panel' },
       h('h2', null, 'YouTube search'),
-      h('p', null, 'A free YouTube key lets the app search the whole of YouTube on its own, read each video’s details and its viewer comments, and add what it finds to your library. Your key stays on this computer and is only ever sent to Google’s YouTube API.'),
+      h('p', null, 'A free YouTube key lets the app search the whole of YouTube on its own, import whole teachers and playlists, read each video’s details and its viewer comments, and add what it finds to your index. Your key stays on this computer and is only ever sent to Google’s YouTube API.'),
       h('form', { class: 'key-form', onsubmit: (e) => { e.preventDefault(); saveKey(); } }, keyInput, h('button', { class: 'btn primary', id: 'save-key', type: 'submit' }, 'Save & test')),
       keyStatus, steps,
       h('div', { class: 'quota' }, h('span', null, `Today: ${qi.used.toLocaleString()} of ${qi.limit.toLocaleString()} units used`),
         (() => { const b = h('span', { class: 'bar' }, h('i')); b.firstChild.style.width = `${Math.min(100, (qi.used / qi.limit) * 100)}%`; return b; })())),
 
     h('section', { class: 'panel' },
-      h('h2', null, 'How it searches'),
+      h('h2', null, 'My body'),
+      h('p', null, 'Your standing tight and weak spots. Tap once for tight (needs stretching), twice for weak (needs strengthening). Today can start from these, and the Journal tells you which have gone quiet.'),
+      spotsSlot),
+
+    h('section', { class: 'panel' },
+      h('h2', null, 'Library & searching'),
+      h('label', { class: 'check block' }, auto, ' Add everything a web search finds to my library automatically',
+        h('small', { class: 'hint' }, 'Off by default: your library stays what you chose. Finds still go to “Discovered” and are used for suggestions either way.')),
       h('label', { class: 'field' }, h('span', null, 'Adventurousness: ', advLabel), adv,
         h('small', { class: 'hint' }, 'Higher = more teachers and videos you haven’t tried yet, in searches and in suggestions.')),
       h('label', { class: 'field' }, h('span', null, 'Effort per web search'), queries),
       h('label', { class: 'field' }, h('span', null, 'Videos whose comments are read per search'), comments,
         h('small', { class: 'hint' }, 'Comments are where viewers say which muscles it helped. 1 unit per video.')),
       h('label', { class: 'field' }, h('span', null, 'Trusted teachers (one per line)'), trusted,
-        h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.'))),
-
-    h('section', { class: 'panel' },
-      h('h2', null, 'Your data'),
-      h('p', null, store.mode === 'server'
-        ? 'Saved as files in the app’s userdata folder on this computer (history, library, learned preferences; the key is kept separately).'
-        : 'Saved in this browser only. Run serve.py to keep it in files instead; export a backup now and then either way.'),
-      h('div', { class: 'actions' },
-        h('button', { class: 'btn', id: 'export', type: 'button', onclick: () => {
-          const url = URL.createObjectURL(new Blob([exportData(state)], { type: 'application/json' }));
-          const a = h('a', { href: url, download: `unfurl-backup-${localDate()}.json` });
-          document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-        } }, 'Export backup'),
-        h('button', { class: 'btn', type: 'button', onclick: () => importInput.click() }, 'Import backup'), importInput,
-        verifyBtn,
-        h('button', { class: 'btn danger', type: 'button', onclick: async () => {
-          if (!confirm('Erase your history, ratings and library and start over? Your API key is kept.')) return;
-          await store.replace(null); ctx.ui.ranked = []; ctx.ui.featuredId = null; toast('Everything reset.'); mountSettings(root);
-        } }, 'Reset everything')),
-      store.lastError ? h('p', { class: 'hint warn' }, store.lastError) : null));
+        h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.')),
+      state.following.length ? h('div', null, h('h3', null, 'Teachers you follow'),
+        h('ul', { class: 'backups' }, state.following.map((f) => h('li', null, f.name, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { unfollowChannel(state, f.channelId); store.save(); mountSettings(root); } }, 'Unfollow'))))) : null),
+    dataPanel);
+  renderSpots();
+  renderBackups();
 }

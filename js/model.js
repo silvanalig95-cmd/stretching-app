@@ -198,16 +198,28 @@ export function recencyPenalty(model, videoId, today = localDate()) {
  * @param {{areas:{id:string,mode:string}[], minMin:number, maxMin:number, styles:string[]}} p.filters
  * @param {object} p.model           from buildModel
  */
-export function rankCandidates({ videos, filters, model, trusted = [], blocked = [], adventure = 0.35, today = localDate(), now = Date.now() }) {
+export function rankCandidates({
+  videos, filters, model, trusted = [], blocked = [], adventure = 0.35, today = localDate(), now = Date.now(),
+  textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
+  libraryIds = null,   // Set of ids in the user's library
+}) {
   const selected = filters.areas ?? [];
   const blockedSet = new Set(blocked);
+  const useText = !!(filters.terms?.length && textScores);
   const out = [];
   for (const video of videos) {
     if (blockedSet.has(video.id) || video.broken || video.embeddable === false) continue;
+    const inLib = !!libraryIds?.has(video.id);
+    if (filters.source === 'library' && !inLib) continue;
+    if (filters.source === 'discovered' && inLib) continue;
     const fit = lengthFit(video, filters.minMin ?? 0, filters.maxMin ?? 999);
     if (fit === 0) continue;
-    const match = matchScore(video, selected);
-    if (selected.length && match < 0.12) continue;
+    const areaMatch = matchScore(video, selected);
+    if (selected.length && areaMatch < 0.12) continue;
+    // Typed words ("pigeon", a teacher's name) count alongside the muscles; typed alone, they must match.
+    const text = useText ? textScores.get(video.id) ?? 0 : null;
+    if (useText && !selected.length && text === 0) continue;
+    const match = text == null ? areaMatch : selected.length ? 0.65 * areaMatch + 0.35 * text : text;
 
     const quality = qualityScore(video, { teacherTrust: teacherTrust(video, model, trusted) });
     const learned = predictLearned(model, video, selected);
@@ -242,8 +254,14 @@ export function rankCandidates({ videos, filters, model, trusted = [], blocked =
         hiddenGem: isHiddenGem(video),
         trusted: isTrusted(video, trusted),
         commentsRead: (video.evidence?.n ?? 0) >= 5,
+        inLibrary: inLib,
+        suggestion: video.source === 'suggestion',
       },
-      reasons: [...learned.notes.map((t) => `📈 ${t}`), ...explainMatch(video, selected.map((s) => s.id))],
+      reasons: [
+        ...(text >= 0.5 ? [`Matches what you typed: “${filters.terms.join(' ')}”`] : []),
+        ...learned.notes.map((t) => `📈 ${t}`),
+        ...explainMatch(video, selected.map((s) => s.id)),
+      ],
     });
   }
   out.sort((a, b) => b.score - a.score);
@@ -310,4 +328,52 @@ export function coverage(videos, blocked = []) {
     for (const [a, s] of Object.entries(v.profile?.areas ?? {})) if (s >= 0.5 && a in counts) counts[a]++;
   }
   return counts;
+}
+
+// ---------------------------------------------------------------- your body over time
+
+const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+
+/** Areas a session worked: the ones you targeted plus any you rated. */
+const sessionAreas = (h) => [...new Set([...(h.areas ?? []).map((a) => a.id), ...Object.keys(h.ratings ?? {})])];
+
+/**
+ * Per muscle area: how often and how recently you've worked it, and how much it helped.
+ * @returns {Record<string, {sessions:number, last:string|null, daysAgo:number|null, helped:number|null}>}
+ */
+export function areaHeat(history, { days = 28, today = localDate() } = {}) {
+  const out = {};
+  for (const h of history) {
+    const age = daysBetween(h.date, today);
+    for (const a of sessionAreas(h)) {
+      const e = (out[a] ??= { sessions: 0, last: null, daysAgo: null, helped: null, _sum: 0, _n: 0 });
+      if (age <= days) e.sessions++;
+      if (!e.last || h.date > e.last) e.last = h.date;
+      const v = RATING_VALUE[h.ratings?.[a]];
+      if (v != null) { e._sum += v; e._n++; }
+    }
+  }
+  for (const e of Object.values(out)) {
+    e.daysAgo = e.last ? daysBetween(e.last, today) : null;
+    e.helped = e._n ? e._sum / e._n : null;
+    delete e._sum; delete e._n;
+  }
+  return out;
+}
+
+/**
+ * Your standing spots ordered by how long it's been since you worked them (never = most neglected).
+ * With no standing spots set, falls back to the areas you target most often.
+ * @param {{id:string, mode:string}[]} focus
+ */
+export function neglectedAreas(focus, history, { today = localDate(), n = 3 } = {}) {
+  const heat = areaHeat(history, { today });
+  let spots = focus;
+  if (!spots?.length) {
+    spots = Object.entries(heat).filter(([a]) => a !== 'full_body').sort((a, b) => b[1].sessions - a[1].sessions).slice(0, 6).map(([id]) => ({ id, mode: 'tight' }));
+  }
+  return spots
+    .map((s) => ({ ...s, daysAgo: heat[s.id]?.daysAgo ?? null }))
+    .sort((a, b) => (b.daysAgo ?? 1e6) - (a.daysAgo ?? 1e6) || (a.mode === 'weak' ? -1 : 1))
+    .slice(0, n);
 }

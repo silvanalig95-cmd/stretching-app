@@ -1,7 +1,7 @@
 // Shell: loads data, builds the header, switches between views.
 
 import { Store } from './store.js';
-import { ctx, initFilters, play, rankNow } from './ctx.js';
+import { ctx, initFilters, play, rankNow, enrichTop, findRoutine } from './ctx.js';
 import { h } from './dom.js';
 import { toast } from './modal.js';
 import { mountToday, unmountToday } from './views/today.js';
@@ -46,10 +46,15 @@ async function main() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
 
   show(tabFromHash());
-  if (store.mode === 'local') {
-    document.getElementById('storage-note').textContent = 'Saving in this browser only. Run serve.py to keep your data in files.';
+  const where = store.mode === 'server' ? `Unfurl ${store.server.version}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
+  document.getElementById('storage-note').textContent = where;
+  if (store.readOnly) {
+    document.getElementById('banner').replaceChildren(h('p', { class: 'banner', role: 'alert' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Your data is read-only.'));
+  } else {
+    for (const note of store.notes) toast(note, 'success', 9000);   // upgrades and recoveries are said out loud, once
   }
-  window.__unfurl = Object.assign(ctx, { play, rankNow }); // handy for debugging in the console and for tests
+  if (store.lastError) toast(store.lastError, 'error');
+  window.__unfurl = Object.assign(ctx, { play, rankNow, enrichTop, findRoutine }); // handy for debugging in the console and for tests
 }
 
 main().catch((e) => {

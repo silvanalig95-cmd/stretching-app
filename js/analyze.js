@@ -14,6 +14,11 @@ import {
 const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
 const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 
+// Bump this whenever the analysis changes in a way that alters profiles (lexicon,
+// weights, parsing). On load the app re-runs the analysis over everything it has
+// stored, so improvements apply retroactively without re-fetching anything.
+export const ANALYSIS_VERSION = 2;
+
 // How much we trust each kind of evidence.
 export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7 };
 
@@ -264,6 +269,33 @@ export function analyzeComments(comments) {
     .slice(0, 4).map(({ text, areas, likes }) => ({ text, areas, likes }));
   ev.sentiment = ev.n ? (ev.positive - ev.negative) / (ev.positive + ev.negative + 8) : 0;
   return ev;
+}
+
+/** How many comments we keep per video (and analyse): enough signal, bounded storage. */
+export const COMMENT_SAMPLE = 50;
+
+/** Trim fetched comments to the bounded sample we store. Evidence is computed from exactly this, so a later re-index reproduces it. */
+export function compactComments(comments) {
+  return (comments ?? []).slice(0, COMMENT_SAMPLE).map((c) => {
+    const text = decodeEntities(typeof c === 'string' ? c : c?.text).replace(/\s+/g, ' ').trim().slice(0, 240);
+    return { t: text, l: typeof c === 'object' ? c.likes ?? c.l ?? 0 : 0 };
+  }).filter((c) => c.t.length >= 4);
+}
+
+/** Store comments on a video and (re)derive its evidence + profile. */
+export function attachComments(video, comments) {
+  const sample = compactComments(comments);
+  const evidence = analyzeComments(sample.map((c) => ({ text: c.t, likes: c.l })));
+  const base = video.profile ?? analyzeVideoText(video);
+  return { ...video, comments: sample, evidence, profile: applyComments(base, evidence) };
+}
+
+/** Re-run the whole analysis from the raw material we keep (text + comment sample). */
+export function reanalyze(video) {
+  const profile = analyzeVideoText(video);
+  if (!video.comments?.length) return { ...video, profile: video.evidence ? applyComments(profile, video.evidence) : profile };
+  const evidence = analyzeComments(video.comments.map((c) => ({ text: c.t, likes: c.l })));
+  return { ...video, evidence, profile: applyComments(profile, evidence) };
 }
 
 /** Evidence from comments as a 0..1 score per area. */

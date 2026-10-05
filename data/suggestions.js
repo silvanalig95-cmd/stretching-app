@@ -1,13 +1,17 @@
-// A small starter shelf so the app is usable before you've searched anything.
+// Recommended starting points: a small shelf of well-known routines, shown as
+// "Suggestions". They are NOT in your library; you add the ones you like.
 //
 // These came from web search results, NOT from the YouTube API, so channel names
 // and lengths are best guesses (lengths come from the video titles). They are
 // flagged `verified: false`; with an API key the app re-checks them on first run
 // (fixing titles/lengths/channels and flagging any that no longer exist), and
 // the embedded player corrects length/title when a video is opened.
-// Everything else in your library is found live by the app itself.
+// Everything else the app knows about is found live by the app itself.
+//
+// Bump SUGGESTIONS_VERSION when you add entries: new ids are added to existing
+// installs, nothing the user has is changed or removed.
 
-export const STARTER_VERSION = 1;
+export const SUGGESTIONS_VERSION = 1;
 
 // [id, title, channel ('' if unknown), minutes]
 const ROWS = [
@@ -59,7 +63,7 @@ const ROWS = [
   ['hA6IfPbEkoc', '15 MIN Full Body Stretch Routine 🔥 Improve Flexibility & Mobility', '', 15],
 ];
 
-export const STARTER_VIDEOS = ROWS.map(([id, title, channel, min]) => ({
+export const SUGGESTIONS = ROWS.map(([id, title, channel, min]) => ({
   id, title, channel, durationSec: min * 60, durationApprox: true,
-  views: null, likes: null, embeddable: true, verified: false, source: 'starter',
+  views: null, likes: null, embeddable: true, verified: false, source: 'suggestion',
 }));

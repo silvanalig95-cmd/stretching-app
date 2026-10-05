@@ -4,13 +4,13 @@
 // everything else 1 unit, against a default 10,000/day allowance, so one
 // discovery run (2 searches + details + comments for ~10 videos) is ~210 units.
 
-import { decodeEntities, parseIsoDuration, analyzeVideoText, analyzeComments, applyComments } from './analyze.js';
+import { decodeEntities, parseIsoDuration, analyzeVideoText, attachComments, reanalyze } from './analyze.js';
 import { buildModel, rankCandidates, channelKey } from './model.js';
 import { buildQueries } from './query.js';
 import { normalize } from './lexicon.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
-export const COST = { search: 100, videos: 1, commentThreads: 1, channels: 1 };
+export const COST = { search: 100, videos: 1, commentThreads: 1, channels: 1, playlistItems: 1, playlists: 1 };
 export const DAILY_QUOTA = 10000;
 
 export class YouTubeError extends Error {
@@ -82,7 +82,7 @@ export class YouTubeClient {
   }
 
   /** Top comments (most relevant first). Returns [] when comments are off. */
-  async comments(videoId, max = 100) {
+  async comments(videoId, max = 50) {
     try {
       const body = await this.call('commentThreads', { part: 'snippet', videoId, maxResults: max, order: 'relevance', textFormat: 'plainText' });
       return (body.items ?? []).map((it) => {
@@ -93,6 +93,44 @@ export class YouTubeClient {
       if (e instanceof CommentsDisabledError) return [];
       throw e;
     }
+  }
+
+  /** One channel by id, @handle or legacy username. Returns {id, name, subscribers, uploads} or null. */
+  async channel({ id, handle, username }) {
+    const body = await this.call('channels', {
+      part: 'snippet,statistics,contentDetails', id, forHandle: handle ? `@${handle.replace(/^@/, '')}` : undefined, forUsername: username, maxResults: 1,
+    });
+    const it = body.items?.[0];
+    if (!it) return null;
+    return {
+      id: it.id, name: decodeEntities(it.snippet?.title),
+      subscribers: it.statistics?.hiddenSubscriberCount ? null : Number(it.statistics?.subscriberCount ?? NaN) || null,
+      uploads: it.contentDetails?.relatedPlaylists?.uploads ?? null,
+    };
+  }
+
+  /** Find channels by name (100 units: only used when we can't resolve a link). */
+  async searchChannels(q) {
+    const body = await this.call('search', { part: 'snippet', type: 'channel', q, maxResults: 5 });
+    return (body.items ?? []).filter((it) => it.id?.channelId).map((it) => ({ id: it.id.channelId, name: decodeEntities(it.snippet?.channelTitle ?? it.snippet?.title) }));
+  }
+
+  /** Video ids in a playlist (a channel's uploads are one), newest first, 50 per unit. */
+  async playlistVideoIds(playlistId, { max = 150 } = {}) {
+    const ids = [];
+    let pageToken;
+    do {
+      const body = await this.call('playlistItems', { part: 'contentDetails', playlistId, maxResults: Math.min(50, max - ids.length), pageToken });
+      for (const it of body.items ?? []) if (it.contentDetails?.videoId) ids.push(it.contentDetails.videoId);
+      pageToken = body.nextPageToken;
+    } while (pageToken && ids.length < max);
+    return ids.slice(0, max);
+  }
+
+  async playlistTitle(playlistId) {
+    const body = await this.call('playlists', { part: 'snippet', id: playlistId, maxResults: 1 });
+    const it = body.items?.[0];
+    return it ? { title: decodeEntities(it.snippet?.title), channelId: it.snippet?.channelId, channel: decodeEntities(it.snippet?.channelTitle) } : null;
   }
 
   async channels(ids) {
@@ -118,7 +156,7 @@ export function toRecord(item) {
     title: decodeEntities(sn.title),
     channelId: sn.channelId,
     channel: decodeEntities(sn.channelTitle),
-    description: decodeEntities(sn.description).slice(0, 5000),
+    description: decodeEntities(sn.description).slice(0, 3000),
     tags: (sn.tags ?? []).slice(0, 30),
     publishedAt: sn.publishedAt,
     durationSec: parseIsoDuration(cd.duration),
@@ -134,7 +172,7 @@ export function toRecord(item) {
 /** Keep user-side facts when a fresher copy of a video arrives. */
 export function mergeVideo(old, fresh) {
   if (!old) return fresh;
-  const merged = { ...old, ...fresh, source: old.source === 'starter' || old.source === 'manual' ? old.source : fresh.source ?? old.source, addedAt: old.addedAt ?? fresh.addedAt };
+  const merged = { ...old, ...fresh, source: old.source === 'suggestion' || old.source === 'manual' ? old.source : fresh.source ?? old.source, addedAt: old.addedAt ?? fresh.addedAt };
   if (!fresh.evidence && old.evidence) merged.evidence = old.evidence;
   if (!fresh.profile && old.profile) merged.profile = old.profile;
   if (old.subscribers != null && fresh.subscribers == null) merged.subscribers = old.subscribers;
@@ -142,11 +180,7 @@ export function mergeVideo(old, fresh) {
 }
 
 /** Re-run text analysis (and comments, if we have them) after metadata changes. */
-export function reprofile(video) {
-  let profile = analyzeVideoText(video);
-  if (video.evidence) profile = applyComments(profile, video.evidence);
-  return { ...video, profile };
-}
+export const reprofile = reanalyze;
 
 // ---------------------------------------------------------------- quota bookkeeping
 
@@ -232,8 +266,7 @@ export async function discover({ client, filters, state, rng, progress = () => {
   for (const v of touched.values()) {
     const ch = channels[v.channelId] ?? state.channels[v.channelId];
     if (ch?.subscribers != null) v.subscribers = ch.subscribers;
-    v.profile = analyzeVideoText(v);
-    if (v.evidence) v.profile = applyComments(v.profile, v.evidence);
+    Object.assign(v, reanalyze(v));
   }
 
   // Already-known candidates take part too (they may just need their comments read).
@@ -249,9 +282,8 @@ export async function discover({ client, filters, state, rng, progress = () => {
     progress(`Reading viewer comments (${++i}/${toRead.length}): ${v.title.slice(0, 48)}…`);
     let comments;
     try { comments = await client.comments(v.id); } catch (e) { if (e instanceof QuotaError) { report.warnings.push(e.message); break; } continue; }
-    const rec = touched.get(v.id);
-    rec.evidence = analyzeComments(comments);
-    rec.profile = applyComments(rec.profile ?? analyzeVideoText(rec), rec.evidence);
+    const rec = attachComments(touched.get(v.id), comments);
+    touched.set(v.id, rec);
     report.commentsRead += rec.evidence.n;
   }
 
@@ -270,13 +302,118 @@ export async function verifyVideos({ client, videos, readComments = false }) {
     const r = byId.get(v.id);
     if (!r) { out.push({ ...v, broken: true, verified: true }); continue; }
     let rec = reprofile(mergeVideo(v, { ...r, broken: false }));
-    if (readComments && !rec.evidence) {
-      rec.evidence = analyzeComments(await client.comments(rec.id));
-      rec = reprofile(rec);
-    }
+    if (readComments && !rec.evidence) rec = attachComments(rec, await client.comments(rec.id));
     out.push(rec);
   }
   return out;
+}
+
+// ---------------------------------------------------------------- bringing in whole sources
+
+const ID11 = /^[A-Za-z0-9_-]{11}$/;
+const CHANNEL_ID = /^UC[A-Za-z0-9_-]{22}$/;
+const PLAYLIST_ID = /^(?:PL|UU|OLAK5uy_|FL|RD)[A-Za-z0-9_-]{10,40}$/;
+
+/**
+ * What did the user paste? A video, playlist, channel (by id, /@handle or /user/ link), or just a name to look up.
+ * @returns {{type:'video'|'playlist'|'channel'|'handle'|'username'|'search', value:string}}
+ */
+export function parseSourceInput(input) {
+  const s = String(input ?? '').trim();
+  if (!s) return { type: 'search', value: '' };
+  if (CHANNEL_ID.test(s)) return { type: 'channel', value: s };
+  if (PLAYLIST_ID.test(s) && !ID11.test(s)) return { type: 'playlist', value: s };
+  if (/^@[\w.\-]{3,40}$/.test(s)) return { type: 'handle', value: s.slice(1) };
+  if (ID11.test(s)) return { type: 'video', value: s };
+  try {
+    const u = new URL(s.includes('://') ? s : `https://${s}`);
+    const host = u.hostname.replace(/^www\.|^m\./, '');
+    if (host === 'youtu.be') return ID11.test(u.pathname.slice(1, 12)) ? { type: 'video', value: u.pathname.slice(1, 12) } : { type: 'search', value: s };
+    if (host.endsWith('youtube.com')) {
+      const list = u.searchParams.get('list'), v = u.searchParams.get('v');
+      if (u.pathname === '/playlist' && list) return { type: 'playlist', value: list };
+      if (v && ID11.test(v)) return { type: 'video', value: v };
+      if (list && !v) return { type: 'playlist', value: list };
+      let m;
+      if ((m = u.pathname.match(/^\/channel\/(UC[\w-]{22})/))) return { type: 'channel', value: m[1] };
+      if ((m = u.pathname.match(/^\/@([\w.\-]+)/))) return { type: 'handle', value: m[1] };
+      if ((m = u.pathname.match(/^\/user\/([\w.\-]+)/))) return { type: 'username', value: m[1] };
+      if ((m = u.pathname.match(/^\/(?:shorts|embed|live|v)\/([\w-]{11})/))) return { type: 'video', value: m[1] };
+      if ((m = u.pathname.match(/^\/c\/([\w.\-]+)/))) return { type: 'search', value: decodeURIComponent(m[1]) };
+    }
+  } catch { /* not a URL: treat as a name */ }
+  return { type: 'search', value: s };
+}
+
+/** Keep only videos worth suggesting: real length, embeddable, not live. */
+const usable = (r) => !r.live && r.durationSec != null && r.durationSec >= MIN_SEC && r.durationSec <= MAX_SEC && r.embeddable !== false;
+
+/** Fetch details for ids, drop the unusable, attach channel size and a first analysis. */
+async function recordsFor(client, ids, state, source, channelInfo) {
+  const details = await client.videos(ids);
+  const keep = details.filter(usable);
+  const need = [...new Set(keep.map((r) => r.channelId).filter((c) => c && !state.channels[c] && c !== channelInfo?.id))];
+  const channels = need.length ? await client.channels(need).catch(() => ({})) : {};
+  if (channelInfo) channels[channelInfo.id] = { id: channelInfo.id, name: channelInfo.name, subscribers: channelInfo.subscribers };
+  const records = keep.map((r) => {
+    const subs = (channels[r.channelId] ?? state.channels[r.channelId])?.subscribers;
+    return reanalyze({ ...r, source, addedAt: Date.now(), ...(subs != null ? { subscribers: subs } : {}) });
+  });
+  return { records, channels, skipped: details.length - keep.length, missing: ids.length - details.length };
+}
+
+/**
+ * Import everything behind a pasted link: a video, a playlist, or a teacher's whole upload history.
+ * Cheap: ~1 unit per 50 videos (a search is 100). Never mutates `state`.
+ * @returns {{type:string, title:string, channel:{id,name,subscribers}|null, records:object[], channels:object, skipped:number, missing:number}}
+ */
+export async function importSource({ client, input, state, maxVideos = 150, progress = () => {} }) {
+  const src = typeof input === 'string' ? parseSourceInput(input) : input;
+  if (src.type === 'video') {
+    progress('Reading the video…');
+    const r = await recordsFor(client, [src.value], state, 'manual');
+    return { type: 'video', title: r.records[0]?.title ?? '', channel: null, ...r };
+  }
+  if (src.type === 'playlist') {
+    progress('Reading the playlist…');
+    const [meta, ids] = await Promise.all([client.playlistTitle(src.value).catch(() => null), client.playlistVideoIds(src.value, { max: maxVideos })]);
+    if (!ids.length) return { type: 'playlist', title: meta?.title ?? '', channel: null, records: [], channels: {}, skipped: 0, missing: 0 };
+    progress(`Reading details for ${ids.length} videos…`);
+    const r = await recordsFor(client, ids, state, 'playlist');
+    return { type: 'playlist', title: meta?.title ?? 'Playlist', channel: null, ...r };
+  }
+  // a teacher / channel
+  let ch = null;
+  progress('Finding the channel…');
+  if (src.type === 'channel') ch = await client.channel({ id: src.value });
+  else if (src.type === 'handle') ch = await client.channel({ handle: src.value });
+  else if (src.type === 'username') ch = await client.channel({ username: src.value });
+  else {
+    const found = (await client.searchChannels(src.value))[0];
+    ch = found ? await client.channel({ id: found.id }) : null;
+  }
+  if (!ch?.uploads) throw new YouTubeError(`Couldn’t find a channel for “${src.value}”.`);
+  progress(`Reading ${ch.name}’s uploads…`);
+  const ids = await client.playlistVideoIds(ch.uploads, { max: maxVideos });
+  progress(`Reading details for ${ids.length} videos…`);
+  const r = await recordsFor(client, ids, state, 'channel', ch);
+  return { type: 'channel', title: ch.name, channel: ch, ...r };
+}
+
+/** Check followed teachers for uploads we haven't seen. ~2 units per teacher. */
+export async function refreshFollowed({ client, state, perChannel = 15, progress = () => {} }) {
+  const records = [], channels = {}, updated = [];
+  for (const f of state.following) {
+    progress(`Checking ${f.name}…`);
+    const uploads = f.uploads ?? (await client.channel({ id: f.channelId }))?.uploads;
+    if (!uploads) continue;
+    const ids = (await client.playlistVideoIds(uploads, { max: perChannel })).filter((id) => !state.videos[id]);
+    updated.push({ channelId: f.channelId, uploads, lastChecked: Date.now(), found: ids.length });
+    if (!ids.length) continue;
+    const r = await recordsFor(client, ids, state, 'channel', { id: f.channelId, name: f.name, subscribers: state.channels[f.channelId]?.subscribers ?? null });
+    records.push(...r.records); Object.assign(channels, r.channels);
+  }
+  return { records, channels, updated };
 }
 
 /** Title + channel for a pasted link, without an API key (best effort; CORS may block it). */

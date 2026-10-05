@@ -1,12 +1,12 @@
 // "Today": say what you need (or tap muscles), get a routine you can play right here.
 
 import { h, fill } from '../dom.js';
-import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow } from '../ctx.js';
+import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow, useMySpots, aimAtNeglected } from '../ctx.js';
 import { AREAS, GROUPS, STYLES, QUICK_PICKS, areaLabel } from '../lexicon.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
 import { mountPlayer } from '../player.js';
-import { formatDuration, analyzeComments, applyComments } from '../analyze.js';
-import { applyPlayerInfo, toggleSaved, blockVideo, unblockVideo } from '../state.js';
+import { formatDuration, attachComments } from '../analyze.js';
+import { applyPlayerInfo, toggleLibrary, inLibrary, blockVideo, unblockVideo } from '../state.js';
 import { mulberry32 } from '../model.js';
 import { fmtViews, thumb } from '../dom.js';
 import { openFeedback } from './feedback.js';
@@ -50,7 +50,7 @@ function commandBar() {
     e.preventDefault();
     ctx.ui.command = input.value;
     const parsed = parseCommand(input.value);
-    if (!parsed.understood) { note.textContent = 'I couldn’t pick out a muscle, length or style there. Try “tight hamstrings, 20 min”.'; return; }
+    if (!parsed.understood && !parsed.terms.length) { note.textContent = 'I couldn’t pick out a muscle, length or style there. Try “tight hamstrings, 20 min”.'; return; }
     applyParsed(parsed);
     renderFilters();
     note.textContent = `Understood: ${describeFilters()}`;
@@ -81,7 +81,21 @@ export function renderFilters() {
   minIn.addEventListener('change', applyLen); maxIn.addEventListener('change', applyLen);
   const presets = [['Under 10', 3, 10], ['10–20', 10, 20], ['20–30', 20, 30], ['30–45', 30, 45], ['Any', null, null]];
 
+  const hasBodyData = prefs.focus.length || ctx.state.history.length;
   fill(slots.filters, 
+    f.terms?.length ? h('div', { class: 'row' }, h('div', { class: 'label' }, 'Also matching'),
+      h('div', { class: 'chips' }, h('button', { type: 'button', class: 'chip on', id: 'clear-terms', 'aria-label': `Stop matching “${f.terms.join(' ')}”`, onclick: () => { f.terms = []; again(); } }, `“${f.terms.join(' ')}”`, h('small', { class: 'mode' }, '✕')))) : null,
+    hasBodyData ? h('div', { class: 'row' },
+      h('div', { class: 'label' }, 'Your body'),
+      h('div', { class: 'chips' },
+        prefs.focus.length ? chip('Use my usual spots', false, () => { useMySpots(); again(); }, { cls: 'quick' }) : null,
+        chip('What have I been neglecting?', false, () => {
+          const list = aimAtNeglected(2);
+          if (!list) { toast('Do a routine or two first, or set your usual spots in Settings.'); return; }
+          again();
+          toast(`Aiming at ${list.map((x) => `${areaLabel(x.id)}${x.daysAgo == null ? ' (never worked)' : ` (${x.daysAgo} days)`}`).join(' and ')}.`);
+          findRoutine();
+        }, { cls: 'quick' }))) : null,
     h('div', { class: 'row' },
       h('div', { class: 'label' }, 'Quick picks'),
       h('div', { class: 'chips' }, QUICK_PICKS.map((q) => chip(q.label, false, () => {
@@ -105,6 +119,10 @@ export function renderFilters() {
         h('div', { class: 'chips' }, STYLES.map((s) => chip(s.label, f.styles.includes(s.id), () => {
           f.styles = f.styles.includes(s.id) ? f.styles.filter((x) => x !== s.id) : [...f.styles, s.id]; again();
         }))))),
+    h('div', { class: 'row' },
+      h('label', { class: 'field inline-field' }, h('span', null, 'Pick from'),
+        h('select', { id: 'scope', onchange: (e) => { f.source = e.target.value; again(); } },
+          [['all', 'Everything I know about'], ['library', 'My library only'], ['discovered', 'Not in my library yet']].map(([v, t]) => h('option', { value: v, selected: f.source === v }, t))))),
     h('div', { class: 'row find-row' },
       h('div', { class: 'web' },
         h('label', { class: 'check' },
@@ -130,11 +148,16 @@ export function renderResults() {
 }
 
 export function renderLog() {
-  const { busy, log } = ctx.ui;
+  const { busy, log, termsIgnored, filters } = ctx.ui;
   if (!slots.log) return;
-  fill(slots.log, !busy && !log.length ? '' : h('details', { class: 'log', open: busy || log.some((l) => l.startsWith('⚠')) },
+  const lines = [...log];   // never mutate the log from a render
+  if (!busy && termsIgnored && filters.terms.length) {
+    lines.push(`Nothing I know yet mentions “${filters.terms.join(' ')}”, so I ignored it${ctx.hasKey ? ' here (a web search will look for it)' : ''}.`);
+  }
+  const ignored = !busy && termsIgnored && filters.terms.length > 0;
+  fill(slots.log, !busy && !lines.length ? '' : h('details', { class: 'log', open: busy || ignored || lines.some((l) => l.startsWith('⚠')) },
     h('summary', null, busy ? 'Searching…' : 'What I just did'),
-    h('ol', null, log.map((l) => h('li', null, l)))));
+    h('ol', null, lines.map((l) => h('li', null, l)))));
 }
 
 function destroyPlayer() { playerCtl?.destroy(); playerCtl = null; playerFor = null; playerBox = null; article = null; infoHost = null; }
@@ -198,7 +221,7 @@ function lengthText(v) { return v.durationSec == null ? 'length unknown' : `${v.
 function featuredInfo(entry) {
   const v = entry.video, f = entry.flags ?? {}, ev = v.evidence;
   const state = ctx.state;
-  const saved = state.saved.includes(v.id);
+  const saved = inLibrary(state, v.id);
   const likePct = v.likes != null && v.views ? `${(100 * v.likes / v.views).toFixed(1)}% like it` : '';
   const wanted = new Set(ctx.ui.featuredAreas.map((a) => a.id));
   const quotes = (ev?.quotes ?? []).slice().sort((a, b) => (b.areas.some((x) => wanted.has(x)) ? 1 : 0) - (a.areas.some((x) => wanted.has(x)) ? 1 : 0));
@@ -209,6 +232,8 @@ function featuredInfo(entry) {
       v.channel ? h('span', { class: 'channel' }, v.channel) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
       h('span', null, lengthText(v)), fmtViews(v.views) && h('span', null, fmtViews(v.views)), likePct && h('span', null, likePct)),
     h('div', { class: 'badges' },
+      saved && badge('✓ In your library', 'lib'),
+      f.suggestion && !saved && badge('Suggested', '', 'A recommended starting point; add it to your library if you like it'),
       ctx.ui.foundIds.has(v.id) && badge('✨ Just found', 'new'),
       f.newChannel && badge('New teacher for you', 'new', 'You haven’t done a routine from this channel yet'),
       f.hiddenGem && badge('Hidden gem', 'gem', 'Well liked relative to its views'),
@@ -218,7 +243,7 @@ function featuredInfo(entry) {
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => openFeedback(v.id) }, 'I did it ✓'),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
-      h('button', { class: 'btn ghost', type: 'button', 'aria-pressed': saved, onclick: () => { toggleSaved(state, v.id); ctx.store.save(); renderFeaturedInfo(); } }, saved ? '★ Saved' : '☆ Save'),
+      h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
       h('button', { class: 'btn ghost', type: 'button', onclick: () => {
         blockVideo(state, v.id); ctx.store.save();
         const t = toast('Won’t suggest that one again. ', 'info', 7000);
@@ -259,11 +284,11 @@ async function readComments(id, btn) {
   btn.disabled = true; btn.textContent = 'Reading…';
   try {
     const v = ctx.state.videos[id];
-    v.evidence = analyzeComments(await api.comments(id));
-    v.profile = applyComments(v.profile, v.evidence);
+    ctx.state.videos[id] = attachComments(v, await api.comments(id));
     ctx.store.save();
     renderFeaturedInfo(); renderAlts();
-    toast(v.evidence.n ? `Read ${v.evidence.n} comments.` : 'This video has no readable comments.');
+    const ev = ctx.state.videos[id].evidence;
+    toast(ev.n ? `Read ${ev.n} comments.` : 'This video has no readable comments.');
   } catch (e) { btn.disabled = false; btn.textContent = 'Read them now'; toast(e.message, 'error'); }
 }
 
@@ -300,6 +325,7 @@ function videoCard(r) {
     h('span', { class: 'vtitle' }, v.title),
     h('span', { class: 'vmeta' }, v.channel || 'unknown channel', ' · fit ', `${Math.round((r.parts.match ?? 0) * 100)}%`),
     h('span', { class: 'badges' },
+      inLibrary(ctx.state, v.id) && badge('In library', 'lib'), f.suggestion && !inLibrary(ctx.state, v.id) && badge('Suggested'),
       ctx.ui.foundIds.has(v.id) && badge('Just found', 'new'),
       f.newChannel && badge('New teacher', 'new'), f.hiddenGem && badge('Hidden gem', 'gem')));
 }
