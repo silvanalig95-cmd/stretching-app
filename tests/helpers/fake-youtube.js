@@ -7,6 +7,13 @@
 
 
 // topic -> {title, desc, comments[]}
+import { STARTER_VIDEOS } from '../../data/starter.js';
+
+// The starter videos "exist" on this fake YouTube (with slightly different lengths, so
+// verification visibly corrects them) except GONE, which behave like deleted videos.
+export const GONE = new Set(['uQohpNbzyUg', '9GiLEupJq40']);
+const STARTER = new Map(STARTER_VIDEOS.map((s) => [s.id, s]));
+
 const T = {
   hips: {
     title: (n) => `${n} Minute Yoga for Tight Hips & Hip Flexors`,
@@ -69,6 +76,17 @@ const ROWS = [
   ['TESTvid0020', 'full', 25, 'Morning Movers', 60000, 3000, 22000],
 ];
 
+// Pad the catalog to 80 videos with deterministic variety (real YouTube is effectively unbounded).
+{
+  const topics = Object.keys(T), mins = [8, 10, 12, 15, 18, 20, 25, 30];
+  for (let i = 21; i <= 80; i++) {
+    const topic = topics[i % topics.length];
+    const views = Math.round(2000 * 1.35 ** (i % 17)), likeRatio = 0.012 + ((i * 7) % 30) / 1000;
+    ROWS.push([`TESTvid${String(i).padStart(4, '0')}`, topic, mins[i % mins.length], i % 3 === 0 ? `Small Channel ${i}` : ['Calm Hips Studio', 'Big Channel Yoga', 'Tiny Yoga Room', 'Desk Yoga Co'][i % 4],
+      views, Math.round(views * likeRatio), i % 3 === 0 ? 1500 + i * 120 : 300000]);
+  }
+}
+
 export const CHANNELS = Object.fromEntries(ROWS.map((r) => [`UC_${r[3].replace(/\W/g, '')}`, { title: r[3], subs: r[6] }]));
 const chId = (name) => `UC_${name.replace(/\W/g, '')}`;
 
@@ -91,6 +109,14 @@ const ok = (body) => ({ status: 200, body });
 const err = (status, reason, message, detailReason) => ({
   status,
   body: { error: { code: status, message, errors: [{ message, domain: 'global', reason }], status: 'ERR', ...(detailReason ? { details: [{ '@type': 'type.googleapis.com/google.rpc.ErrorInfo', reason: detailReason, domain: 'googleapis.com' }] } : {}) } },
+});
+
+const starterItem = (s) => ({
+  kind: 'youtube#video', id: s.id,
+  snippet: { publishedAt: '2022-01-01T00:00:00Z', channelId: 'UC_Starter', title: s.title, description: '', channelTitle: s.channel || 'Verified Channel', liveBroadcastContent: 'none' },
+  contentDetails: { duration: `PT${s.durationSec / 60 + 1}M0S` },
+  status: { embeddable: true },
+  statistics: { viewCount: '50000', likeCount: '2000', commentCount: '10' },
 });
 
 /** Test switches: set from a test to simulate failures. */
@@ -137,23 +163,26 @@ export function handle(urlString) {
     const ids = (p('id') ?? '').split(',');
     return ok({
       kind: 'youtube#videoListResponse',
-      items: ids.map((id) => VIDEOS.find((v) => v.id === id)).filter(Boolean).map((v) => ({
+      items: [...ids.filter((id) => STARTER.has(id) && !GONE.has(id)).map((id) => starterItem(STARTER.get(id))),
+        ...ids.map((id) => VIDEOS.find((v) => v.id === id)).filter(Boolean).map((v) => ({
         kind: 'youtube#video', id: v.id,
         snippet: { publishedAt: '2023-04-01T10:00:00Z', channelId: v.channelId, title: v.title, description: v.desc, channelTitle: v.channel, tags: [v.topic], liveBroadcastContent: 'none' },
         contentDetails: { duration: `PT${v.min}M0S` },
         status: { embeddable: true },
         statistics: { viewCount: String(v.views), likeCount: String(v.likes), commentCount: String(v.comments.length) },
-      })),
+      }))],
     });
   }
 
   if (endpoint === 'commentThreads') {
     const v = VIDEOS.find((x) => x.id === p('videoId'));
+    if (!v && STARTER.has(p('videoId'))) return ok({ kind: 'youtube#commentThreadListResponse', items: [] });
     if (!v) return err(404, 'videoNotFound', 'The video identified by the videoId parameter could not be found.');
     if (fault.commentsOff.has(v.id)) return err(403, 'commentsDisabled', 'The video identified by the videoId parameter has disabled comments.');
     return ok({
       kind: 'youtube#commentThreadListResponse',
-      items: v.comments.map((text, i) => ({ snippet: { topLevelComment: { snippet: { textDisplay: text, textOriginal: text, likeCount: 20 - i * 3 } } } })),
+      // real videos have hundreds; repeat the fixture comments so there's enough to analyse
+      items: [...v.comments, ...v.comments, ...v.comments].map((text, i) => ({ snippet: { topLevelComment: { snippet: { textDisplay: text, textOriginal: text, likeCount: 20 - i * 3 } } } })),
     });
   }
 

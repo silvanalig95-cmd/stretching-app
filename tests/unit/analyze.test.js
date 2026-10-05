@@ -113,3 +113,10 @@ test('explainMatch gives readable reasons', () => {
   assert.match(r[0], /Hip flexors/);
   assert.match(r[0], /Low lunge/);
 });
+
+test('identical copy-pasted comments are quoted once', () => {
+  const same = 'My hip flexors finally feel open, this really helped!';
+  const ev = A.analyzeComments([same, same, same, { text: same.toUpperCase(), likes: 2 }, 'Pigeon pose helped my glutes so much, thank you']);
+  assert.equal(ev.quotes.filter((q) => /hip flexors/i.test(q.text)).length, 1);
+  assert.ok(ev.quotes.length >= 2);
+});

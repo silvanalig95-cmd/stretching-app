@@ -14,7 +14,7 @@ export class Store {
     this.fetchFn = fetchFn; this.storage = storage;
     this.mode = 'local';
     this.state = emptyState();
-    this.config = { apiKey: '', apiBase: '' };
+    this.config = { apiKey: '' };
     this.timer = null; this.dirty = false;
   }
 
@@ -33,7 +33,7 @@ export class Store {
       rawConfig = this.#readLocal('unfurl.config');
     }
     this.state = normalizeState(rawState);
-    this.config = { apiKey: '', apiBase: '', ...(rawConfig ?? {}) };
+    this.config = { apiKey: '', ...(rawConfig ?? {}) };
     return this;
   }
 

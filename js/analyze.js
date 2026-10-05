@@ -257,7 +257,11 @@ export function analyzeComments(comments) {
     for (const id of seenPoses) ev.posesMentioned[id] = (ev.posesMentioned[id] ?? 0) + 1;
   }
 
-  ev.quotes = quotes.sort((a, b) => b.score - a.score).slice(0, 4).map(({ text, areas, likes }) => ({ text, areas, likes }));
+  // Copy-pasted comments are common; quote each distinct text once.
+  const distinct = new Set();
+  ev.quotes = quotes.sort((a, b) => b.score - a.score)
+    .filter((q) => { const k = normalize(q.text); if (distinct.has(k)) return false; distinct.add(k); return true; })
+    .slice(0, 4).map(({ text, areas, likes }) => ({ text, areas, likes }));
   ev.sentiment = ev.n ? (ev.positive - ev.negative) / (ev.positive + ev.negative + 8) : 0;
   return ev;
 }

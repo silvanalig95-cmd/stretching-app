@@ -163,7 +163,8 @@ test('quota bookkeeping resets each Pacific day and estimates a run', () => {
   assert.equal(quotaUsed(s, d1), 350);
   assert.equal(quotaUsed(s, d2), 0);
   assert.equal(quotaDay(new Date('2026-10-05T03:00:00Z')), '2026-10-04'); // still the previous day in Pacific time
-  assert.equal(estimateRunCost({ queries: 2, commentVideos: 10 }), 216);
+  assert.equal(estimateRunCost({ queries: 2, commentVideos: 10, extraPages: 0 }), 216);
+  assert.equal(estimateRunCost({ queries: 2, commentVideos: 10 }), 416); // worst case: one extra page per search
 });
 
 test('end to end: rate a session, and the next discovery run ranks it using what you told it', async () => {
@@ -177,4 +178,52 @@ test('end to end: rate a session, and the next discovery run ranks it using what
   assert.equal(state.blocked.length, 0);
   logSession(state, { videoId: done.id, areas: hips.areas, ratings: { glutes: 'none' }, repeat: 'no' });
   assert.deepEqual(state.blocked, [done.id]);
+});
+
+test('mostly-familiar results make discovery look one page further down (and count the query once)', async () => {
+  reset();
+  const state = normalizeState(null);
+  // Pass 1: learn what page one of this query returns, then forget the query log so the same query is generated again.
+  const first = await discover({ client: client(), filters: hips, state, rng: mulberry32(77), opts: { queries: 1, commentVideos: 0, extraPages: 0 } });
+  applyDiscovery(state, first);
+  assert.equal(first.report.queries[0].pages, 1);
+  state.queryLog = {};
+  // Pass 2: page one is now entirely known, so it should fetch page two and find new videos there.
+  const second = await discover({ client: client(), filters: hips, state, rng: mulberry32(77), opts: { queries: 1, commentVideos: 0, extraPages: 1 } });
+  assert.equal(second.report.queries[0].q, first.report.queries[0].q, 'same query regenerated');
+  assert.equal(second.report.queries[0].pages, 2);
+  assert.ok(second.report.queries[0].fresh >= 1, 'page two had new videos');
+  const knownBefore = new Set(Object.keys(state.videos));
+  assert.ok(second.records.some((r) => !knownBefore.has(r.id)), 'new videos came back');
+  const key = Object.keys(second.queryUpdates)[0];
+  assert.equal(second.queryUpdates[key].count, 1, 'counted once even though it took two pages');
+  assert.ok(second.queryUpdates[key].nextPageToken === null || typeof second.queryUpdates[key].nextPageToken === 'string');
+});
+
+test('extraPages: 0 never fetches a second page', async () => {
+  reset();
+  const state = normalizeState(null);
+  const res = await discover({ client: client(), filters: hips, state, rng: mulberry32(5), opts: { queries: 2, commentVideos: 0, extraPages: 0 } });
+  assert.ok(res.report.queries.every((q) => q.pages === 1));
+  assert.equal(fault.calls.filter((c) => c.endpoint === 'search').length, 2);
+});
+
+test('across many seeds, repeated searches keep adding new videos and never repeat a query without going deeper', async () => {
+  reset();
+  const filters = { areas: [{ id: 'hip_flexors', mode: 'tight' }, { id: 'glutes', mode: 'tight' }, { id: 'adductors', mode: 'tight' }], minMin: 10, maxMin: 30, styles: [] };
+  let grew = 0, seeds = 60, repeats = 0;
+  for (let seed = 1; seed <= seeds; seed++) {
+    const state = normalizeState(null);
+    const seen = new Set();
+    let sizeAfterTwo = 0;
+    for (let run = 0; run < 4; run++) {
+      const res = await discover({ client: client(), filters, state, rng: mulberry32(seed * 1000 + run), opts: { queries: 2, commentVideos: 3 } });
+      applyDiscovery(state, res);
+      for (const q of res.report.queries) { if (seen.has(q.q) && !q.deeper) repeats++; seen.add(q.q); }
+      if (run === 1) sizeAfterTwo = Object.keys(state.videos).length;
+    }
+    if (Object.keys(state.videos).length > sizeAfterTwo) grew++;
+  }
+  assert.equal(repeats, 0, 'no query repeated without going deeper');
+  assert.ok(grew / seeds >= 0.95, `runs 3-4 found new videos in ${grew}/${seeds} seeds`);
 });

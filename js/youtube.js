@@ -158,11 +158,13 @@ export function spendQuota(state, units, d = new Date()) {
   const day = quotaDay(d);
   state.quota = { day, used: (state.quota?.day === day ? state.quota.used : 0) + units };
 }
-export const estimateRunCost = ({ queries = 2, commentVideos = 10 } = {}) => queries * COST.search + commentVideos + 6;
+/** Worst case: every search needs one extra page. Typical runs cost roughly half of the search part. */
+export const estimateRunCost = ({ queries = 2, commentVideos = 10, extraPages = 1 } = {}) => queries * COST.search * (1 + extraPages) + commentVideos + 6;
 
 // ---------------------------------------------------------------- discovery
 
 const MIN_SEC = 90, MAX_SEC = 3 * 3600;
+const MIN_FRESH = 3; // a result page with fewer than this many unknown videos triggers a look at the next page
 
 /**
  * Go and find new routines for these filters, read their metadata + comments,
@@ -170,7 +172,7 @@ const MIN_SEC = 90, MAX_SEC = 3 * 3600;
  * Never mutates `state`; the caller merges `records` / `queryUpdates` / `channels`.
  */
 export async function discover({ client, filters, state, rng, progress = () => {}, opts = {} }) {
-  const o = { queries: 2, commentVideos: 10, ...opts };
+  const o = { queries: 2, commentVideos: 10, extraPages: 1, ...opts };
   const model = buildModel(state.history, state.videos);
   const knownTeachers = new Set();
   for (const v of Object.values(state.videos)) if (model.channelDone.has(channelKey(v))) knownTeachers.add(normalize(v.channel).replace(/ /g, ''));
@@ -179,20 +181,32 @@ export async function discover({ client, filters, state, rng, progress = () => {
   const report = { queries: [], warnings: [], newVideos: 0, newChannels: 0, commentsRead: 0 };
   const queryUpdates = {};
   const found = new Map();
+  let stop = false;
 
   for (const q of queries) {
-    progress(`Searching YouTube for “${q.q}”${q.pageToken ? ' (going deeper)' : ''}…`);
-    let res;
-    try {
-      res = await client.search(q);
-    } catch (e) {
-      if (found.size && (e instanceof QuotaError)) { report.warnings.push(e.message); break; }
-      throw e;
+    let page = q, pages = 0, fresh = 0;
+    for (;;) {
+      progress(`Searching YouTube for “${q.q}”${page.pageToken ? ' (going deeper)' : ''}…`);
+      let res;
+      try {
+        res = await client.search(page);
+      } catch (e) {
+        if (found.size && (e instanceof QuotaError)) { report.warnings.push(e.message); stop = true; break; }
+        throw e;
+      }
+      pages++;
+      const prev = state.queryLog[q.key] ?? {};
+      queryUpdates[q.key] = { count: (prev.count ?? 0) + 1, lastAt: Date.now(), order: q.order, nextPageToken: res.nextPageToken, q: q.q };
+      const newHere = res.items.filter((it) => !state.videos[it.id] && !found.has(it.id)).length;
+      fresh += newHere;
+      for (const it of res.items) if (!found.has(it.id)) found.set(it.id, it);
+      // Mostly videos we already know? Look one page further down rather than come back empty-handed.
+      if (newHere >= MIN_FRESH || !res.nextPageToken || pages > o.extraPages) break;
+      progress('Mostly familiar results, so looking a little further down…');
+      page = { ...q, pageToken: res.nextPageToken };
     }
-    const prev = state.queryLog[q.key] ?? {};
-    queryUpdates[q.key] = { count: (prev.count ?? 0) + 1, lastAt: Date.now(), order: q.order, nextPageToken: res.nextPageToken, q: q.q };
-    for (const it of res.items) if (!found.has(it.id)) found.set(it.id, it);
-    report.queries.push({ q: q.q, order: q.order, deeper: !!q.pageToken, results: res.items.length });
+    if (pages) report.queries.push({ q: q.q, order: q.order, deeper: !!q.pageToken, pages, fresh });
+    if (stop) break;
   }
 
   const ids = [...found.keys()];
@@ -271,6 +285,7 @@ export async function fetchOEmbed(id, fetchFn = (...a) => fetch(...a)) {
     const res = await fetchFn(`https://www.youtube.com/oembed?url=${encodeURIComponent(`https://www.youtube.com/watch?v=${id}`)}&format=json`);
     if (!res.ok) return null;
     const j = await res.json();
-    return { title: decodeEntities(j.title), channel: decodeEntities(j.author_name) };
+    const title = decodeEntities(j.title), channel = decodeEntities(j.author_name);
+    return title || channel ? { title, channel } : null;
   } catch { return null; }
 }
