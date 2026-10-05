@@ -158,12 +158,15 @@ test('login names are turned into safe folder names', () => {
   const py = `
 import sys; sys.path.insert(0, ${JSON.stringify(ROOT)})
 import serve
-for n in ["ana", "../../etc", "a/b", "..", "", "Jörg Müller", "x"*200]:
+for n in ["ana", "../../etc", "a/b", "..", "", "Jörg Müller", "x"*200, "Ana"]:
     print(serve.safe_user_dir(n))`;
   const out = spawnSync('python3', ['-c', py], { encoding: 'utf8' }).stdout.trim().split('\n');
-  assert.equal(out[0], 'ana');
+  assert.equal(out[0], 'ana', 'a plain name is used as it is');
   for (const n of out) assert.match(n, /^[A-Za-z0-9._-]{1,64}$/);
   assert.ok(!out.some((n) => n.includes('/') || n === '..' || n === '.'));
+  assert.equal(new Set(out).size, out.length, 'different logins never share a folder');
+  const clash = spawnSync('python3', ['-c', `import sys; sys.path.insert(0, ${JSON.stringify(ROOT)}); import serve; print(serve.safe_user_dir("a b"), serve.safe_user_dir("a_b"), serve.safe_user_dir("Ana"), serve.safe_user_dir("ana"))`], { encoding: 'utf8' }).stdout.trim().split(' ');
+  assert.equal(new Set(clash).size, 4, `look-alike names stay apart: ${clash}`);
 });
 
 test('with a login proxy in front, the user comes from its header — but only if the request really came from the proxy', async () => {
@@ -175,7 +178,8 @@ test('with a login proxy in front, the user comes from its header — but only i
     assert.equal(ok.json.user, 'dana@example.com');
     assert.equal(ok.json.multiUser, true);
     await s.call({ method: 'PUT', path: '/api/profile', headers: { 'X-Forwarded-User': 'dana@example.com', 'Content-Type': 'application/json' }, body: { schema: 2, mine: true } });
-    assert.ok(fs.existsSync(path.join(s.dataDir, 'users', 'dana_example.com', 'profile.json')));
+    const folder = fs.readdirSync(path.join(s.dataDir, 'users')).find((n) => n.startsWith('dana_example.com-'));
+    assert.ok(folder && fs.existsSync(path.join(s.dataDir, 'users', folder, 'profile.json')), `per-person folder: ${fs.readdirSync(path.join(s.dataDir, 'users'))}`);
   } finally { s.stop(); }
   // the same header from a machine that is NOT the proxy is ignored
   const strangers = await start({ env: { UNFURL_TRUST_PROXY_USER: 'X-Forwarded-User', UNFURL_PROXY_IPS: '10.99.0.0/16' } });
@@ -285,4 +289,27 @@ test('the daily allowance survives a restart (every update restarts the server)'
     assert.equal((await second.call({ path: '/api/yt/videos?id=1' })).status, 200, 'but small calls still fit');
     assert.equal((await second.call({ path: '/api/ping' })).json.ytDailyUnits, 150, 'the page is told its daily share');
   } finally { second.stop(); yt.close(); }
+});
+
+test('encoded "../" can never climb out of the public folders (this once served serve.py and the data folder)', async () => {
+  const s = await start({ env: { UNFURL_AUTH: 'me:pw-pw-pw' } });
+  const auth = { Authorization: basic('me', 'pw-pw-pw') };
+  try {
+    const attempts = [
+      '/css/%2e%2e/serve.py', '/css/%2E%2E/serve.py', '/css/..%2fserve.py', '/css/..%2Fserve.py', '/js/%2e%2e/%2e%2e/etc/passwd',
+      '/css/%252e%252e/serve.py', '/css/%252e%252e%252fserve.py', '/%2e%2e/serve.py', '/css/%5c..%5cserve.py', '/css/..%00/serve.py',
+      '/css/%2e%2e/deploy/update.sh', '/css/%2e%2e/.git/config', '/js/%2e%2e/tests/unit/server.test.js', '/css/%2e%2e/userdata/config.json',
+      '/serve.py', '/deploy/update.sh', '/.git/config', '/BUILD', '/package.json', '//serve.py', '/./serve.py', '/css/../serve.py',
+    ];
+    for (const p of attempts) {
+      for (const method of ['GET', 'HEAD']) {
+        const r = await raw(s.port, { method, path: p, headers: { Host: `127.0.0.1:${s.port}`, ...auth } });
+        assert.equal(r.status, 404, `${method} ${p} must not be served (got ${r.status})`);
+        assert.ok(!r.text.includes('class Handler') && !r.text.includes('Unfurl\'s small server'), `${p} leaked source`);
+      }
+    }
+    for (const ok of ['/', '/index.html', '/css/style.css', '/js/app.js', '/data/suggestions.js', '/favicon.svg', '/js/views/today.js']) {
+      assert.equal((await raw(s.port, { path: ok, headers: { Host: `127.0.0.1:${s.port}`, ...auth } })).status, 200, `${ok} still works`);
+    }
+  } finally { s.stop(); }
 });

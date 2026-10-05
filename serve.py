@@ -75,7 +75,7 @@ from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qsl, urlencode
+from urllib.parse import urlsplit, parse_qsl, urlencode, unquote, quote
 
 APP_VERSION = "0.3.0"
 ROOT = Path(__file__).resolve().parent
@@ -239,8 +239,13 @@ def check_password(spec: str, given: str) -> bool:
 
 
 def safe_user_dir(name: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:64].strip(".")
-    return cleaned or "user"
+    """A folder name for a login. Names that are already plain lowercase letters/digits/._- are used as they are;
+    anything else gets a short fingerprint of the real name, so two different logins (say "Ana" and "ana", or
+    "a b" and "a_b") can never end up sharing a folder, even on a case-insensitive disk."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:48].strip(".")
+    if cleaned and cleaned == name and name == name.lower():
+        return name
+    return f"{(cleaned or 'user').lower()}-{hashlib.sha256(name.encode()).hexdigest()[:10]}"
 
 
 # ---------------------------------------------------------------- storage helpers
@@ -392,6 +397,7 @@ class Handler(SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     quiet = False
+    timeout = 60   # drop connections that sit idle, so a few stalled clients can't tie the server up
 
     def log_message(self, fmt, *args):  # quieter logs: skip the app's constant /api polling
         if self.quiet:
@@ -526,20 +532,44 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if path.startswith("/api/"):
             return self._api("GET", path)
-        parts = [p for p in path.split("/") if p]
-        if not parts:
-            self.path = "/index.html"
-        elif parts[0] not in PUBLIC or ".." in parts:
+        safe = self._static_path(path)
+        if safe is None:
             return self.send_error(HTTPStatus.NOT_FOUND)
+        self.path = quote(safe)  # re-encode: the base class decodes once more, and must see exactly what was vetted
         return super().do_GET()
 
     def do_HEAD(self):
         if not self._authenticate():
             return
-        parts = [p for p in urlsplit(self.path).path.split("/") if p]
-        if parts and parts[0] not in PUBLIC:
+        safe = self._static_path(urlsplit(self.path).path)
+        if safe is None:
             return self.send_error(HTTPStatus.NOT_FOUND)
+        self.path = quote(safe)
         return super().do_HEAD()
+
+    @staticmethod
+    def _static_path(raw_path):
+        """Map a request path to one of the app's public files, or None. Decodes %XX FIRST and refuses any
+        '..', so '/css/%2e%2e/serve.py' can't climb out of the public folders."""
+        decoded = unquote(raw_path)
+        if "\x00" in decoded or "\\" in decoded:
+            return None
+        parts = [p for p in decoded.split("/") if p]
+        if any(p in (".", "..") for p in parts):
+            return None
+        if not parts:
+            return "/index.html"
+        if parts[0] not in PUBLIC:
+            return None
+        return "/" + "/".join(parts) + ("/" if decoded.endswith("/") else "")   # keep a trailing slash, or folders redirect forever
+
+    def translate_path(self, path):  # belt and braces: whatever the above allowed must really lie inside the app folder
+        full = super().translate_path(path)
+        try:
+            Path(full).resolve().relative_to(ROOT)
+        except ValueError:
+            return str(ROOT / "__not_found__")
+        return full
 
     def do_PUT(self):
         if not self._authenticate():
@@ -735,7 +765,7 @@ def selftest() -> int:
             expect(st == 200, f"{must} should be served (got {st})")
         st, ct, _ = get("/js/app.js")
         expect("javascript" in ct, f"JavaScript must be served as a script, not {ct!r}")
-        for hidden in ("/serve.py", "/.git/config", "/deploy/update.sh", "/BUILD", "/tests/unit/server.test.js"):
+        for hidden in ("/serve.py", "/.git/config", "/deploy/update.sh", "/BUILD", "/tests/unit/server.test.js", "/css/%2e%2e/serve.py", "/css/..%2fserve.py", "/js/%2e%2e/deploy/update.sh", "/css/%2e%2e/.git/config", "/css/%5c..%5cserve.py", "/css/%252e%252e/serve.py", "/css/%252e%252e%252fserve.py", "/%2e%2e/serve.py"):
             st, _, _ = get(hidden)
             expect(st == 404, f"{hidden} must not be served (got {st})")
         st, _, body = get("/healthz")

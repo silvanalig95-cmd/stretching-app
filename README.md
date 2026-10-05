@@ -129,6 +129,7 @@ Full guide, including HTTPS, private repositories, SSO and operations: **[deploy
 ```
 npm test           # unit, storage-server, hosting and auto-update tests, no dependencies (Node 18+, needs python3, git and bash)
 npm i && npm run test:e2e   # real Chromium + real server (needs Playwright)
+npm run bench      # timings with a synthetic 2,000-video library (the most the app keeps); tests/unit/perf.test.js guards them
 ```
 
 YouTube is never contacted by the tests: `tests/helpers/fake-youtube.js` is a stand-in for the Data API with the real response and error shapes, and the e2e test stubs the embedded player.

@@ -170,31 +170,44 @@ export function videoMeta(video, libItem) {
 
 const normFields = (fields) => ` ${normalize(fold(Object.values(fields).join(' | ')))} `;
 
+// Tokenising every field of every video is the expensive part of building an index, and almost nothing
+// changes between two builds. So each video's tokenised document is remembered, keyed by id and checked
+// against the exact text it was built from: edit a tag or read new comments and only that video is redone.
+const DOC_MEMO = new Map();   // id -> {sig, len, tf, text, title}
+
 export class SearchIndex {
-  /** @param {Array<{id:string, fields:Record<string,string>, meta?:object}>} docs */
-  constructor(docs) {
+  /** @param {Array<{id:string, fields:Record<string,string>, meta?:object}>} docs
+   *  @param {Map<string, any>|null} [memo]  reuse tokenised documents from an earlier build */
+  constructor(docs, memo = null) {
     this.docs = new Map();      // id -> {len, tf: Map(term -> weighted tf), text, title, meta}
     this.df = new Map();        // term -> number of docs containing it
     this.channels = new Map();  // display name -> count (for suggestions)
     let totalLen = 0;
     for (const { id, fields, meta } of docs) {
-      const tf = new Map();
-      let len = 0;
-      for (const [f, text] of Object.entries(fields)) {
-        const w = FIELD_WEIGHTS[f] ?? 1;
-        for (const t of tokenize(text)) { tf.set(t, (tf.get(t) ?? 0) + w); len += w; }
+      const sig = memo ? Object.values(fields).join('\u0001') : '';
+      let d = memo?.get(id);
+      if (!d || d.sig !== sig) {
+        const tf = new Map();
+        let len = 0;
+        for (const [f, text] of Object.entries(fields)) {
+          const w = FIELD_WEIGHTS[f] ?? 1;
+          for (const t of tokenize(text)) { tf.set(t, (tf.get(t) ?? 0) + w); len += w; }
+        }
+        d = { sig, len, tf, text: normFields(fields), title: ` ${normalize(fold(fields.title ?? ''))} ` };
+        memo?.set(id, d);
       }
-      for (const t of tf.keys()) this.df.set(t, (this.df.get(t) ?? 0) + 1);
-      this.docs.set(id, { len, tf, text: normFields(fields), title: ` ${normalize(fold(fields.title ?? ''))} `, meta: meta ?? null });
+      for (const t of d.tf.keys()) this.df.set(t, (this.df.get(t) ?? 0) + 1);
+      this.docs.set(id, { len: d.len, tf: d.tf, text: d.text, title: d.title, meta: meta ?? null });
       if (meta?.channel) this.channels.set(meta.channel, (this.channels.get(meta.channel) ?? 0) + 1);
-      totalLen += len;
+      totalLen += d.len;
     }
+    if (memo && memo.size > docs.length * 1.5 + 200) for (const id of memo.keys()) if (!this.docs.has(id)) memo.delete(id);   // forget videos that are gone
     this.avgLen = docs.length ? totalLen / docs.length : 1;
     this.terms = [...this.df.keys()];
   }
 
   static fromVideos(videos, library = {}) {
-    return new SearchIndex(Object.values(videos).map((v) => ({ id: v.id, fields: videoFields(v, library[v.id]), meta: videoMeta(v, library[v.id]) })));
+    return new SearchIndex(Object.values(videos).map((v) => ({ id: v.id, fields: videoFields(v, library[v.id]), meta: videoMeta(v, library[v.id]) })), DOC_MEMO);
   }
 
   // ------------------------------------------------------------ pieces of a query

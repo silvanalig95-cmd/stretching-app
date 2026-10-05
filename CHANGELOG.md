@@ -24,6 +24,10 @@ Your library, history and ratings are never left behind by an update:
 
 **Hosting.** `serve.py` can now run as a shared, internal website: listen address and port, allowed host names, logins (one shared or several, hashed passwords, brute-force lock-out, or a trusted login proxy), a separate library per person, an optional server-held YouTube key with a per-person daily cap, security headers, `/healthz`, and a build id so open pages can offer a reload. It refuses to listen on a network without a login. New `deploy/` kit: **self-updating from a git branch** with self-test, health check and automatic rollback; systemd, Docker and installer. See `deploy/README.md`. Running it on your own computer works exactly as before.
 
+**Speed with a big library.** Measured with a synthetic 2,000-video library (the most the app keeps): ranking ≈30 ms, a library search ≈2 ms, saving ≈35 ms. Rebuilding the search index after a small change went from ≈150 ms to ≈20 ms (each video's tokenised text is remembered and redone only when it changes), which also makes searches with typed words ≈3× faster. `npm run bench` prints the numbers; a unit test fails if they regress badly.
+
+**Saves survive a server restart.** If the server is being updated at the moment a change is saved, the app now keeps the change, retries until it goes through, says so, and the "Reload" button waits until everything is stored.
+
 **Data format is unchanged** (still version 2): nothing to migrate when you update from 0.2.
 
 ## 0.2.0
