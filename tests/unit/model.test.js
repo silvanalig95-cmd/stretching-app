@@ -241,3 +241,71 @@ test('with no standing spots set, the areas you work most often stand in', () =>
   assert.deepEqual(r.map((x) => x.id), ['neck', 'glutes'], 'neck was longest ago; full body is not a muscle to neglect');
   assert.deepEqual(neglectedAreas([], [], { today: '2026-10-05' }), []);
 });
+
+import { composeCombos } from '../../js/model.js';
+const entryOf = (v, score = 0.6) => ({ video: v, score, parts: {}, flags: {}, reasons: [] });
+const withAreas = (title, min, areas, o = {}) => { const v = vid(title, { min, ...o }); v.profile = { areas, styles: o.styles ?? { stretch: 0.8 }, poses: [] }; return v; };
+
+test('combo: when no single video covers all muscles, it stitches short ones that do, within the time range', () => {
+  const neck = withAreas('Neck release', 8, { neck: 0.9 }), hips = withAreas('Hip opener', 10, { hip_flexors: 0.9 }), calves = withAreas('Calf stretch', 7, { calves: 0.9 });
+  const mixed = withAreas('Everything a bit', 25, { neck: 0.3, hip_flexors: 0.3, calves: 0.3 });
+  const f = { areas: ['neck', 'hip_flexors', 'calves'].map((id) => ({ id, mode: 'tight' })), minMin: 20, maxMin: 30 };
+  const { combos, bestSingle } = composeCombos([neck, hips, calves, mixed].map((v) => entryOf(v)), f);
+  assert.ok(combos.length >= 1);
+  const top = combos[0];
+  assert.equal(top.parts.length, 3, 'all three specialists');
+  assert.ok(top.totalMin >= 20 && top.totalMin <= 30, `total ${top.totalMin}`);
+  assert.ok(top.coverage > 0.8 && top.gain > 0.4, `coverage ${top.coverage}, gain ${top.gain}`);
+  assert.equal(bestSingle.entry.video.id, mixed.id, 'the only single video in range is the weak generalist');
+});
+
+test('combo: never exceeds the maximum, never falls below the minimum, never uses a video twice', () => {
+  const vids = [8, 9, 10, 11, 12, 13].map((m, i) => withAreas(`V${i}`, m, { [['neck', 'hip_flexors', 'calves', 'glutes', 'chest', 'quads'][i]]: 0.9 }));
+  const f = { areas: ['neck', 'hip_flexors', 'calves', 'glutes'].map((id) => ({ id, mode: 'tight' })), minMin: 25, maxMin: 36 };
+  const { combos } = composeCombos(vids.map((v) => entryOf(v)), f, { n: 5 });
+  assert.ok(combos.length > 1);
+  for (const c of combos) {
+    assert.ok(c.totalMin >= 25 && c.totalMin <= 36, `total ${c.totalMin}`);
+    const ids = c.parts.map((p) => p.video.id);
+    assert.equal(new Set(ids).size, ids.length);
+    assert.ok(c.parts.length <= 4);
+  }
+  const sets = combos.map((c) => c.parts.map((p) => p.video.id).sort().join());
+  assert.equal(new Set(sets).size, sets.length, 'distinct combos');
+});
+
+test('combo: a single video that already covers everything is reported as the baseline (gain ~0 or negative)', () => {
+  const all = withAreas('Neck + hips + calves', 22, { neck: 0.9, hip_flexors: 0.9, calves: 0.9 });
+  const a = withAreas('Neck only', 8, { neck: 0.9 }), b = withAreas('Hips only', 8, { hip_flexors: 0.9 }), c = withAreas('Calves only', 8, { calves: 0.9 });
+  const f = { areas: ['neck', 'hip_flexors', 'calves'].map((id) => ({ id, mode: 'tight' })), minMin: 20, maxMin: 26 };
+  const r = composeCombos([entryOf(all, 0.9), entryOf(a), entryOf(b), entryOf(c)], f);
+  assert.equal(r.bestSingle.entry.video.id, all.id);
+  assert.ok(r.combos.every((x) => x.gain < 0.05), 'no combo meaningfully beats it');
+});
+
+test('combo: parts are ordered as a gentle arc (flow/mobility first, long holds last)', () => {
+  const yin = withAreas('Yin hips', 10, { hip_flexors: 0.9 }, { styles: { yin: 0.9 } });
+  const flow = withAreas('Neck flow', 10, { neck: 0.9 }, { styles: { flow: 0.9 } });
+  const stretch = withAreas('Calf stretch', 10, { calves: 0.9 }, { styles: { stretch: 0.9 } });
+  const f = { areas: ['neck', 'hip_flexors', 'calves'].map((id) => ({ id, mode: 'tight' })), minMin: 28, maxMin: 32 };
+  const { combos } = composeCombos([yin, stretch, flow].map((v) => entryOf(v)), f);
+  assert.deepEqual(combos[0].parts.map((p) => p.video.title), ['Neck flow', 'Calf stretch', 'Yin hips']);
+});
+
+test('combo: edge cases (one muscle, one candidate, nothing fits) return nothing rather than failing', () => {
+  const v = withAreas('x', 10, { neck: 0.9 });
+  assert.deepEqual(composeCombos([entryOf(v)], { areas: [{ id: 'neck', mode: 'tight' }], minMin: 5, maxMin: 30 }).combos, []);
+  assert.deepEqual(composeCombos([entryOf(v)], { areas: [{ id: 'neck', mode: 'tight' }, { id: 'calves', mode: 'tight' }], minMin: 5, maxMin: 30 }).combos, []);
+  const long = withAreas('long', 90, { neck: 0.9 }), long2 = withAreas('long2', 90, { calves: 0.9 });
+  assert.deepEqual(composeCombos([entryOf(long), entryOf(long2)], { areas: [{ id: 'neck', mode: 'tight' }, { id: 'calves', mode: 'tight' }], minMin: 5, maxMin: 30 }).combos, []);
+  assert.deepEqual(composeCombos([], { areas: [] }).combos, []);
+});
+
+test('combo: weak spots prefer strengthening videos within a combo', () => {
+  const stretchy = withAreas('Glute stretch', 10, { glutes: 0.9 }, { styles: { stretch: 0.9 } });
+  const strong = withAreas('Glute strength', 10, { glutes: 0.9 }, { styles: { strength: 0.9 } });
+  const neck = withAreas('Neck', 10, { neck: 0.9 });
+  const mk2 = (mode) => composeCombos([stretchy, strong, neck].map((v) => entryOf(v)), { areas: [{ id: 'glutes', mode }, { id: 'neck', mode: 'tight' }], minMin: 18, maxMin: 22 }, { n: 1 }).combos[0].parts.map((p) => p.video.title);
+  assert.ok(mk2('weak').includes('Glute strength') && !mk2('weak').includes('Glute stretch'));
+  assert.ok(mk2('tight').includes('Glute stretch'));
+});

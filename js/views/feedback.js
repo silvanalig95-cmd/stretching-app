@@ -18,7 +18,8 @@ function fallbackAreas(video) {
     .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => ({ id, mode: 'tight' }));
 }
 
-export function openFeedback(videoId) {
+/** @param {{onDone?: (how:'saved'|'dismissed')=>void}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo. */
+export function openFeedback(videoId, { onDone = null } = {}) {
   const video = ctx.state.videos[videoId];
   if (!video) return;
   const targeted = ctx.ui.featuredId === videoId ? ctx.ui.featuredAreas : [];
@@ -27,7 +28,8 @@ export function openFeedback(videoId) {
   let intensity = null, repeat = null;
 
   const body = h('div', { class: 'feedback' });
-  let modal;
+  let modal, finished = false;
+  const finish = (how) => { if (finished) return; finished = true; onDone?.(how); };
 
   const group = (label, options, get, set, extraClass = '') => h('div', { class: `choice-row ${extraClass}`, role: 'radiogroup', 'aria-label': label },
     options.map(([value, a, b]) => {
@@ -72,14 +74,16 @@ export function openFeedback(videoId) {
     const note = body.querySelector('textarea')?.value ?? '';
     logSession(ctx.state, { videoId, areas, ratings, intensity, repeat, note });
     ctx.store.save();
+    finished = true;      // the close below must not also report 'dismissed'
     modal.close();
     rankNow();
     ctx.hooks.renderResults();
     toast(learningSummary(video, ratings) || 'Saved. This will shape your next suggestions.', 'success', 6000);
     if (repeat === 'no') toast('Won’t show that one again.', 'info');
+    onDone?.('saved');
   };
 
-  modal = openModal({ title: 'How did it go?', body });
+  modal = openModal({ title: 'How did it go?', body, onClose: () => finish('dismissed') });
   render();
 }
 

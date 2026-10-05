@@ -6,7 +6,7 @@ import { h, fill, thumb, fmtViews } from '../dom.js';
 import { ctx, play, growLibrary, importInputs, refreshFollowedNow } from '../ctx.js';
 import { AREAS, areaLabel } from '../lexicon.js';
 import { formatDuration, qualityScore } from '../analyze.js';
-import { toggleLibrary, blockVideo, unblockVideo, updateLibraryItem, allTags, unfollowChannel } from '../state.js';
+import { toggleLibrary, blockVideo, unblockVideo, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
 import { buildModel, coverage } from '../model.js';
 import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
@@ -33,7 +33,7 @@ export function mountLibrary(root) {
     };
   };
   const rebuild = () => { index = SearchIndex.fromVideos(ctx.state.videos, ctx.state.library); };
-  const rerender = () => { rebuild(); renderHeader(); renderCoverage(); renderList(); renderFollowing(); };
+  const rerender = () => { rebuild(); renderHeader(); renderCoverage(); renderSaved(); renderList(); renderFollowing(); };
 
   // ---------------------------------------------------------------- add / import
   const addText = h('textarea', { id: 'add-text', rows: 3, 'aria-label': 'Links, playlists or teachers to add', spellcheck: 'false',
@@ -93,7 +93,7 @@ export function mountLibrary(root) {
     const thin = Object.keys(cov).filter((a) => a !== 'full_body').sort((a, b) => cov[a] - cov[b] || known[a] - known[b] || Math.random() - 0.5).slice(0, 2);
     growBtn.disabled = true; growBtn.textContent = 'Searching…';
     try {
-      const { added, report } = await growLibrary(thin, { queries: 3 });
+      const { added, report } = await growLibrary(thin);
       toast(`Found ${added} new videos for ${thin.map(areaLabel).join(' & ')} (in Discovered); read ${report.commentsRead} comments.`, 'success', 7000);
     } catch (err) { toast(err.message, 'error'); }
     growBtn.disabled = !ctx.hasKey; growBtn.textContent = 'Search for the muscles I have least of';
@@ -132,15 +132,77 @@ export function mountLibrary(root) {
   const sel = (id, label, opts, key, extra = {}) => h('label', { class: 'field', hidden: extra.hidden }, h('span', null, label),
     h('select', { id, onchange: (e) => { lf[key] = e.target.value; lf.show = 30; renderCoverage(); renderList(); } },
       opts.map(([v, t]) => h('option', { value: v, selected: lf[key] === v }, t))));
-  const search = h('input', { type: 'search', id: 'lib-q', value: lf.q, placeholder: 'Search titles, teachers, poses, comments, your tags…', 'aria-label': 'Search library',
-    oninput: (e) => { lf.q = e.target.value; lf.show = 30; renderList(); } });
+  const suggestList = h('datalist', { id: 'lib-suggest' });
+  const search = h('input', { type: 'search', id: 'lib-q', value: lf.q, list: 'lib-suggest', autocomplete: 'off', spellcheck: 'false',
+    placeholder: 'Search titles, teachers, poses, comments, your tags…', 'aria-label': 'Search library',
+    oninput: (e) => {
+      lf.q = e.target.value; lf.show = 30;
+      fill(suggestList, (index?.suggest(lf.q, 8) ?? []).map((v) => h('option', { value: v })));
+      renderList();
+    } });
   const controls = h('div', { class: 'controls' },
-    h('label', { class: 'field grow' }, h('span', null, 'Search'), search),
+    h('label', { class: 'field grow' }, h('span', null, 'Search'), search, suggestList),
     sel('lib-area', 'Muscle', [['', 'Any'], ...AREAS.map((a) => [a.id, a.label])], 'area'),
     sel('lib-len', 'Length', [['', 'Any'], ['short', 'Under 10'], ['mid', '10–20'], ['long', '20–30'], ['xl', '30+']], 'len'),
     sel('lib-status', 'Show', [['', 'Available'], ['new', 'Not done yet'], ['done', 'Done before'], ['blocked', 'Hidden by me'], ['broken', 'Unavailable']], 'status'),
     sel('lib-sort', 'Sort', [['auto', 'Best match'], ['quality', 'Best quality'], ['fit', 'Best for muscle'], ['helpful', 'Most helpful to me'], ['new', 'Newest added'], ['short', 'Shortest'], ['long', 'Longest']], 'sort'));
+  const interpSlot = h('div', { id: 'interp', 'aria-live': 'polite' });
+  const savedSlot = h('div', { id: 'saved-searches' });
+  const nameInput = h('input', { type: 'text', id: 'saved-name', maxlength: 40, 'aria-label': 'Name for this search', placeholder: 'Name this search' });
+  let naming = false;
+  const TIPS = [
+    ['"exact phrase"', '"low lunge"'], ['leave out', 'hips -yin'], ['teacher', 'channel:adriene'], ['your tag', 'tag:morning'],
+    ['exercise inside', 'pose:pigeon'], ['muscle it works', 'area:glutes'], ['length', 'len:10-20'], ['shorter than', 'len:<15'],
+  ];
+  const tips = h('details', { class: 'tips' }, h('summary', null, 'Search tips'),
+    h('p', { class: 'hint' }, 'Combine them freely. Typos, plurals and muscle names ("lumbar" finds low-back videos) are handled for you.'),
+    h('div', { class: 'chips' }, TIPS.map(([label, ex]) => h('button', { type: 'button', class: 'chip tip', title: label, onclick: () => {
+      lf.q = `${lf.q.trim()} ${ex}`.trim(); search.value = lf.q; search.focus(); renderList();
+    } }, ex))));
   const tagSlot = h('div', { id: 'tag-slot' });
+
+  // ---------------------------------------------------------------- explaining the query, saved searches
+  function renderInterpretation(info, count) {
+    if (!info) { fill(interpSlot, ''); return; }
+    const bits = [];
+    const fixes = Object.entries(info.corrections);
+    if (fixes.length) bits.push(h('span', { class: 'interp-fix' }, 'Showing results for ', fixes.map(([typed, fixed]) => h('strong', null, `“${fixed}”`)), ' (you typed ', fixes.map(([typed]) => `“${typed}”`).join(', '), ').'));
+    if (info.concepts.length) bits.push(h('span', null, 'Also matching videos that work: ', h('strong', null, info.concepts.join(', ')), '.'));
+    if (info.excluded.length) bits.push(h('span', null, 'Leaving out: ', info.excluded.join(', '), '.'));
+    if (info.filters.length) bits.push(h('span', null, info.filters.map((f) => `${f.field}: ${f.value}`).join(' · '), '.'));
+    if (info.len) bits.push(h('span', null, `Length ${info.len.min != null ? `${info.len.exMin ? '>' : '≥'} ${info.len.min}` : ''}${info.len.min != null && info.len.max != null ? ', ' : ''}${info.len.max != null ? `${info.len.exMax ? '<' : '≤'} ${info.len.max}` : ''} min.`));
+    if (info.partial) bits.push(h('span', { class: 'interp-warn' }, 'No video matches every word, so these are the closest.'));
+    if (count === 0) bits.push(h('span', { class: 'interp-warn' }, 'No matches. Try fewer words, or search the web from Today.'));
+    fill(interpSlot, bits.length ? h('p', { class: 'hint interp' }, bits.flatMap((b, i) => (i ? [' ', b] : [b]))) : '');
+  }
+
+  function renderSaved() {
+    const list = ctx.state.savedSearches;
+    fill(savedSlot, h('div', { class: 'chips saved' },
+      list.length ? h('span', { class: 'label inline' }, 'Saved') : null,
+      list.map((x) => h('span', { class: 'chip on' },
+        h('button', { class: 'link', type: 'button', 'data-saved': x.name, onclick: () => applySaved(x) }, x.name),
+        h('button', { class: 'link', type: 'button', 'aria-label': `Delete saved search ${x.name}`, onclick: () => { deleteSavedSearch(ctx.state, x.id); ctx.store.save(); renderSaved(); } }, '✕'))),
+      naming
+        ? h('form', { class: 'name-form', onsubmit: (e) => {
+          e.preventDefault();
+          const rec = saveSearch(ctx.state, { name: nameInput.value, q: lf.q, area: lf.area, len: lf.len, tag: lf.tag, tab: lf.tab });
+          if (!rec) { toast('Give it a name first (and have a search or a filter set).', 'error'); return; }
+          naming = false; ctx.store.save(); renderSaved(); toast(`Saved “${rec.name}”.`, 'success');
+        } }, nameInput, h('button', { class: 'btn small primary', type: 'submit', id: 'saved-confirm' }, 'Save'),
+        h('button', { class: 'btn small ghost', type: 'button', onclick: () => { naming = false; renderSaved(); } }, 'Cancel'))
+        : h('button', { class: 'btn small ghost', type: 'button', id: 'save-search', onclick: () => {
+          naming = true; nameInput.value = lf.q.trim().slice(0, 30); renderSaved(); nameInput.focus(); nameInput.select();
+        } }, '＋ Save this search')));
+  }
+
+  function applySaved(x) {
+    Object.assign(lf, { q: x.q, area: x.area, len: x.len, tag: x.tag, tab: x.tab, show: 30 });
+    search.value = lf.q;
+    document.getElementById('lib-area').value = lf.area;
+    document.getElementById('lib-len').value = lf.len;
+    rerender();
+  }
 
   // ---------------------------------------------------------------- list
   function renderList() {
@@ -152,7 +214,10 @@ export function mountLibrary(root) {
       for (const [k, e] of model.videoArea) if (k.startsWith(`${v.id}|`)) { s += e.sum; n += e.n; }
       return n ? s / n : null;
     };
-    const relevance = lf.q.trim() ? index.relevance(lf.q, { prefix: true }) : null;
+    const res = lf.q.trim() ? index.query(lf.q, { prefix: true, limit: 5000 }) : null;
+    const top = res?.results[0]?.score || 1;
+    const relevance = res ? new Map(res.results.map((r) => [r.id, r.score / top])) : null;
+    renderInterpretation(res?.interpretation, res ? res.results.length : null);
 
     const tags = allTags(ctx.state);
     fill(tagSlot, lf.tab === 'mine' && tags.length ? h('div', { class: 'chips tagbar' }, h('span', { class: 'label inline' }, 'Tags'),
@@ -173,7 +238,7 @@ export function mountLibrary(root) {
     });
     const sortKey = lf.sort === 'auto' ? (relevance ? 'relevance' : 'quality') : lf.sort;
     const key = {
-      relevance: (v) => relevance?.get(v.id) ?? 0, quality: (v) => qualityScore(v), fit: (v) => v.profile?.areas?.[lf.area] ?? 0, helpful: (v) => helpful(v) ?? -1,
+      relevance: (v) => (relevance?.get(v.id) ?? 0) + 0.12 * qualityScore(v), quality: (v) => qualityScore(v), fit: (v) => v.profile?.areas?.[lf.area] ?? 0, helpful: (v) => helpful(v) ?? -1,
       new: (v) => v.addedAt ?? 0, short: (v) => -(v.durationSec ?? 1e9), long: (v) => v.durationSec ?? 0,
     }[sortKey];
     list.sort((a, b) => key(b) - key(a));
@@ -241,8 +306,8 @@ export function mountLibrary(root) {
       h('div', { class: 'two' },
         h('div', null, h('h3', null, 'Add to your library'), addForm, followSlot),
         h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
-          h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least (≈300–600 units). Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).')))),
-    tabsSlot, covSlot, h('section', { class: 'panel' }, controls, tagSlot), listSlot);
+          h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).')))),
+    tabsSlot, covSlot, h('section', { class: 'panel' }, controls, tips, interpSlot, savedSlot, tagSlot), listSlot);
   rerender();
 }
 

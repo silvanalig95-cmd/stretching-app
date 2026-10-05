@@ -6,7 +6,8 @@
 
 import { decodeEntities, parseIsoDuration, analyzeVideoText, attachComments, reanalyze } from './analyze.js';
 import { buildModel, rankCandidates, channelKey } from './model.js';
-import { buildQueries } from './query.js';
+import { buildQueries, expandQueries } from './query.js';
+import { SearchIndex } from './index.js';
 import { normalize } from './lexicon.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
@@ -47,6 +48,7 @@ export class YouTubeClient {
    */
   constructor({ key, base = API_BASE, fetchFn = (...a) => fetch(...a), onSpend = () => {} }) {
     this.key = key; this.base = base; this.fetchFn = fetchFn; this.onSpend = onSpend;
+    this.spentUnits = 0;   // quota units this client has used (so a long search can respect a budget)
   }
 
   async call(endpoint, params) {
@@ -56,11 +58,13 @@ export class YouTubeClient {
     try { res = await this.fetchFn(url.toString()); } catch (e) { throw new YouTubeError(`Couldn’t reach YouTube (${e.message}). Check your connection.`); }
     const body = await res.json().catch(() => null);
     if (!res.ok) throw toApiError(res.status, body);
-    this.onSpend(COST[endpoint] ?? 1);
+    const units = COST[endpoint] ?? 1;
+    this.spentUnits += units;
+    this.onSpend(units);
     return body;
   }
 
-  async search({ q, order = 'relevance', pageToken, videoDuration, maxResults = 25 }) {
+  async search({ q, order = 'relevance', pageToken, videoDuration, maxResults = 50 }) {
     const body = await this.call('search', {
       part: 'snippet', type: 'video', q, order, pageToken, videoDuration, maxResults,
       videoEmbeddable: 'true', videoSyndicated: 'true', relevanceLanguage: 'en', safeSearch: 'moderate',
@@ -192,8 +196,26 @@ export function spendQuota(state, units, d = new Date()) {
   const day = quotaDay(d);
   state.quota = { day, used: (state.quota?.day === day ? state.quota.used : 0) + units };
 }
-/** Worst case: every search needs one extra page. Typical runs cost roughly half of the search part. */
-export const estimateRunCost = ({ queries = 2, commentVideos = 10, extraPages = 1 } = {}) => queries * COST.search * (1 + extraPages) + commentVideos + 6;
+/**
+ * How hard a web search tries. The expensive part is searching (100 units per page of up to 50
+ * results); reading a video's comments costs 1 unit. So the wide-net presets look at MANY candidates
+ * and read comments on the best few dozen, and keep going in rounds until enough strong fits turn up.
+ * `budget` is a hard cap on units for one run (searches + comments).
+ */
+export const THOROUGHNESS = {
+  quick:      { label: 'Quick',      queries: 1, extraPages: 1, maxRounds: 1, budget: 250,  commentVideos: 12, strongFits: 1,  blurb: 'one search, about 50–100 videos looked at' },
+  balanced:   { label: 'Balanced',   queries: 2, extraPages: 1, maxRounds: 3, budget: 650,  commentVideos: 25, strongFits: 4,  blurb: 'up to 3 rounds; stops once 4 strong fits turn up' },
+  thorough:   { label: 'Thorough',   queries: 3, extraPages: 2, maxRounds: 5, budget: 1500, commentVideos: 40, strongFits: 8,  blurb: 'up to 5 rounds, hundreds of videos, comments on the best 40' },
+  exhaustive: { label: 'Exhaustive', queries: 4, extraPages: 3, maxRounds: 8, budget: 3000, commentVideos: 60, strongFits: 14, blurb: 'leaves no stone unturned (uses a big slice of the daily allowance)' },
+};
+export const DEFAULT_THOROUGHNESS = 'balanced';
+export const effortFor = (name) => THOROUGHNESS[name] ?? THOROUGHNESS[DEFAULT_THOROUGHNESS];
+
+/** Rough cost of one run: the cap, and what it usually takes (stops early once enough strong fits are found). */
+export function estimateRunCost(name = DEFAULT_THOROUGHNESS) {
+  const e = effortFor(name);
+  return { max: e.budget, typical: Math.round(e.budget * 0.45) };
+}
 
 // ---------------------------------------------------------------- discovery
 
@@ -201,61 +223,114 @@ const MIN_SEC = 90, MAX_SEC = 3 * 3600;
 const MIN_FRESH = 3; // a result page with fewer than this many unknown videos triggers a look at the next page
 
 /**
- * Go and find new routines for these filters, read their metadata + comments,
- * and return everything that should be merged into the library.
+ * Go and find new routines for these filters: a WIDE net, then a careful read.
+ *
+ *   rounds:   search -> details -> score every candidate against the request
+ *             -> if there aren't yet enough strong fits, learn from the best ones
+ *             (their poses, teachers, tags) and search again, never repeating a query
+ *   stopping: enough strong fits found, rounds used up, or the unit budget reached
+ *   then:     read viewer comments on the best candidates (1 unit each, cheap), re-rank
+ *             with what they say, and read a few more that moved up
+ *
  * Never mutates `state`; the caller merges `records` / `queryUpdates` / `channels`.
  */
 export async function discover({ client, filters, state, rng, progress = () => {}, opts = {} }) {
-  const o = { queries: 2, commentVideos: 10, extraPages: 1, ...opts };
+  const o = { queries: 2, commentVideos: 25, extraPages: 1, maxRounds: 1, budget: Infinity, strongFits: 0, ...opts };
+  const hasTarget = !!(filters.areas?.length || filters.terms?.length);
+  if (!hasTarget) o.maxRounds = 1;                      // nothing to measure "fit" against: one pass is all there is
   const model = buildModel(state.history, state.videos);
+  const libraryIds = new Set(Object.keys(state.library ?? {}));
   const knownTeachers = new Set();
   for (const v of Object.values(state.videos)) if (model.channelDone.has(channelKey(v))) knownTeachers.add(normalize(v.channel).replace(/ /g, ''));
 
-  const queries = buildQueries(filters, { queryLog: state.queryLog, rng, n: o.queries, knownTeachers, adventure: state.prefs.adventure });
-  const report = { queries: [], warnings: [], newVideos: 0, newChannels: 0, commentsRead: 0 };
+  const startUnits = client.spentUnits ?? 0;
+  const spent = () => (client.spentUnits ?? 0) - startUnits;
+  const commentReserve = Math.min(o.commentVideos, 60);
+  const searchBudget = Number.isFinite(o.budget) ? o.budget - commentReserve - 10 : Infinity;   // keep room for the comment phase
+
+  const report = { queries: [], warnings: [], newVideos: 0, newChannels: 0, commentsRead: 0, rounds: 0, examined: 0, strong: 0, spent: 0, stopped: '' };
+  const log = { ...state.queryLog };        // grows as we go, so later rounds never repeat earlier queries
   const queryUpdates = {};
-  const found = new Map();
-  let stop = false;
-
-  for (const q of queries) {
-    let page = q, pages = 0, fresh = 0;
-    for (;;) {
-      progress(`Searching YouTube for “${q.q}”${page.pageToken ? ' (going deeper)' : ''}…`);
-      let res;
-      try {
-        res = await client.search(page);
-      } catch (e) {
-        if (found.size && (e instanceof QuotaError)) { report.warnings.push(e.message); stop = true; break; }
-        throw e;
-      }
-      pages++;
-      const prev = state.queryLog[q.key] ?? {};
-      queryUpdates[q.key] = { count: (prev.count ?? 0) + 1, lastAt: Date.now(), order: q.order, nextPageToken: res.nextPageToken, q: q.q };
-      const newHere = res.items.filter((it) => !state.videos[it.id] && !found.has(it.id)).length;
-      fresh += newHere;
-      for (const it of res.items) if (!found.has(it.id)) found.set(it.id, it);
-      // Mostly videos we already know? Look one page further down rather than come back empty-handed.
-      if (newHere >= MIN_FRESH || !res.nextPageToken || pages > o.extraPages) break;
-      progress('Mostly familiar results, so looking a little further down…');
-      page = { ...q, pageToken: res.nextPageToken };
-    }
-    if (pages) report.queries.push({ q: q.q, order: q.order, deeper: !!q.pageToken, pages, fresh });
-    if (stop) break;
-  }
-
-  const ids = [...found.keys()];
-  const touched = new Map();
-  progress(`Reading details for ${ids.length} videos…`);
-  const needDetails = ids.filter((id) => !state.videos[id]?.verified);
-  const fresh = await client.videos(needDetails);
+  const found = new Map();                   // id -> search item: everything surfaced this run
+  const touched = new Map();                 // id -> full, analysed record
+  const freshIds = new Set();                // ids the library had never seen before this run
+  let expansion = [], stop = false;
   const now = Date.now();
-  for (const r of fresh) {
-    if (r.live || r.durationSec == null || r.durationSec < MIN_SEC || r.durationSec > MAX_SEC || r.embeddable === false) continue;
-    touched.set(r.id, { ...mergeVideo(state.videos[r.id], { ...r, source: 'search', addedAt: now }) });
-  }
-  report.newVideos = [...touched.keys()].filter((id) => !state.videos[id]).length;
 
-  // Who are these teachers? (subscriber counts reveal small channels worth a look)
+  // ---- how well does everything we have so far fit the request?
+  const rankRun = () => {
+    const videos = [...found.keys()].map((id) => touched.get(id) ?? state.videos[id]).filter(Boolean);
+    let textScores = null;
+    if (filters.terms?.length) {
+      const rel = SearchIndex.fromVideos(Object.fromEntries(videos.map((v) => [v.id, v])), state.library).relevance(filters.terms, {});
+      if (rel.size) textScores = rel;
+    }
+    return rankCandidates({ videos, filters, model, textScores, libraryIds, trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure });
+  };
+  const isStrong = (r) => r.parts.match >= 0.65 && r.parts.fit >= 0.99 && r.parts.quality >= 0.45;
+
+  const fetchDetails = async () => {
+    const need = [...found.keys()].filter((id) => !touched.has(id) && !state.videos[id]?.verified);
+    // known, verified videos take part too: they just need no re-fetch
+    for (const id of found.keys()) if (!touched.has(id) && state.videos[id]?.verified) touched.set(id, { ...state.videos[id] });
+    if (!need.length) return;
+    progress(`Reading details for ${need.length} videos…`);
+    for (const r of await client.videos(need)) {
+      if (r.live || r.durationSec == null || r.durationSec < MIN_SEC || r.durationSec > MAX_SEC || r.embeddable === false) continue;
+      const rec = reanalyze(mergeVideo(state.videos[r.id], { ...r, source: 'search', addedAt: now }));
+      touched.set(r.id, rec);
+      if (!state.videos[r.id]) freshIds.add(r.id);
+    }
+  };
+
+  // ---- rounds
+  for (let round = 1; round <= o.maxRounds && !stop; round++) {
+    report.rounds = round;
+    const base = buildQueries(filters, { queryLog: log, rng, n: o.queries, knownTeachers, adventure: state.prefs.adventure });
+    const seen = new Set();
+    const queries = [...expansion, ...base].filter((q) => (seen.has(q.key) ? false : seen.add(q.key)));
+
+    for (const q of queries) {
+      let page = q, pages = 0, fresh = 0;
+      for (;;) {
+        if (spent() + COST.search > searchBudget) { report.stopped = 'budget'; stop = true; break; }
+        progress(`Round ${round}: searching YouTube for “${q.q}”${page.pageToken ? ' (going deeper)' : ''}…`);
+        let res;
+        try {
+          res = await client.search(page);
+        } catch (e) {
+          if (found.size && (e instanceof QuotaError)) { report.warnings.push(e.message); stop = true; break; }
+          throw e;
+        }
+        pages++;
+        const prev = log[q.key] ?? {};
+        queryUpdates[q.key] = log[q.key] = { ...prev, count: (prev.count ?? 0) + (pages === 1 ? 1 : 0), lastAt: now, order: q.order, nextPageToken: res.nextPageToken, q: q.q };
+        const newHere = res.items.filter((it) => !state.videos[it.id] && !found.has(it.id)).length;
+        fresh += newHere;
+        for (const it of res.items) if (!found.has(it.id)) found.set(it.id, it);
+        // Mostly videos we already know? Look further down rather than come back empty-handed.
+        if (newHere >= MIN_FRESH || !res.nextPageToken || pages > o.extraPages) break;
+        progress('Mostly familiar results, so looking a little further down…');
+        page = { ...q, pageToken: res.nextPageToken };
+      }
+      if (pages) report.queries.push({ q: q.q, order: q.order, deeper: !!q.pageToken, pages, fresh, round });
+      if (stop) break;
+    }
+
+    await fetchDetails();
+    report.examined = found.size;
+    const ranked = rankRun();
+    const strong = ranked.filter((r) => isStrong(r) && freshIds.has(r.video.id));
+    report.strong = strong.length;
+    progress(`Round ${round}: looked at ${found.size} videos so far, ${strong.length} strong fit${strong.length === 1 ? '' : 's'}.`);
+    if (o.strongFits && strong.length >= o.strongFits) { report.stopped = 'enough'; break; }
+    if (stop || round === o.maxRounds) break;
+    expansion = expandQueries(ranked.slice(0, 8).map((r) => r.video), filters, { queryLog: log, rng, n: 2 });
+  }
+  if (!report.stopped) report.stopped = 'rounds';
+  report.newVideos = freshIds.size;
+
+  // ---- who are these teachers? (subscriber counts reveal small channels worth a look)
   const chIds = [...new Set([...touched.values()].map((v) => v.channelId).filter((c) => c && !state.channels[c]))];
   let channels = {};
   if (chIds.length) {
@@ -266,27 +341,33 @@ export async function discover({ client, filters, state, rng, progress = () => {
   for (const v of touched.values()) {
     const ch = channels[v.channelId] ?? state.channels[v.channelId];
     if (ch?.subscribers != null) v.subscribers = ch.subscribers;
-    Object.assign(v, reanalyze(v));
   }
 
-  // Already-known candidates take part too (they may just need their comments read).
-  for (const id of ids) if (!touched.has(id) && state.videos[id]) touched.set(id, { ...state.videos[id] });
-
-  // Read comments for the most promising candidates only (1 unit each).
-  const ranked = rankCandidates({
-    videos: [...touched.values()], filters, model, trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure,
-  });
-  const toRead = ranked.map((r) => r.video).filter((v) => !v.evidence).slice(0, o.commentVideos);
-  let i = 0;
-  for (const v of toRead) {
-    progress(`Reading viewer comments (${++i}/${toRead.length}): ${v.title.slice(0, 48)}…`);
-    let comments;
-    try { comments = await client.comments(v.id); } catch (e) { if (e instanceof QuotaError) { report.warnings.push(e.message); break; } continue; }
-    const rec = attachComments(touched.get(v.id), comments);
-    touched.set(v.id, rec);
-    report.commentsRead += rec.evidence.n;
+  // ---- the careful read: viewer comments on the best candidates, re-ranked as the evidence arrives
+  const hardCap = Number.isFinite(o.budget) ? o.budget : Infinity;
+  const readIds = new Set();
+  for (let pass = 0; pass < 3 && readIds.size < o.commentVideos; pass++) {
+    const toRead = rankRun().map((r) => r.video)
+      .filter((v) => !readIds.has(v.id) && !v.comments && !(v.evidence?.n > 0) && (v.commentCount == null || v.commentCount >= 3))
+      .slice(0, o.commentVideos - readIds.size);
+    if (!toRead.length) break;
+    let i = 0, quotaOut = false;
+    for (const v of toRead) {
+      if (spent() + COST.commentThreads > hardCap) { quotaOut = true; break; }
+      progress(`Reading viewer comments (${readIds.size + 1}/${o.commentVideos}): ${v.title.slice(0, 48)}…`);
+      readIds.add(v.id);
+      let comments;
+      try { comments = await client.comments(v.id); } catch (e) { if (e instanceof QuotaError) { report.warnings.push(e.message); quotaOut = true; break; } continue; }
+      const rec = attachComments(touched.get(v.id), comments);
+      touched.set(v.id, rec);
+      report.commentsRead += rec.evidence.n;
+      i++;
+    }
+    if (quotaOut) break;
   }
 
+  report.strong = rankRun().filter((r) => isStrong(r) && freshIds.has(r.video.id)).length;
+  report.spent = spent();
   return { records: [...touched.values()], queryUpdates, channels, report };
 }
 

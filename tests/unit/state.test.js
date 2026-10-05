@@ -5,7 +5,7 @@ import { ANALYSIS_VERSION } from '../../js/analyze.js';
 import {
   SCHEMA, emptyState, freshState, loadState, splitState, migrateProfile, fromLegacyV1, applyDiscovery, logSession, blockVideo, unblockVideo,
   addToLibrary, removeFromLibrary, toggleLibrary, updateLibraryItem, allTags, inLibrary, addManualVideo, importRecords, applyPlayerInfo,
-  mergeImport, trimIndex, exportData, followChannel, unfollowChannel, deleteSession, reindexAll,
+  mergeImport, trimIndex, exportData, followChannel, unfollowChannel, deleteSession, reindexAll, saveSearch, deleteSavedSearch,
 } from '../../js/state.js';
 
 test('a fresh install has an EMPTY library; the starter videos are suggestions in the index', () => {
@@ -21,7 +21,7 @@ test('the profile (precious) and the index (rebuildable) are separate documents'
   const s = freshState();
   addToLibrary(s, 'zPzSkLHp9ws', { tags: ['a'] });
   const { profile, index } = splitState(s);
-  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'following', 'history', 'library', 'prefs', 'schema']);
+  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'following', 'history', 'library', 'prefs', 'savedSearches', 'schema']);
   assert.ok(!('videos' in profile) && 'videos' in index);
   assert.ok(profile.library.zPzSkLHp9ws.snapshot.title, 'library keeps a snapshot so it survives losing the index');
   assert.ok(!JSON.stringify(profile).includes('apiKey'));
@@ -250,4 +250,34 @@ test('fromLegacyV1 tolerates junk', () => {
   const { profile, index } = fromLegacyV1({ videos: { X: null, Y: { id: 'Y' } }, history: [{ videoId: 'Y' }] });
   assert.ok(index.videos.Y && !index.videos.X);
   assert.ok(profile.library.Y);
+});
+
+test('saved searches: named, replaceable, bounded, persisted in the profile, merged on import', () => {
+  const s = freshState();
+  assert.equal(saveSearch(s, { name: 'x' }), null, 'nothing to save');
+  assert.equal(saveSearch(s, { name: '  ', q: 'hips' }), null, 'needs a name');
+  const a = saveSearch(s, { name: 'Desk reset', q: 'neck -yin len:<15', area: 'neck', tab: 'mine' });
+  assert.equal(s.savedSearches.length, 1);
+  saveSearch(s, { name: 'desk RESET', q: 'different' });
+  assert.equal(s.savedSearches.length, 1, 'same name (any case) replaces');
+  assert.equal(s.savedSearches[0].q, 'different');
+  for (let i = 0; i < 30; i++) saveSearch(s, { name: `s${i}`, q: `q${i}` });
+  assert.equal(s.savedSearches.length, 20, 'bounded');
+  const { profile, index } = JSON.parse(JSON.stringify(splitState(s)));
+  assert.equal(loadState({ profile, index }).state.savedSearches.length, 20, 'survives save + load');
+  deleteSavedSearch(s, s.savedSearches[0].id); assert.equal(s.savedSearches.length, 19);
+  const t = freshState(); mergeImport(t, JSON.parse(exportData(s)));
+  assert.equal(t.savedSearches.length, 19);
+  mergeImport(t, JSON.parse(exportData(s)));
+  assert.equal(t.savedSearches.length, 19, 'import is idempotent');
+  void a;
+});
+
+test('profiles written before saved searches existed still load (additive keys need no migration)', () => {
+  const s = freshState();
+  const { profile, index } = JSON.parse(JSON.stringify(splitState(s)));
+  delete profile.savedSearches;
+  const r = loadState({ profile, index });
+  assert.deepEqual(r.state.savedSearches, []);
+  assert.equal(r.readOnly, false);
 });

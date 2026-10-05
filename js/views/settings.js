@@ -4,7 +4,7 @@
 import { h, fill } from '../dom.js';
 import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
 import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel } from '../state.js';
-import { verifyVideos } from '../youtube.js';
+import { verifyVideos, THOROUGHNESS } from '../youtube.js';
 import { ANALYSIS_VERSION } from '../analyze.js';
 import { AREAS, GROUPS } from '../lexicon.js';
 import { toast } from '../modal.js';
@@ -49,10 +49,10 @@ export function mountSettings(root) {
     oninput: (e) => { prefs.adventure = Number(e.target.value); advLabel.textContent = advText(prefs.adventure); store.save(); } });
   const advText = (x) => (x < 0.2 ? 'mostly my favourites' : x < 0.5 ? 'a mix, leaning familiar' : x < 0.8 ? 'a mix, leaning new' : 'surprise me');
   const advLabel = h('strong', null, advText(prefs.adventure));
-  const queries = h('select', { id: 'queries', onchange: (e) => { prefs.queriesPerRun = Number(e.target.value); store.save(); } },
-    [1, 2, 3].map((n) => h('option', { value: n, selected: prefs.queriesPerRun === n }, `${n} search${n > 1 ? 'es' : ''} per run (up to ≈${n * 200 + prefs.commentVideos + 6} units)`)));
-  const comments = h('input', { type: 'number', id: 'comment-videos', min: 0, max: 25, value: prefs.commentVideos, 'aria-label': 'Videos whose comments to read per search',
-    onchange: (e) => { prefs.commentVideos = Math.max(0, Math.min(25, Number(e.target.value) || 0)); store.save(); } });
+  const effortSel = h('select', { id: 'thoroughness', onchange: (e) => { prefs.thoroughness = e.target.value; store.save(); effortHint.textContent = hintFor(e.target.value); } },
+    Object.entries(THOROUGHNESS).map(([k, e]) => h('option', { value: k, selected: prefs.thoroughness === k }, e.label)));
+  const hintFor = (k) => `${THOROUGHNESS[k].blurb}. Up to ≈${THOROUGHNESS[k].budget} units per search (usually about ${Math.round(THOROUGHNESS[k].budget * 0.45)}); reads comments on up to ${THOROUGHNESS[k].commentVideos} videos.`;
+  const effortHint = h('small', { class: 'hint' }, hintFor(prefs.thoroughness));
   const trusted = h('textarea', { id: 'trusted', rows: 6, 'aria-label': 'Trusted teachers, one per line',
     onchange: (e) => { prefs.trusted = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean); store.save(); toast('Trusted teachers updated.'); } }, prefs.trusted.join('\n'));
   const auto = h('input', { type: 'checkbox', id: 'auto-library', checked: prefs.autoLibrary, onchange: (e) => { prefs.autoLibrary = e.target.checked; store.save(); } });
@@ -156,9 +156,8 @@ export function mountSettings(root) {
         h('small', { class: 'hint' }, 'Off by default: your library stays what you chose. Finds still go to “Discovered” and are used for suggestions either way.')),
       h('label', { class: 'field' }, h('span', null, 'Adventurousness: ', advLabel), adv,
         h('small', { class: 'hint' }, 'Higher = more teachers and videos you haven’t tried yet, in searches and in suggestions.')),
-      h('label', { class: 'field' }, h('span', null, 'Effort per web search'), queries),
-      h('label', { class: 'field' }, h('span', null, 'Videos whose comments are read per search'), comments,
-        h('small', { class: 'hint' }, 'Comments are where viewers say which muscles it helped. 1 unit per video.')),
+      h('label', { class: 'field' }, h('span', null, 'Search thoroughness'), effortSel, effortHint,
+        h('small', { class: 'hint' }, 'A search works in rounds: it looks at many videos, learns from the best fits (their poses and teachers), and searches again until it has found enough strong fits or reached the unit budget. Comments are cheap (1 unit each), so they are read on the best few dozen.')),
       h('label', { class: 'field' }, h('span', null, 'Trusted teachers (one per line)'), trusted,
         h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.')),
       state.following.length ? h('div', null, h('h3', null, 'Teachers you follow'),

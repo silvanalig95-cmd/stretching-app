@@ -1,12 +1,13 @@
 // "Today": say what you need (or tap muscles), get a routine you can play right here.
 
 import { h, fill } from '../dom.js';
-import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow, useMySpots, aimAtNeglected } from '../ctx.js';
+import { THOROUGHNESS } from '../youtube.js';
+import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow, useMySpots, aimAtNeglected, buildCombos, startCombo, advanceCombo, comboKey } from '../ctx.js';
 import { AREAS, GROUPS, STYLES, QUICK_PICKS, areaLabel } from '../lexicon.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
 import { mountPlayer } from '../player.js';
 import { formatDuration, attachComments } from '../analyze.js';
-import { applyPlayerInfo, toggleLibrary, inLibrary, blockVideo, unblockVideo } from '../state.js';
+import { applyPlayerInfo, toggleLibrary, addToLibrary, inLibrary, blockVideo, unblockVideo } from '../state.js';
 import { mulberry32 } from '../model.js';
 import { fmtViews, thumb } from '../dom.js';
 import { openFeedback } from './feedback.js';
@@ -24,6 +25,7 @@ export function mountToday(root) {
   slots.filters = h('section', { class: 'panel', id: 'filters', 'aria-label': 'What do you need?' });
   slots.log = h('div', { id: 'log-slot' });
   slots.featured = h('div', { id: 'featured-slot' });
+  slots.combo = h('div', { id: 'combo-slot' });
   slots.alts = h('div', { id: 'alts-slot' });
   fill(root, 
     h('section', { class: 'hero' },
@@ -31,7 +33,7 @@ export function mountToday(root) {
       h('p', { class: 'sub' }, 'Say it in your own words, or tap muscles below. I’ll find, read up on, and rank routines for you.'),
       commandBar()),
     slots.filters,
-    h('section', { id: 'results', 'aria-label': 'Routine' }, slots.log, slots.featured, slots.alts));
+    h('section', { id: 'results', 'aria-label': 'Routine' }, slots.log, slots.featured, slots.combo, slots.alts));
   Object.assign(ctx.hooks, { renderResults, renderFilters, renderLog });
   renderFilters();
   if (!ctx.ui.ranked.length && !ctx.ui.busy) { if (ctx.ui.featuredId) rankNow(); else suggestNow(); }
@@ -130,7 +132,11 @@ export function renderFilters() {
             onchange: (e) => { prefs.searchWeb = e.target.checked; ctx.store.save(); } }),
           ' Search the web for new videos'),
         ctx.hasKey
-          ? h('small', { class: 'hint' }, `A web search uses up to ≈${qi.run} of your ${qi.limit.toLocaleString()} free daily units, usually about half (${qi.used.toLocaleString()} used today).`)
+          ? h('div', { class: 'effort' },
+            h('label', { class: 'field inline-field' }, h('span', null, 'Thoroughness'),
+              h('select', { id: 'thoroughness', onchange: (e) => { prefs.thoroughness = e.target.value; ctx.store.save(); again(); } },
+                Object.entries(THOROUGHNESS).map(([k, e]) => h('option', { value: k, selected: prefs.thoroughness === k }, e.label)))),
+            h('small', { class: 'hint' }, `${qi.effort.blurb}. Up to ≈${qi.run.max} of your ${qi.limit.toLocaleString()} free daily units, usually about ${qi.run.typical} (${qi.used.toLocaleString()} used today).`))
           : h('small', { class: 'hint' }, h('a', { href: '#settings' }, 'Add a free YouTube key'), ' to let the app search the whole web for you.')),
       h('button', { class: 'btn primary big', id: 'find', type: 'button', disabled: ctx.ui.busy, onclick: () => findRoutine() }, ctx.ui.busy ? 'Working…' : 'Find my routine')),
   );
@@ -142,6 +148,7 @@ export function renderResults() {
   if (!slots.featured?.isConnected) return; // another tab is showing
   renderLog();
   renderFeatured();
+  renderCombo();
   renderAlts();
   const btn = document.getElementById('find');
   if (btn) { btn.disabled = ctx.ui.busy; btn.textContent = ctx.ui.busy ? 'Working…' : 'Find my routine'; }
@@ -185,7 +192,7 @@ function renderFeatured() {
     playerFor = v.id;
     playerCtl = mountPlayer(playerBox, v.id, {
       onInfo: (info) => { if (applyPlayerInfo(ctx.state, v.id, info)) { ctx.store.save(); renderFeaturedInfo(); } },
-      onEnded: () => openFeedback(v.id),
+      onEnded: () => finishVideo(v.id),
       onError: (code, msg) => {
         const rec = ctx.state.videos[v.id];
         if (code === 100 && rec) rec.broken = true;
@@ -214,6 +221,41 @@ function playerProblem(v, message) {
       h('button', { class: 'btn', type: 'button', onclick: () => another() }, 'Pick another'))));
 }
 
+/** Ask how it went; if this is a part of a combo, move on to the next one afterwards. */
+function finishVideo(id) { openFeedback(id, { onDone: () => advanceCombo(id) }); }
+
+function renderCombo() {
+  const { ui } = ctx;
+  if (!slots.combo) return;
+  const f = ui.filters;
+  if (ui.busy || f.areas.length < 2) { fill(slots.combo, ''); return; }
+  const res = ui.combos?.key === comboKey(f) ? ui.combos : null;   // a combo built for a different request is stale
+  const useful = res?.combos.filter((c) => c.gain >= 0.05 || !res.bestSingle) ?? [];
+  const covLabel = (c) => `${Math.round(c.coverage * 100)}% of your muscles covered`;
+  fill(slots.combo, h('section', { class: 'panel combos', id: 'combos' },
+    h('div', { class: 'combo-head' },
+      h('div', null, h('h3', null, 'Cover all of it in one session'),
+        h('p', { class: 'hint' }, `No single video usually covers ${f.areas.length} muscle areas well. A combo chains short, well-fitting videos into one ${f.minMin ?? 10}–${f.maxMin ?? 45} minute session.`)),
+      h('button', { class: 'btn', id: 'build-combo', type: 'button', onclick: () => { buildCombos(); renderCombo(); } }, res ? 'Rebuild combos' : 'Build a combo')),
+    res && !useful.length ? h('p', { class: 'hint', id: 'combo-none' }, res.bestSingle
+      ? `Nothing beats the best single video for this: “${res.bestSingle.entry.video.title}” (${Math.round(res.bestSingle.coverage * 100)}% covered).`
+      : 'I couldn’t find videos that combine into that length. Try a wider time range or fewer muscles.') : null,
+    h('div', { class: 'combo-list' }, useful.map((c, ci) => h('article', { class: 'combo', 'data-combo': ci },
+      h('h4', null, `Combo ${ci + 1}`, h('span', { class: 'combo-meta' }, ` ${c.totalMin} min · ${covLabel(c)}${res.bestSingle ? ` (best single video: ${Math.round(res.bestSingle.coverage * 100)}%)` : ''}`)),
+      h('ol', { class: 'parts' }, c.parts.map((p, pi) => {
+        const v = p.video;
+        const areas = f.areas.filter((a) => (v.profile?.areas?.[a.id] ?? 0) >= 0.45).map((a) => areaLabel(a.id));
+        return h('li', null,
+          h('span', { class: 'part-title' }, v.title), ' ',
+          h('small', { class: 'muted' }, `${v.channel || 'unknown channel'} · ${lengthText(v)}${areas.length ? ` · ${areas.join(', ')}` : ''}`),
+          h('button', { class: 'btn small ghost', type: 'button', 'data-part': pi, onclick: () => play(v.id, { navigate: false }) }, 'Play'));
+      })),
+      h('div', { class: 'actions' },
+        h('button', { class: 'btn primary small', type: 'button', 'data-start': ci, onclick: () => { startCombo(c); window.scrollTo({ top: 0, behavior: 'smooth' }); } }, 'Start this combo'),
+        h('button', { class: 'btn small', type: 'button', onclick: () => { for (const p of c.parts) addToLibrary(ctx.state, p.video.id); ctx.store.save(); toast(`Added ${c.parts.length} videos to your library.`, 'success'); renderFeaturedInfo(); renderAlts(); } }, 'Add all to library'))))),
+    ));
+}
+
 function badge(text, cls = '', title) { return h('span', { class: `badge ${cls}`, title }, text); }
 
 function lengthText(v) { return v.durationSec == null ? 'length unknown' : `${v.durationApprox ? '~' : ''}${formatDuration(v.durationSec)}`; }
@@ -227,6 +269,8 @@ function featuredInfo(entry) {
   const quotes = (ev?.quotes ?? []).slice().sort((a, b) => (b.areas.some((x) => wanted.has(x)) ? 1 : 0) - (a.areas.some((x) => wanted.has(x)) ? 1 : 0));
 
   return [
+    ctx.ui.combo && ctx.ui.combo.ids.includes(v.id) ? h('p', { class: 'combo-progress', id: 'combo-progress' }, `Combo: part ${ctx.ui.combo.ids.indexOf(v.id) + 1} of ${ctx.ui.combo.ids.length}`,
+      ctx.ui.combo.ids.indexOf(v.id) + 1 < ctx.ui.combo.ids.length ? h('button', { class: 'link', type: 'button', onclick: () => advanceCombo(v.id) }, ' skip to the next part') : null) : null,
     h('h2', null, v.title),
     h('p', { class: 'meta' },
       v.channel ? h('span', { class: 'channel' }, v.channel) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
@@ -241,7 +285,7 @@ function featuredInfo(entry) {
       f.commentsRead && badge(`${ev.n} comments read`, '', 'Viewer comments were analysed for what it did for people'),
       !v.verified && badge('Details unverified', 'warn', 'Length and channel come from a guess; they’ll be checked when you add a YouTube key or play it')),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => openFeedback(v.id) }, 'I did it ✓'),
+      h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => finishVideo(v.id) }, 'I did it ✓'),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
       h('button', { class: 'btn ghost', type: 'button', onclick: () => {

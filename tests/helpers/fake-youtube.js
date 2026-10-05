@@ -131,7 +131,7 @@ const starterItem = (s) => ({
 });
 
 /** Test switches: set from a test to simulate failures. */
-export const fault = { quota: false, commentsOff: new Set(), calls: [] };
+export const fault = { quota: false, commentsOff: new Set(), calls: [], pageSize: 5 };   // pageSize: how many results a search page returns (real API: up to 50)
 
 /** Handle one API request URL; returns {status, body}. */
 export function handle(urlString) {
@@ -164,7 +164,7 @@ export function handle(urlString) {
     if (dur === 'medium') hits = hits.filter((x) => x.v.min >= 4 && x.v.min <= 20);
     if (dur === 'long') hits = hits.filter((x) => x.v.min > 20);
     const start = Number((p('pageToken') ?? 'p0').slice(1)) || 0;
-    const size = Math.min(5, Number(p('maxResults') ?? 5));
+    const size = Math.min(fault.pageSize, Number(p("maxResults") ?? 5));
     const page = hits.slice(start, start + size);
     return ok({
       kind: 'youtube#searchListResponse',

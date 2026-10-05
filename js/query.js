@@ -4,7 +4,7 @@
 // every query it has used (and the result page it reached), and prefers
 // phrasings/teachers/sort orders it hasn't tried yet.
 
-import { AREA_TERMS, STYLE_TERMS, POSE_TERMS, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
+import { AREA_TERMS, STYLE_TERMS, POSE_TERMS, POSE_BY_ID, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
 import { STOP_WORDS } from './index.js';
 
 // ---------------------------------------------------------------- video URLs
@@ -132,6 +132,15 @@ function videoDurationParam(minMin, maxMin) {
   return null;
 }
 
+/** Typed words -> how a person would search for them: "pigeon" is a yoga pose, so ask for "pigeon pose". */
+export function termsAsSearchText(terms) {
+  const text = terms.join(' ');
+  if (!text) return '';
+  const poses = scan(POSE_TERMS, text);
+  const isYogaPose = poses.length && poses.every((m) => m.entry.mode !== 'strength');
+  return isYogaPose && !/\bpose\b/i.test(text) ? `${text} pose` : text;
+}
+
 /**
  * Generate `n` distinct searches that are as new as possible.
  * @param {{areas:{id:string,mode:string}[], minMin?:number, maxMin?:number, styles?:string[], hints?:string[]}} filters
@@ -139,7 +148,7 @@ function videoDurationParam(minMin, maxMin) {
  */
 export function buildQueries(filters, ctx) {
   const { queryLog = {}, rng, n = 2, teachers = TEACHERS, knownTeachers = new Set(), adventure = 0.35 } = ctx;
-  const terms = (filters.terms ?? []).join(' ');
+  const terms = termsAsSearchText(filters.terms ?? []);
   // With free-text terms and no muscles ("pigeon pose"), search for the terms alone rather than defaulting to full body.
   const areas = filters.areas?.length ? filters.areas : terms ? [] : [{ id: 'full_body', mode: 'tight' }];
   const styles = filters.styles ?? [];
@@ -158,7 +167,9 @@ export function buildQueries(filters, ctx) {
     const mod = hints.length && rng() < 0.7 ? pick(hints, rng) : pick(MODIFIERS, rng);
 
     const t = [];
-    if (weak) t.push(`${dur} yoga strength for ${A}`, `${A} activation exercises ${dur}`, `strengthen ${A} follow along ${dur}`);
+    const onlyWords = !shuffled.length;          // e.g. just "pigeon pose": avoid "yoga for pigeon for ..."
+    if (onlyWords) t.push(`${A} yoga ${dur}`, `${dur} ${A} tutorial`, `how to do ${A} ${mod}`, `${A} follow along ${dur}`, `${A} ${mod}`);
+    else if (weak) t.push(`${dur} yoga strength for ${A}`, `${A} activation exercises ${dur}`, `strengthen ${A} follow along ${dur}`);
     else t.push(`${dur} yoga for ${A}`, `${dur} ${A} stretch`, `yoga for ${A} ${mod}`, `${A} stretching routine follow along ${dur}`, `best ${A} stretches ${dur}`);
     if (styles.includes('yin')) t.push(`yin yoga for ${A} ${dur}`);
     if (styles.includes('restorative')) t.push(`gentle ${A} yoga before bed ${dur}`);
@@ -201,4 +212,53 @@ export function buildQueries(filters, ctx) {
     const order = ORDERS[(prev?.count ?? 0) % ORDERS.length];
     return { q, key, order, pageToken: null, videoDuration: videoDurationParam(filters.minMin, filters.maxMin) };
   });
+}
+
+// ---------------------------------------------------------------- learning from the results so far
+
+/**
+ * "More like what's working": given the best candidates found so far, build follow-up
+ * searches from the poses that work the requested muscles, the teachers who made them,
+ * and their most common tags. Used between rounds of a wide search so each round
+ * looks for MORE of what is fitting, not just another phrasing of the same question.
+ * @param {object[]} top  best-fitting videos so far (with .profile, .channel, .tags)
+ * @returns {{q:string,key:string,order:string,pageToken:null,videoDuration:string|null}[]}
+ */
+export function expandQueries(top, filters, { queryLog = {}, n = 2, rng = Math.random } = {}) {
+  const areaIds = (filters.areas ?? []).map((a) => a.id);
+  const typed = normalize((filters.terms ?? []).join(' '));
+  const area = areaIds.length ? areaPhrase(filters.areas.slice(0, 2), rng) : '';
+  const dur = durationPhrase(filters.minMin, filters.maxMin, rng);
+  const poseVotes = new Map(), channelVotes = new Map(), tagVotes = new Map();
+  for (const v of top) {
+    for (const { id } of v.profile?.poses ?? []) {
+      const w = areaIds.length ? Math.max(...areaIds.map((a) => POSE_BY_ID[id]?.areas[a] ?? 0)) : 0.6;
+      if (w >= 0.5) poseVotes.set(id, (poseVotes.get(id) ?? 0) + w);
+    }
+    if (v.channel) channelVotes.set(v.channel, (channelVotes.get(v.channel) ?? 0) + 1);
+    for (const t of v.tags ?? []) {
+      const nt = normalize(t);
+      if (nt.length > 3 && nt.split(' ').length <= 3) tagVotes.set(nt, (tagVotes.get(nt) ?? 0) + 1);
+    }
+  }
+  const ranked = (m) => [...m].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+  const cands = [];
+  for (const id of ranked(poseVotes)) {
+    const name = POSE_BY_ID[id].label.toLowerCase();
+    if (!typed.includes(normalize(name))) cands.push(`${name} ${area} ${dur}`);
+  }
+  for (const ch of ranked(channelVotes).slice(0, 3)) cands.push(`${ch} ${area} ${dur}`);
+  for (const tag of ranked(tagVotes).filter((t) => t !== normalize(area)).slice(0, 4)) cands.push(`${tag} ${area}`);
+
+  const dp = videoDurationParam(filters.minMin, filters.maxMin);
+  const out = [], seen = new Set();
+  for (const raw of cands) {
+    const q = raw.replace(/\s+/g, ' ').trim();
+    const key = normKey(q);
+    if (seen.has(key) || queryLog[key]) continue;   // never repeat a search we have already run
+    seen.add(key);
+    out.push({ q, key, order: 'relevance', pageToken: null, videoDuration: dp });
+    if (out.length >= n) break;
+  }
+  return out;
 }

@@ -1,12 +1,13 @@
 // Minimal accessible modal + toast.
 import { h } from './dom.js';
 
-export function openModal({ title, body, wide = false }) {
+export function openModal({ title, body, wide = false, onClose = null }) {
   const prevFocus = document.activeElement;
   const close = () => {
     document.removeEventListener('keydown', onKey, true);
     overlay.remove();
     if (prevFocus?.focus) prevFocus.focus();
+    onClose?.();
   };
   const onKey = (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); close(); }

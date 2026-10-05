@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseVideoId, parseCommand, buildQueries } from '../../js/query.js';
+import { parseVideoId, parseCommand, buildQueries, termsAsSearchText } from '../../js/query.js';
 import { mulberry32 } from '../../js/model.js';
 
 test('parseVideoId accepts the common URL shapes', () => {
@@ -121,4 +121,14 @@ test('free-text terms flow into generated searches', () => {
   assert.ok(qs.every((q) => /pigeon/.test(q.q)), qs.map((q) => q.q).join(' | '));
   const alone = buildQueries({ areas: [], terms: ['sphinx'], minMin: null, maxMin: null }, { queryLog: {}, rng: mulberry32(3), n: 2 });
   assert.ok(alone.every((q) => /sphinx/.test(q.q) && !/full body/.test(q.q)), alone.map((q) => q.q).join(' | '));
+});
+
+test('typed words become natural searches: yoga poses get "pose", exercises do not, and no "yoga for pigeon for…"', () => {
+  assert.equal(termsAsSearchText(['pigeon']), 'pigeon pose');
+  assert.equal(termsAsSearchText(['pigeon', 'pose']), 'pigeon pose');
+  assert.equal(termsAsSearchText(['squat']), 'squat', 'strength exercises are left alone');
+  assert.equal(termsAsSearchText(['adriene']), 'adriene');
+  assert.equal(termsAsSearchText([]), '');
+  const qs = buildQueries({ areas: [], terms: ['pigeon'], minMin: 10, maxMin: 20 }, { queryLog: {}, rng: mulberry32(4), n: 4 });
+  assert.ok(qs.every((q) => /pigeon pose/.test(q.q) && !/for pigeon/.test(q.q)), qs.map((q) => q.q).join(' | '));
 });

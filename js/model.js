@@ -377,3 +377,91 @@ export function neglectedAreas(focus, history, { today = localDate(), n = 3 } = 
     .sort((a, b) => (b.daysAgo ?? 1e6) - (a.daysAgo ?? 1e6) || (a.mode === 'weak' ? -1 : 1))
     .slice(0, n);
 }
+
+// ---------------------------------------------------------------- combos: several videos, one session
+
+const STYLE_ORDER = { mobility: 0, flow: 0, strength: 0, stretch: 1, yin: 2, restorative: 2 };
+const styleRank = (v) => {
+  const st = Object.entries(v.profile?.styles ?? {}).filter(([, s]) => s >= 0.3).map(([k]) => STYLE_ORDER[k]).filter((x) => x != null);
+  return st.length ? Math.max(...st) : 1;
+};
+const avg = (xs) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+
+/**
+ * Find short sequences of videos that together cover ALL the requested muscles within the time range,
+ * when no single video does. A small beam search over the best-ranked candidates.
+ *
+ * @param {object[]} candidates  ranked entries (from rankCandidates; ideally with a loose minimum length)
+ * @param {{areas:{id:string,mode:string}[], minMin?:number|null, maxMin?:number|null}} filters
+ * @returns {{combos: {parts:object[], totalMin:number, cover:number[], coverage:number, gain:number, value:number}[], bestSingle: {entry:object, coverage:number}|null}}
+ *   gain = how much more of your muscles the combo covers than the best single video in the time range
+ */
+export function composeCombos(candidates, filters, { minTotal, maxTotal, maxParts = 4, n = 3, pool = 24, beam = 60 } = {}) {
+  const areas = filters.areas ?? [];
+  const none = { combos: [], bestSingle: null };
+  if (areas.length < 2) return none;
+  const lo = minTotal ?? filters.minMin ?? 10, hi = maxTotal ?? filters.maxMin ?? 45;
+  const cands = candidates
+    .filter((c) => c.video.durationSec != null && c.video.durationSec / 60 <= hi)
+    .slice(0, pool)
+    .map((c) => ({ entry: c, mins: c.video.durationSec / 60, cov: areas.map((a) => (c.video.profile?.areas?.[a.id] ?? 0) * modeFit(c.video, a.id, a.mode)) }));
+  if (cands.length < 2) return none;
+
+  const coverOf = (best) => avg(best);
+  let bestSingle = null;
+  for (const c of cands) {
+    if (c.mins < lo) continue;
+    const cov = coverOf(c.cov);
+    if (!bestSingle || cov > bestSingle.coverage) bestSingle = { entry: c.entry, coverage: cov };
+  }
+  const baseline = bestSingle?.coverage ?? Math.max(...cands.map((c) => coverOf(c.cov)));
+
+  const finals = [];
+  let frontier = [{ idx: [], total: 0, best: areas.map(() => 0) }];
+  for (let depth = 1; depth <= maxParts; depth++) {
+    const next = [];
+    for (const st of frontier) {
+      const start = st.idx.length ? st.idx[st.idx.length - 1] + 1 : 0;   // combinations, not permutations
+      for (let i = start; i < cands.length; i++) {
+        const total = st.total + cands[i].mins;
+        if (total > hi) continue;
+        const best = st.best.map((b, k) => Math.max(b, cands[i].cov[k]));
+        const ns = { idx: [...st.idx, i], total, best };
+        next.push(ns);
+        if (ns.idx.length >= 2 && total >= lo) finals.push(ns);
+      }
+    }
+    frontier = next
+      .map((s) => ({ s, h: coverOf(s.best) + 0.15 * avg(s.idx.map((i) => cands[i].entry.score)) }))
+      .sort((a, b) => b.h - a.h).slice(0, beam).map((x) => x.s);
+    if (!frontier.length) break;
+  }
+
+  const scored = finals.map((st) => {
+    const parts = st.idx.map((i) => cands[i]);
+    const coverage = coverOf(st.best);
+    const channels = new Set(parts.map((p) => channelKey(p.entry.video) || p.entry.video.id));
+    const variety = parts.length > 1 ? (channels.size - 1) / (parts.length - 1) : 0;
+    const value = 0.62 * coverage + 0.28 * avg(parts.map((p) => p.entry.score)) + 0.05 * variety + 0.08 * (st.total / hi) - 0.03 * (parts.length - 1);
+    return { st, parts, coverage, value };
+  }).sort((a, b) => b.value - a.value);
+
+  const chosen = [];
+  for (const c of scored) {
+    const ids = new Set(c.parts.map((p) => p.entry.video.id));
+    const dup = chosen.some((o) => { const inter = o.ids.filter((x) => ids.has(x)).length; return inter / Math.max(o.ids.length, ids.size) > 0.6; });
+    if (dup) continue;
+    chosen.push({ ids: [...ids], c });
+    if (chosen.length >= n) break;
+  }
+  const combos = chosen.map(({ c }) => ({
+    // a gentle arc: mobility / flow first, long holds and winding down last
+    parts: [...c.parts].sort((a, b) => styleRank(a.entry.video) - styleRank(b.entry.video)).map((p) => p.entry),
+    totalMin: Math.round(c.st.total),
+    cover: c.st.best,
+    coverage: c.coverage,
+    gain: c.coverage - baseline,
+    value: c.value,
+  }));
+  return { combos, bestSingle };
+}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { YouTubeClient, toApiError, QuotaError, KeyError, CommentsDisabledError, YouTubeError, discover, verifyVideos, fetchOEmbed, quotaDay, quotaUsed, spendQuota, estimateRunCost } from '../../js/youtube.js';
+import { YouTubeClient, toApiError, QuotaError, KeyError, CommentsDisabledError, YouTubeError, discover, verifyVideos, fetchOEmbed, quotaDay, quotaUsed, spendQuota, estimateRunCost, THOROUGHNESS } from '../../js/youtube.js';
 import { freshState, applyDiscovery, logSession } from '../../js/state.js';
 import { mulberry32 } from '../../js/model.js';
 import { fakeFetch, fault, VIDEOS } from '../helpers/fake-youtube.js';
@@ -163,8 +163,9 @@ test('quota bookkeeping resets each Pacific day and estimates a run', () => {
   assert.equal(quotaUsed(s, d1), 350);
   assert.equal(quotaUsed(s, d2), 0);
   assert.equal(quotaDay(new Date('2026-10-05T03:00:00Z')), '2026-10-04'); // still the previous day in Pacific time
-  assert.equal(estimateRunCost({ queries: 2, commentVideos: 10, extraPages: 0 }), 216);
-  assert.equal(estimateRunCost({ queries: 2, commentVideos: 10 }), 416); // worst case: one extra page per search
+  assert.deepEqual(estimateRunCost('balanced'), { max: THOROUGHNESS.balanced.budget, typical: Math.round(THOROUGHNESS.balanced.budget * 0.45) });
+  assert.equal(estimateRunCost('nonsense').max, THOROUGHNESS.balanced.budget, 'unknown names fall back to balanced');
+  assert.ok(estimateRunCost('quick').max < estimateRunCost('thorough').max && estimateRunCost('thorough').max < estimateRunCost('exhaustive').max);
 });
 
 test('end to end: rate a session, and the next discovery run ranks it using what you told it', async () => {

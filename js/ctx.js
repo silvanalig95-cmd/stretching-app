@@ -4,10 +4,10 @@
 // functions, toast) on `ctx.hooks`.
 
 import {
-  YouTubeClient, discover, verifyVideos, spendQuota, quotaUsed, estimateRunCost, parseSourceInput, importSource, refreshFollowed,
+  YouTubeClient, discover, verifyVideos, spendQuota, quotaUsed, estimateRunCost, effortFor, parseSourceInput, importSource, refreshFollowed,
   fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA,
 } from './youtube.js';
-import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas } from './model.js';
+import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
 import { applyDiscovery, addManualVideo, importRecords, followChannel } from './state.js';
 import { attachComments } from './analyze.js';
 import { SearchIndex } from './index.js';
@@ -30,6 +30,8 @@ export const ctx = {
     report: null,
     foundIds: new Set(),   // videos discovered by the most recent web search
     termsIgnored: false,   // typed words that nothing in the library mentions
+    combos: null,          // the last combo search: {combos, bestSingle} or null
+    combo: null,           // the combo being followed: {ids, index, title}
     verifiedTried: false,
   },
   get state() { return this.store.state; },
@@ -40,7 +42,16 @@ export const client = () => (ctx.hasKey
   ? new YouTubeClient({ key: ctx.store.config.apiKey, onSpend: (u) => { spendQuota(ctx.state, u); ctx.store.save(); } })
   : null);
 
-export const quotaInfo = () => ({ used: quotaUsed(ctx.state), limit: DAILY_QUOTA, run: estimateRunCost({ queries: ctx.state.prefs.queriesPerRun, commentVideos: ctx.state.prefs.commentVideos }) });
+export const quotaInfo = () => {
+  const used = quotaUsed(ctx.state);
+  return { used, limit: DAILY_QUOTA, left: DAILY_QUOTA - used, run: estimateRunCost(ctx.state.prefs.thoroughness), effort: effortFor(ctx.state.prefs.thoroughness) };
+};
+
+/** Options for one discovery run, capped so it can never spend more than what is left of today's allowance. */
+export function runOptions(name = ctx.state.prefs.thoroughness) {
+  const effort = effortFor(name);
+  return { ...effort, budget: Math.min(effort.budget, quotaInfo().left - 20) };
+}
 
 /** Sync the filters' length with saved preferences (first load). */
 export function initFilters() {
@@ -74,13 +85,19 @@ export function cycleArea(id, list = ctx.ui.filters.areas) {
   else list.splice(i, 1);
 }
 
+/**
+ * A typed request replaces the earlier muscle picks, styles and words (it is a complete statement of what
+ * you want now). A length-only command ("20 min") keeps them and just changes the time.
+ */
 export function applyParsed(parsed) {
   const f = ctx.ui.filters;
-  if (parsed.areas.length) f.areas = parsed.areas.map((a) => ({ ...a }));
-  if (parsed.minMin != null) setLength(parsed.minMin, parsed.maxMin);
-  f.styles = parsed.styles.length ? [...parsed.styles] : f.styles;
+  if (parsed.areas.length || parsed.terms.length || parsed.styles.length) {
+    f.areas = parsed.areas.map((a) => ({ ...a }));
+    f.styles = [...parsed.styles];
+    f.terms = [...parsed.terms];
+  }
   f.hints = parsed.hints;
-  f.terms = parsed.terms ?? [];
+  if (parsed.minMin != null) setLength(parsed.minMin, parsed.maxMin);
 }
 
 // ---------------------------------------------------------------- ranking & picking
@@ -173,16 +190,15 @@ export async function findRoutine({ web = ctx.state.prefs.searchWeb } = {}) {
   if (api) {
     try {
       await verifySuggestions(api);
-      const res = await discover({
-        client: api, filters: ui.filters, state, rng: freshRng(), progress: say,
-        opts: { queries: state.prefs.queriesPerRun, commentVideos: state.prefs.commentVideos },
-      });
+      const opts = runOptions();
+      if (opts.budget < 120) throw new Error(`Only ${quotaInfo().left} units of today’s YouTube allowance are left, not enough for a search. It resets at midnight Pacific time.`);
+      const res = await discover({ client: api, filters: ui.filters, state, rng: freshRng(), progress: say, opts });
       const before = new Set(Object.keys(state.videos));
       applyDiscovery(state, res);
       ui.foundIds = new Set(res.records.filter((r) => !before.has(r.id)).map((r) => r.id));
       ui.report = res.report;
       const r = res.report;
-      say(`Done: ${ui.foundIds.size} new videos${r.newChannels ? ` from ${r.newChannels} channels you haven’t seen` : ''}; read ${r.commentsRead} viewer comments.`);
+      say(`Done: looked at ${r.examined} videos over ${r.rounds} round${r.rounds > 1 ? 's' : ''} (${r.strong} strong fit${r.strong === 1 ? '' : 's'}${r.stopped === 'enough' ? ', so I stopped early' : r.stopped === 'budget' ? ', stopped at the budget' : ''}); ${ui.foundIds.size} are new to you${r.newChannels ? ` from ${r.newChannels} channels` : ''}; read ${r.commentsRead} viewer comments; used ${r.spent} units.`);
       for (const w of r.warnings) say(`⚠ ${w}`);
     } catch (e) {
       say(`⚠ ${e.message}`);
@@ -233,17 +249,14 @@ async function verifySuggestions(api) {
   if (gone) say(`${gone} suggested video(s) no longer exist and were removed.`);
 }
 
-export async function growLibrary(areaIds, { queries = 3 } = {}) {
+export async function growLibrary(areaIds) {
   const prev = { ...ctx.ui.filters, areas: ctx.ui.filters.areas.map((a) => ({ ...a })) };
   ctx.ui.filters = { areas: areaIds.map((id) => ({ id, mode: 'tight' })), minMin: null, maxMin: null, styles: [], hints: [], terms: [], source: 'all' };
   const api = client();
   if (!api) { ctx.ui.filters = prev; throw new Error('Add a YouTube key in Settings first.'); }
   ctx.ui.log = [];
   try {
-    const res = await discover({
-      client: api, filters: ctx.ui.filters, state: ctx.state, rng: freshRng(), progress: say,
-      opts: { queries, commentVideos: ctx.state.prefs.commentVideos },
-    });
+    const res = await discover({ client: api, filters: ctx.ui.filters, state: ctx.state, rng: freshRng(), progress: say, opts: runOptions() });
     const added = applyDiscovery(ctx.state, res);
     ctx.store.save();
     return { added, report: res.report };
@@ -348,4 +361,46 @@ export function aimAtNeglected(n = 2) {
   if (!list.length) return null;
   ctx.ui.filters.areas = list.map(({ id, mode }) => ({ id, mode }));
   return list;
+}
+
+// ---------------------------------------------------------------- combos
+
+/** What a combo search depended on: if any of it changes, the old combos no longer answer the question. */
+export const comboKey = (f) => JSON.stringify([f.areas, f.minMin, f.maxMin, f.styles, f.source]);
+
+/** Look for sequences of videos that together cover all the chosen muscles in the chosen time. */
+export function buildCombos() {
+  const { state, ui } = ctx;
+  const f = ui.filters;
+  const hi = f.maxMin ?? 45;
+  const model = buildModel(state.history, state.videos);
+  // rank with a loose minimum length: the parts are SHORTER than the whole session
+  const cands = rankCandidates({
+    videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(),
+    trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure,
+  });
+  ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };
+  return ui.combos;
+}
+
+export function startCombo(combo) {
+  const ids = combo.parts.map((p) => p.video.id);
+  ctx.ui.combo = { ids, index: 0, totalMin: combo.totalMin };
+  play(ids[0], { navigate: false });
+}
+
+/** After finishing a part, move on to the next one (if you are following a combo). */
+export function advanceCombo(finishedId) {
+  const c = ctx.ui.combo;
+  if (!c || c.ids[c.index] !== finishedId) return false;
+  if (c.index + 1 < c.ids.length) {
+    c.index++;
+    ctx.hooks.toast(`Combo: on to part ${c.index + 1} of ${c.ids.length}.`, 'success');
+    play(c.ids[c.index], { navigate: false });
+    return true;
+  }
+  ctx.hooks.toast(`Combo complete: ${c.ids.length} videos, about ${c.totalMin} minutes. Well done!`, 'success', 7000);
+  ctx.ui.combo = null;
+  ctx.hooks.renderResults();
+  return false;
 }

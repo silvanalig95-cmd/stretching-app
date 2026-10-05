@@ -19,7 +19,8 @@ export const DEFAULT_TRUSTED = [
   'Yoga With Adriene', 'Yoga With Kassandra', 'Sarah Beth Yoga', 'Boho Beautiful', 'Mady Morrison', 'Travis Eliot', 'Breathe and Flow',
 ];
 export const DEFAULT_PREFS = {
-  trusted: DEFAULT_TRUSTED, adventure: 0.35, minMin: 10, maxMin: 25, searchWeb: true, queriesPerRun: 2, commentVideos: 10,
+  trusted: DEFAULT_TRUSTED, adventure: 0.35, minMin: 10, maxMin: 25, searchWeb: true,
+  thoroughness: 'balanced',   // how wide a web search goes: quick | balanced | thorough | exhaustive (see THOROUGHNESS)
   autoLibrary: false,  // true: everything a search finds is added to your library automatically
   focus: [],           // your standing tight / weak spots: [{id, mode}]
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
@@ -35,6 +36,7 @@ export function emptyState() {
     history: [],     // every routine you've done, with your "did it help?" answers
     blocked: [],     // video ids you never want to see again
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
+    savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     prefs: { ...DEFAULT_PREFS, trusted: [...DEFAULT_TRUSTED], focus: [] },
     // ---- index
     videos: {},      // id -> video record (metadata + raw text/comments sample + derived profile)
@@ -47,7 +49,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, following: state.following, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -134,6 +136,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.history)) s.history = p.history.filter((h) => isObj(h) && typeof h.videoId === 'string');
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.following)) s.following = p.following;
+    if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
   }
   if (ix && ((ix.schema ?? 1) === SCHEMA || readOnly)) {
@@ -278,6 +281,20 @@ export function importRecords(state, records, { toLibrary = false } = {}) {
   return added;
 }
 
+// ---------------------------------------------------------------- saved searches
+
+/** Remember a library search (text + filters) under a name. Re-saving a name replaces it. */
+export function saveSearch(state, { name, q = '', area = '', len = '', tag = '', tab = 'mine' }) {
+  const nm = String(name ?? '').trim().slice(0, 40);
+  if (!nm || (!q.trim() && !area && !len && !tag)) return null;
+  state.savedSearches = state.savedSearches.filter((x) => x.name.toLowerCase() !== nm.toLowerCase());
+  const rec = { id: newId(), name: nm, q: q.slice(0, 200), area, len, tag, tab };
+  state.savedSearches.push(rec);
+  state.savedSearches = state.savedSearches.slice(-20);
+  return rec;
+}
+export function deleteSavedSearch(state, id) { state.savedSearches = state.savedSearches.filter((x) => x.id !== id); }
+
 // ---------------------------------------------------------------- following
 
 export function followChannel(state, { channelId, name }) {
@@ -352,6 +369,7 @@ export function mergeImport(state, incoming) {
   state.history.sort((a, b) => (a.at < b.at ? -1 : 1));
   state.blocked = [...new Set([...state.blocked, ...inc.blocked])];
   for (const f of inc.following) followChannel(state, f);
+  for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;
   ensureStubs(state);
   return state;
