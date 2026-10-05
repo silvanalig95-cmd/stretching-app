@@ -1,55 +1,93 @@
 #!/usr/bin/env python3
-"""Unfurl's tiny local server (Python standard library only).
+"""Unfurl's small server (Python standard library only, no dependencies).
 
+ON YOUR OWN COMPUTER
   python3 serve.py            # http://localhost:8765, opens your browser
   python3 serve.py --port 9000 --no-open --data-dir /some/folder
+
+ON A SERVER (see deploy/README.md for the full guide)
+  UNFURL_HOST=0.0.0.0 UNFURL_AUTH=me:a-long-passphrase UNFURL_ALLOWED_HOSTS=unfurl.internal python3 serve.py
 
 Why a server at all? YouTube refuses to play embedded videos on pages opened
 straight from disk (file://), and the app's ES modules need http too. The
 server also keeps your data in plain JSON files so it survives clearing your
-browser and works from any browser.
+browser, updating the app, and works from any browser or device.
 
-WHERE YOUR DATA LIVES
+WHERE THE DATA LIVES
   Outside the app folder, in your per-user data directory, so replacing or
   updating the app can never touch it:
     macOS    ~/Library/Application Support/Unfurl
     Windows  %APPDATA%\\Unfurl
     Linux    $XDG_DATA_HOME/unfurl  (default ~/.local/share/unfurl)
-  Override with --data-dir or the UNFURL_DATA environment variable.
+  Override with --data-dir or UNFURL_DATA.
     profile.json   your library, history, ratings, preferences (small, precious)
     index.json     everything the app has discovered and analysed (rebuildable)
     config.json    your API key (private, mode 600)
     backups/       rolling daily backups of profile.json + one before every
                    data-format upgrade
+  With several users, each gets their own folder under users/.
 
-Security: it only listens on 127.0.0.1, only serves the app's own folders, and
-its /api endpoints require a custom header plus a matching Host/Origin, so a
-random website you have open can't read your API key or overwrite your data.
+SETTINGS (environment variables; every one has a command-line flag too)
+  UNFURL_HOST             address to listen on          (default 127.0.0.1 = this computer only)
+  UNFURL_PORT             port                          (default 8765)
+  UNFURL_DATA             data folder
+  UNFURL_ALLOWED_HOSTS    comma-separated names people use to reach it, e.g. unfurl.internal,10.0.0.5
+  UNFURL_AUTH             "user:password": require a login (HTTP Basic)
+  UNFURL_USERS_FILE       file with one "name:password" per line (several users, each with their own library)
+  UNFURL_TRUST_PROXY_USER header (e.g. X-Forwarded-User) in which your login proxy / SSO puts the user's name
+  UNFURL_YOUTUBE_KEY      a YouTube Data API key kept ON THE SERVER; browsers never see it
+  UNFURL_YOUTUBE_KEY_FILE same, read from a file
+  UNFURL_USER_DAILY_UNITS per-user daily cap on the shared key, in quota units (default 3000)
+  UNFURL_BUILD            a label for this build (default: the git commit)
+  UNFURL_POLL_SECONDS     how often open pages check for a new version (default 60)
+  Passwords may be plain text or hashed: run  python3 serve.py --hash-password
+
+SECURITY
+  By default it only listens on this computer. To listen on the network you must
+  turn on a login (or a trusted login proxy): otherwise it refuses to start.
+  Pages must be reached through a name in UNFURL_ALLOWED_HOSTS (DNS-rebinding
+  protection), /api requires a custom header, other websites cannot talk to it,
+  and only the app's own files are served.
 """
 import argparse
+import base64
+import getpass
+import hashlib
+import hmac
+import http.client
+import ipaddress
 import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, parse_qsl, urlencode
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
 DAILY_BACKUPS_KEPT = 30
 FILES = {"/api/profile": "profile.json", "/api/index": "index.json", "/api/config": "config.json"}
 BACKUP_NAME = re.compile(r"^profile-[A-Za-z0-9._-]+\.json$")
+YT_UPSTREAM = "https://www.googleapis.com/youtube/v3"
+YT_COST = {"search": 100, "videos": 1, "commentThreads": 1, "channels": 1, "playlistItems": 1, "playlists": 1}
+LOGIN_FAILS_BEFORE_LOCK = 5
+LOGIN_LOCK_SECONDS = 60
 
 mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
@@ -59,7 +97,35 @@ mimetypes.add_type("image/svg+xml", ".svg")
 write_lock = threading.Lock()
 
 
-# ---------------------------------------------------------------- storage helpers
+# ---------------------------------------------------------------- configuration
+
+class Config:
+    """Everything the server needs to know, gathered in one place (and testable)."""
+
+    def __init__(self):
+        self.host = "127.0.0.1"
+        self.port = 8765
+        self.data_dir = None            # Path
+        self.legacy_dir = ROOT / "userdata"
+        self.allowed_hosts = set()      # extra host NAMES (no ports) people may use to reach us
+        self.users = {}                 # name -> password spec ("" = no login configured)
+        self.trust_proxy_user = None    # header carrying the user's name from a login proxy
+        self.proxy_nets = []            # who may act as that proxy (and tell us a visitor's real address)
+        self.yt_key = ""
+        self.yt_upstream = YT_UPSTREAM
+        self.user_daily_units = 3000
+        self.build = ""
+        self.poll_seconds = 60
+        self.open_browser = True
+
+    @property
+    def per_user(self):
+        return bool(self.trust_proxy_user) or len(self.users) > 1
+
+    @property
+    def loopback_only(self):
+        return self.host in ("127.0.0.1", "localhost", "::1")
+
 
 def default_data_dir() -> Path:
     env = os.environ.get("UNFURL_DATA")
@@ -72,6 +138,112 @@ def default_data_dir() -> Path:
         return Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "Unfurl"
     return Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share") / "unfurl"
 
+
+def git_build() -> str:
+    """Which build this is (so open pages can tell when the server was updated): the BUILD file the
+    updater writes into every release, or else this checkout's git commit."""
+    try:
+        stamped = (ROOT / "BUILD").read_text("utf-8").strip()
+        if stamped:
+            return stamped[:40]
+    except OSError:
+        pass
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=5)
+        return out.stdout.strip() if out.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def read_users_file(path: str) -> dict:
+    users = {}
+    for line in Path(path).expanduser().read_text("utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or ":" not in line:
+            continue
+        name, spec = line.split(":", 1)
+        if name.strip() and spec:
+            users[name.strip()] = spec
+    return users
+
+
+def build_config(args, env) -> Config:
+    """Command-line flags win over environment variables, which win over defaults."""
+    c = Config()
+    pick = lambda flag, key, default=None: flag if flag not in (None, "") else env.get(key, default)  # noqa: E731
+    c.host = pick(args.host, "UNFURL_HOST", c.host)
+    c.port = int(pick(args.port, "UNFURL_PORT", c.port))
+    d = pick(args.data_dir, "UNFURL_DATA")
+    c.data_dir = (Path(d).expanduser() if d else default_data_dir()).resolve()
+    c.legacy_dir = Path(args.legacy_dir)
+    hosts = pick(",".join(args.allowed_host or []), "UNFURL_ALLOWED_HOSTS", "")
+    c.allowed_hosts = {h.strip().lower().split(":")[0] for h in hosts.split(",") if h.strip()}
+    uf = pick(args.users_file, "UNFURL_USERS_FILE")
+    if uf:
+        c.users.update(read_users_file(uf))
+    auth = env.get("UNFURL_AUTH", "")
+    if auth and ":" in auth:
+        name, spec = auth.split(":", 1)
+        c.users[name] = spec
+    c.trust_proxy_user = pick(args.trust_proxy_user, "UNFURL_TRUST_PROXY_USER") or None
+    c.proxy_nets = parse_nets(env.get("UNFURL_PROXY_IPS", "127.0.0.1,::1"))
+    kf = env.get("UNFURL_YOUTUBE_KEY_FILE")
+    c.yt_key = (Path(kf).expanduser().read_text("utf-8").strip() if kf else env.get("UNFURL_YOUTUBE_KEY", "")).strip()
+    c.yt_upstream = env.get("UNFURL_YT_UPSTREAM", YT_UPSTREAM).rstrip("/")
+    c.user_daily_units = int(env.get("UNFURL_USER_DAILY_UNITS", c.user_daily_units))
+    c.build = env.get("UNFURL_BUILD") or git_build()
+    c.poll_seconds = int(env.get("UNFURL_POLL_SECONDS", c.poll_seconds))
+    c.open_browser = not args.no_open
+    return c
+
+
+def parse_nets(text: str):
+    nets = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if part:
+            nets.append(ipaddress.ip_network(part, strict=False))
+    return nets
+
+
+def check_exposure(c: Config):
+    """Refuse the one dangerous combination: reachable from the network with no login at all."""
+    if not c.loopback_only and not c.users and not c.trust_proxy_user:
+        return (
+            f"Refusing to listen on {c.host} without a login: anyone who can reach this address could read and change "
+            "your data and use your YouTube key.\n"
+            "Set UNFURL_AUTH=name:password (or UNFURL_USERS_FILE, or UNFURL_TRUST_PROXY_USER if a login proxy sits in front), "
+            "or listen on 127.0.0.1 only."
+        )
+    return None
+
+
+# ---------------------------------------------------------------- passwords and logins
+
+def hash_password(password: str, iterations: int = 200_000) -> str:
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
+    return "pbkdf2_sha256${}${}${}".format(iterations, base64.b64encode(salt).decode(), base64.b64encode(dk).decode())
+
+
+def check_password(spec: str, given: str) -> bool:
+    """spec is either 'pbkdf2_sha256$iterations$salt$hash' or a plain password. Constant-time compare."""
+    if spec.startswith("pbkdf2_sha256$"):
+        try:
+            _, it, salt, want = spec.split("$")
+            dk = hashlib.pbkdf2_hmac("sha256", given.encode(), base64.b64decode(salt), int(it))
+            return hmac.compare_digest(dk, base64.b64decode(want))
+        except (ValueError, TypeError):
+            return False
+    return hmac.compare_digest(spec.encode(), given.encode())
+
+
+def safe_user_dir(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", name)[:64].strip(".")
+    return cleaned or "user"
+
+
+# ---------------------------------------------------------------- storage helpers
 
 def atomic_write(path: Path, raw: bytes, private: bool = False) -> None:
     """Write via a temp file + rename, so a crash can never leave half a file."""
@@ -168,16 +340,62 @@ def adopt_legacy_data(data_dir: Path, legacy_dir: Path) -> str:
     return f"Copied your existing data ({', '.join(copied)}) from {legacy_dir} (the originals were left in place)." if copied else ""
 
 
+# ---------------------------------------------------------------- shared-key YouTube proxy usage
+
+class UsageMeter:
+    """Per-user daily quota units spent through the server's shared YouTube key (YouTube's day is Pacific time).
+
+    Kept in <data dir>/usage.json so that restarting the server (every update does) can't hand out a fresh allowance."""
+
+    def __init__(self, path=None):
+        self.lock = threading.Lock()
+        self.path = path
+        self.day = self.today()
+        self.used = {}
+        if path and Path(path).exists():
+            try:
+                saved = json.loads(Path(path).read_text("utf-8"))
+                if saved.get("day") == self.day:
+                    self.used = {str(k): int(v) for k, v in saved.get("used", {}).items()}
+            except (ValueError, OSError, AttributeError, TypeError):
+                pass  # a damaged counter file just starts the day's count again
+
+    @staticmethod
+    def today():
+        return (datetime.now(timezone.utc) - timedelta(hours=8)).date().isoformat()
+
+    def charge(self, user, units, cap):
+        with self.lock:
+            if self.day != self.today():
+                self.day, self.used = self.today(), {}
+            key = user or ""
+            if self.used.get(key, 0) + units > cap:
+                return False
+            self.used[key] = self.used.get(key, 0) + units
+            if self.path:
+                try:
+                    atomic_write(Path(self.path), json.dumps({"day": self.day, "used": self.used}).encode())
+                except OSError:
+                    pass  # counting is best effort; never fail a request over it
+            return True
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Handler(SimpleHTTPRequestHandler):
-    data_dir: Path
-    port: int
+    cfg: Config
+    usage = UsageMeter()   # replaced in main() with one that lives in the data folder
+    failures = {}   # ip -> [count, locked_until]
 
     def __init__(self, *args, **kwargs):
+        self.user = None
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
+    quiet = False
+
     def log_message(self, fmt, *args):  # quieter logs: skip the app's constant /api polling
+        if self.quiet:
+            return
         line = fmt % args
         if "/api/" not in line:
             sys.stderr.write("  %s\n" % line)
@@ -192,15 +410,106 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _api_allowed(self):
-        """Reject anything that isn't our own page talking to us."""
-        host = self.headers.get("Host", "")
-        if host not in (f"localhost:{self.port}", f"127.0.0.1:{self.port}"):
-            return False  # DNS-rebinding protection
-        origin = self.headers.get("Origin")
-        if origin and origin not in (f"http://localhost:{self.port}", f"http://127.0.0.1:{self.port}"):
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")  # YouTube embeds need the referrer
+        super().end_headers()
+
+    # ---- who is this, and are they allowed?
+    def _from_proxy(self) -> bool:
+        try:
+            ip = ipaddress.ip_address(self.client_address[0].split("%")[0])
+        except ValueError:
             return False
-        return self.headers.get("X-Unfurl") == "1"  # forces a CORS preflight for other sites, which we never answer
+        return any(ip in n for n in self.cfg.proxy_nets)
+
+    def _visitor_ip(self) -> str:
+        """The address to count login failures against: the real visitor when a proxy we trust tells us who it is."""
+        peer = self.client_address[0]
+        fwd = self.headers.get("X-Forwarded-For")
+        if fwd and self._from_proxy():
+            return fwd.split(",")[-1].strip() or peer  # the rightmost entry is the one OUR proxy appended
+        return peer
+
+    def _challenge(self, status=HTTPStatus.UNAUTHORIZED, message="Login required"):
+        body = message.encode()
+        self.send_response(status)
+        if status == HTTPStatus.UNAUTHORIZED:
+            self.send_header("WWW-Authenticate", 'Basic realm="Unfurl", charset="UTF-8"')
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _authenticate(self) -> bool:
+        """Sets self.user. Returns False (after answering) if the request may not continue."""
+        c = self.cfg
+        if c.trust_proxy_user:
+            if not self._from_proxy():  # a header anyone could forge is worthless unless it came from the proxy itself
+                self._challenge(HTTPStatus.FORBIDDEN, "Reach this server through its login proxy.")
+                return False
+            name = (self.headers.get(c.trust_proxy_user) or "").strip()
+            if not name:
+                self._challenge(HTTPStatus.UNAUTHORIZED, "No user identified by the login proxy.")
+                return False
+            self.user = name
+            return True
+        if not c.users:
+            return True
+        ip = self._visitor_ip()
+        now = time.time()
+        if len(self.failures) > 500:  # don't let a scan grow this forever
+            for k in [k for k, v in self.failures.items() if v[1] < now and now - v[2] > LOGIN_LOCK_SECONDS]:
+                del self.failures[k]
+        fails = self.failures.get(ip, [0, 0.0, now])
+        if fails[1] <= now and now - fails[2] > LOGIN_LOCK_SECONDS:  # an old streak of mistakes doesn't count against you
+            fails = [0, 0.0, now]
+        if fails[1] > now:
+            self._challenge(HTTPStatus.TOO_MANY_REQUESTS, "Too many failed logins. Try again in a minute.")
+            return False
+        header = self.headers.get("Authorization", "")
+        if header.startswith("Basic "):
+            try:
+                name, _, given = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+            except (ValueError, UnicodeDecodeError):
+                name, given = "", ""
+            spec = c.users.get(name)
+            # compare even for unknown names, so response time doesn't reveal which names exist
+            ok = check_password(spec if spec is not None else "x" * 16, given) and spec is not None
+            if ok:
+                self.failures.pop(ip, None)
+                self.user = name
+                return True
+            count = fails[0] + 1
+            self.failures[ip] = [count, now + LOGIN_LOCK_SECONDS if count >= LOGIN_FAILS_BEFORE_LOCK else 0.0, fails[2]]
+        self._challenge()
+        return False
+
+    def _host_ok(self) -> bool:
+        """DNS-rebinding protection: only the names we expect may be used to reach the API."""
+        names = {"localhost", "127.0.0.1", "[::1]"} | self.cfg.allowed_hosts
+        host = (self.headers.get("Host") or "").lower()
+        hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+        if hostname not in names:
+            return False
+        origin = self.headers.get("Origin")
+        if origin:
+            o = urlsplit(origin)
+            oh = f"[{o.hostname}]" if o.hostname and ":" in o.hostname else (o.hostname or "")
+            if oh.lower() not in names:
+                return False
+        return True
+
+    def _api_allowed(self) -> bool:
+        return self._host_ok() and self.headers.get("X-Unfurl") == "1"  # the header forces a CORS preflight for other sites, which we never answer
+
+    @property
+    def data_dir(self) -> Path:
+        c = self.cfg
+        return c.data_dir / "users" / safe_user_dir(self.user) if (c.per_user and self.user) else c.data_dir
 
     def _body(self):
         length = int(self.headers.get("Content-Length") or 0)
@@ -211,6 +520,10 @@ class Handler(SimpleHTTPRequestHandler):
     # ---- routing
     def do_GET(self):
         path = urlsplit(self.path).path
+        if path == "/healthz":  # for the updater and container health checks: no login, nothing private
+            return self._json(HTTPStatus.OK, {"ok": True, "app": "unfurl", "version": APP_VERSION, "build": self.cfg.build})
+        if not self._authenticate():
+            return
         if path.startswith("/api/"):
             return self._api("GET", path)
         parts = [p for p in path.split("/") if p]
@@ -221,18 +534,24 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_HEAD(self):
+        if not self._authenticate():
+            return
         parts = [p for p in urlsplit(self.path).path.split("/") if p]
         if parts and parts[0] not in PUBLIC:
             return self.send_error(HTTPStatus.NOT_FOUND)
         return super().do_HEAD()
 
     def do_PUT(self):
+        if not self._authenticate():
+            return
         path = urlsplit(self.path).path
         if path.startswith("/api/"):
             return self._api("PUT", path)
         self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
 
     def do_POST(self):
+        if not self._authenticate():
+            return
         path = urlsplit(self.path).path
         if path.startswith("/api/"):
             return self._api("POST", path)
@@ -245,18 +564,24 @@ class Handler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):  # no CORS: deliberately refuse preflights
         self.send_error(HTTPStatus.METHOD_NOT_ALLOWED)
 
-    def end_headers(self):
-        self.send_header("Cache-Control", "no-store")
-        super().end_headers()
-
     # ---- API
     def _api(self, method, path):
         if not self._api_allowed():
             return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
-        d = self.data_dir
+        c, d = self.cfg, self.data_dir
         if path == "/api/ping" and method == "GET":
-            return self._json(HTTPStatus.OK, {"app": "unfurl", "version": APP_VERSION, "dataDir": str(d)})
+            info = {
+                "app": "unfurl", "version": APP_VERSION, "build": c.build, "pollSeconds": c.poll_seconds,
+                "ytProxy": bool(c.yt_key), "ytDailyUnits": c.user_daily_units if c.yt_key else 0, "user": self.user, "multiUser": c.per_user,
+            }
+            if not (c.per_user or c.users or c.trust_proxy_user):  # server paths are for the owner at their own computer, not for logged-in visitors
+                info["dataDir"] = str(d)
+            return self._json(HTTPStatus.OK, info)
 
+        if path.startswith("/api/yt/") and method == "GET":
+            return self._youtube_proxy(path[len("/api/yt/"):])
+
+        d.mkdir(parents=True, exist_ok=True)
         if path == "/api/legacy" and method == "GET":  # a version-1 state.json, if one is waiting to be migrated
             f = d / "state.json"
             try:
@@ -337,35 +662,165 @@ class Handler(SimpleHTTPRequestHandler):
             atomic_write(target, raw, private=(name == "config.json"))
         return self._json(HTTPStatus.OK, {"ok": True})
 
+    def _youtube_proxy(self, endpoint):
+        """Forward a YouTube Data API call using the server's key, so browsers never hold it."""
+        c = self.cfg
+        if not c.yt_key:
+            return self._json(HTTPStatus.NOT_FOUND, {"error": "this server has no shared YouTube key"})
+        if endpoint not in YT_COST:
+            return self._json(HTTPStatus.NOT_FOUND, {"error": "unknown YouTube endpoint"})
+        parsed = urlsplit(self.path)
+        if len(parsed.query) > 4000:
+            return self._json(HTTPStatus.REQUEST_URI_TOO_LONG, {"error": "query too long"})
+        params = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=False) if k != "key"]
+        if not self.usage.charge(self.user, YT_COST[endpoint], c.user_daily_units):
+            return self._json(HTTPStatus.FORBIDDEN, {"error": {
+                "code": 403, "message": "Your share of today's YouTube allowance on this server is used up.",
+                "errors": [{"reason": "quotaExceeded", "domain": "unfurl"}]}})
+        url = f"{c.yt_upstream}/{endpoint}?{urlencode(params + [('key', c.yt_key)])}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": f"Unfurl/{APP_VERSION}", "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                body, status = resp.read(), resp.status
+        except urllib.error.HTTPError as e:   # Google's own error body (quota, bad request ...) passes straight through
+            body, status = e.read(), e.code
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": {"code": 502, "message": f"The server couldn't reach YouTube ({e})."}})
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
-def main():
+
+# ---------------------------------------------------------------- self-test (used by the updater before it switches versions)
+
+def selftest() -> int:
+    """Start a throwaway server on this code and check it really serves the app and stores data."""
+    problems = []
+    tmp = Path(tempfile.mkdtemp(prefix="unfurl-selftest-"))
+    c = Config()
+    c.data_dir = tmp
+    c.legacy_dir = tmp / "none"
+    c.build = "selftest"
+    Handler.cfg = c
+    Handler.quiet = True
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    c.port = httpd.server_address[1]
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    def get(path, method="GET", body=None, api=False):
+        conn = http.client.HTTPConnection("127.0.0.1", c.port, timeout=10)
+        headers = {"X-Unfurl": "1", "Content-Type": "application/json"} if api else {}
+        conn.request(method, path, body=body, headers=headers)
+        r = conn.getresponse()
+        data = r.read()
+        conn.close()
+        return r.status, r.getheader("Content-Type", ""), data
+
+    def expect(cond, what):
+        if not cond:
+            problems.append(what)
+
+    try:
+        st, ct, body = get("/")
+        expect(st == 200 and b"<title>" in body, f"/ should serve index.html (got {st})")
+        refs = re.findall(rb'(?:src|href)="((?:js|css)/[^"]+|favicon\.svg)"', body)
+        expect(len(refs) >= 2, "index.html should reference its script and stylesheet")
+        for ref in refs:
+            st, ct, _ = get("/" + ref.decode())
+            expect(st == 200, f"{ref.decode()} should be served (got {st})")
+        for must in ("/js/app.js", "/js/ctx.js", "/js/state.js", "/css/style.css", "/data/suggestions.js"):
+            st, ct, _ = get(must)
+            expect(st == 200, f"{must} should be served (got {st})")
+        st, ct, _ = get("/js/app.js")
+        expect("javascript" in ct, f"JavaScript must be served as a script, not {ct!r}")
+        for hidden in ("/serve.py", "/.git/config", "/deploy/update.sh", "/BUILD", "/tests/unit/server.test.js"):
+            st, _, _ = get(hidden)
+            expect(st == 404, f"{hidden} must not be served (got {st})")
+        st, _, body = get("/healthz")
+        expect(st == 200 and json.loads(body).get("ok") is True, "/healthz should answer without a login")
+        st, _, body = get("/api/ping", api=True)
+        expect(st == 200 and json.loads(body).get("app") == "unfurl", "ping should identify the app")
+        st, _, _ = get("/api/profile")
+        expect(st == 403, "the API must refuse requests without the app's header")
+        st, _, _ = get("/api/profile", method="PUT", body=json.dumps({"schema": 2, "probe": True}), api=True)
+        expect(st == 200, f"saving data should work (got {st})")
+        st, _, body = get("/api/profile", api=True)
+        expect(st == 200 and json.loads(body)["data"]["probe"] is True, "saved data should read back")
+    except Exception as e:   # noqa: BLE001 - any failure means the build is not fit to deploy
+        problems.append(f"unexpected error: {e!r}")
+    finally:
+        httpd.shutdown()
+        shutil.rmtree(tmp, ignore_errors=True)
+    for p in problems:
+        print(f"selftest FAILED: {p}", file=sys.stderr)
+    if not problems:
+        print(f"selftest ok (Unfurl {APP_VERSION})")
+    return 1 if problems else 0
+
+
+# ---------------------------------------------------------------- main
+
+def main(argv=None, env=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--host", default=None, help="address to listen on (default 127.0.0.1)")
+    ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--data-dir", default=None, help="where to keep your data (default: your per-user data folder)")
+    ap.add_argument("--allowed-host", action="append", help="a name people use to reach this server (repeatable)")
+    ap.add_argument("--users-file", default=None, help="file with one name:password per line")
+    ap.add_argument("--trust-proxy-user", default=None, help="header in which a login proxy passes the user's name")
     ap.add_argument("--legacy-dir", default=str(ROOT / "userdata"), help=argparse.SUPPRESS)
     ap.add_argument("--no-open", action="store_true", help="don't open a browser tab")
-    args = ap.parse_args()
+    ap.add_argument("--selftest", action="store_true", help="check this copy of the app works, then exit")
+    ap.add_argument("--hash-password", action="store_true", help="print a hashed password for UNFURL_AUTH / the users file")
+    args = ap.parse_args(argv)
+    env = os.environ if env is None else env
 
-    data_dir = (Path(args.data_dir).expanduser() if args.data_dir else default_data_dir()).resolve()
+    if args.selftest:
+        sys.exit(selftest())
+    if args.hash_password:
+        pw = getpass.getpass("Password to hash: ")
+        if pw != getpass.getpass("Again: "):
+            sys.exit("The two passwords differ.")
+        print(hash_password(pw))
+        return
+
+    c = build_config(args, env)
+    problem = check_exposure(c)
+    if problem:
+        sys.exit(problem)
     try:
-        data_dir.mkdir(parents=True, exist_ok=True)
+        c.data_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        sys.exit(f"Couldn't create the data folder {data_dir}: {e}\nPick another with: python3 serve.py --data-dir /some/folder")
-    note = adopt_legacy_data(data_dir, Path(args.legacy_dir))
+        sys.exit(f"Couldn't create the data folder {c.data_dir}: {e}\nPick another with: python3 serve.py --data-dir /some/folder")
+    note = "" if c.per_user else adopt_legacy_data(c.data_dir, c.legacy_dir)
 
-    Handler.data_dir = data_dir
-    Handler.port = args.port
+    Handler.cfg = c
+    Handler.usage = UsageMeter(c.data_dir / "usage.json")
     try:
-        httpd = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+        httpd = ThreadingHTTPServer((c.host, c.port), Handler)
     except OSError as e:
-        sys.exit(f"Couldn't start on port {args.port}: {e}\nIs Unfurl already running? Try --port {args.port + 1}.")
+        sys.exit(f"Couldn't start on port {c.port}: {e}\nIs Unfurl already running? Try --port {c.port + 1}.")
 
-    url = f"http://localhost:{args.port}/"
-    print(f"Unfurl {APP_VERSION} is running at {url}\nYour data is saved in {data_dir}\nPress Ctrl+C to stop.")
+    shown = "localhost" if c.loopback_only else (sorted(c.allowed_hosts)[0] if c.allowed_hosts else c.host)
+    url = f"http://{shown}:{c.port}/"
+    print(f"Unfurl {APP_VERSION}{f' ({c.build})' if c.build else ''} is running at {url}")
+    print(f"Your data is saved in {c.data_dir}{' (one folder per user)' if c.per_user else ''}")
+    if not c.loopback_only:
+        print(f"Listening on {c.host}; {'a login is required' if (c.users or c.trust_proxy_user) else 'NO LOGIN'}; "
+              f"reachable as: {', '.join(sorted(c.allowed_hosts)) or '(set UNFURL_ALLOWED_HOSTS to the name people will type)'}")
+    if c.yt_key:
+        print(f"A shared YouTube key is configured (each user is capped at {c.user_daily_units} units a day).")
     if note:
         print(note)
-    if not args.no_open:
+    print("Press Ctrl+C to stop.")
+    if c.open_browser and c.loopback_only:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
+
+    def stop(*_):
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, stop)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

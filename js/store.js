@@ -10,10 +10,13 @@ import { loadState, splitState, emptyState } from './state.js';
 const HEADERS = { 'X-Unfurl': '1' }; // custom header => other websites can't talk to the local server
 
 export class Store {
-  constructor({ fetchFn = (...a) => fetch(...a), storage = globalThis.localStorage } = {}) {
-    this.fetchFn = fetchFn; this.storage = storage;
+  constructor({ fetchFn = (...a) => fetch(...a), storage = globalThis.localStorage, retryBaseMs = 1000 } = {}) {
+    this.fetchFn = fetchFn; this.storage = storage; this.retryBaseMs = retryBaseMs;
+    this.retryTimer = null; this.attempts = 0;
+    this.onSaveState = () => {};   // called with (ok:boolean, message) when saving to the server starts failing or recovers
+    this.saveOk = true;
     this.mode = 'local';
-    this.server = { version: null, dataDir: null };
+    this.server = { version: null, dataDir: null, build: '', pollSeconds: 0, ytProxy: false, ytDailyUnits: 0, user: null, multiUser: false };
     this.state = emptyState();
     this.config = { apiKey: '' };
     this.readOnly = false;       // data from a newer app version: never write
@@ -29,7 +32,10 @@ export class Store {
     try {
       const res = await this.fetchFn('/api/ping', { headers: HEADERS });
       const j = res.ok ? await res.json() : null;
-      if (j?.app === 'unfurl') { this.mode = 'server'; this.server = { version: j.version, dataDir: j.dataDir }; }
+      if (j?.app === 'unfurl') {
+        this.mode = 'server';
+        this.server = { version: j.version, dataDir: j.dataDir ?? null, build: j.build ?? '', pollSeconds: j.pollSeconds ?? 0, ytProxy: !!j.ytProxy, ytDailyUnits: j.ytDailyUnits ?? 0, user: j.user ?? null, multiUser: !!j.multiUser };
+      }
     } catch { /* no server: stay local */ }
 
     let profile, index, legacy = null, config, unreadable = false;
@@ -90,32 +96,71 @@ export class Store {
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.flush(), 400);
   }
+  /** Write whatever changed. Never throws; if the server couldn't be reached it keeps retrying in the background. */
   flush() {
     clearTimeout(this.timer);
-    if (this.readOnly) return Promise.resolve();
-    this.chain = this.chain.then(() => this.#flushNow()).catch(() => {});
+    if (this.readOnly) return Promise.resolve(true);
+    this.chain = this.chain.then(async () => {
+      const saved = await this.#flushNow();
+      if (saved) { this.attempts = 0; clearTimeout(this.retryTimer); this.retryTimer = null; } else this.#retryLater();
+      return saved;
+    }).catch(() => { this.#retryLater(); return false; });
     return this.chain;
   }
 
+  /** A server restart (every deployed update) can swallow a save. Try again soon, a little slower each time. */
+  #retryLater() {
+    if (this.retryTimer || this.mode !== 'server') return;
+    const delay = Math.min(30000, this.retryBaseMs * 2 ** Math.min(this.attempts++, 5));
+    this.retryTimer = setTimeout(() => { this.retryTimer = null; this.flush(); }, delay);
+    this.retryTimer.unref?.();
+  }
+
+  /** Wait (up to maxMs) until everything is safely on the server. Resolves true when nothing is left unsaved. */
+  async flushReliably(maxMs = 8000) {
+    const end = Date.now() + maxMs;
+    for (;;) {
+      if (await this.flush()) return true;
+      if (Date.now() >= end) return false;
+      await new Promise((r) => setTimeout(r, Math.min(400, Math.max(50, this.retryBaseMs / 2))));
+    }
+  }
+
+  /** @returns {Promise<boolean>} true if everything that changed is now stored */
   async #flushNow(force = false) {
     const { profile, index } = splitState(this.state);
     const docs = { profile: JSON.stringify(profile), index: JSON.stringify(index) };
-    if (force || docs.profile !== this.written.profile) { await this.#put('/api/profile', 'unfurl.profile', docs.profile); this.written.profile = docs.profile; }
-    if (force || docs.index !== this.written.index) { await this.#put('/api/index', 'unfurl.index', docs.index, true); this.written.index = docs.index; }
+    let all = true;
+    if (force || docs.profile !== this.written.profile) { if (await this.#put('/api/profile', 'unfurl.profile', docs.profile)) this.written.profile = docs.profile; else all = false; }
+    if (force || docs.index !== this.written.index) { if (await this.#put('/api/index', 'unfurl.index', docs.index, true)) this.written.index = docs.index; else all = false; }
+    return all;
   }
 
   async saveConfig() { await this.#put('/api/config', 'unfurl.config', JSON.stringify(this.config)); }
 
+  #saveState(ok, message = '') {
+    if (ok === this.saveOk) return;
+    this.saveOk = ok;
+    try { this.onSaveState(ok, message); } catch { /* a UI hook must never break saving */ }
+  }
+
+  /** @returns {Promise<boolean>} whether it is now safely stored */
   async #put(path, localKey, text, trimmable = false) {
     if (this.mode === 'server') {
       try {
         const res = await this.fetchFn(path, { method: 'PUT', headers: { ...HEADERS, 'Content-Type': 'application/json' }, body: text });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         this.lastError = null;
-        return;
-      } catch (e) { this.lastError = `Couldn’t save to disk (${e.message}). Your changes are kept in this browser for now.`; }
+        this.#saveState(true);
+        return true;
+      } catch (e) {
+        // Not stored: report that (so it is retried) instead of pretending. The page still holds the data.
+        this.lastError = `Couldn’t save to the server just now (${e.message}). I’ll keep trying; please keep this page open.`;
+        this.#saveState(false, this.lastError);
+        return false;
+      }
     }
-    this.#putLocal(localKey, text, trimmable);
+    return this.#putLocal(localKey, text, trimmable);
   }
 
   /** Browser storage is small (~5 MB): if the index doesn't fit, drop the bulkiest raw extras first. */
@@ -130,9 +175,20 @@ export class Store {
       attempts.push(JSON.stringify(doc));
     }
     for (const t of attempts) {
-      try { this.storage?.setItem(key, t); if (!this.lastError?.startsWith('Couldn’t save to disk')) this.lastError = null; return; } catch { /* too big: try smaller */ }
+      try { this.storage?.setItem(key, t); this.lastError = null; return true; } catch { /* too big: try smaller */ }
     }
     this.lastError = 'This browser has no room left to save your data. Run serve.py (data goes to files), or export a backup from Settings.';
+    return false;
+  }
+
+  /** What build the server is on right now ('' if unknown); used to notice when an update has been deployed. */
+  async currentBuild() {
+    if (this.mode !== 'server') return null;
+    try {
+      const res = await this.fetchFn('/api/ping', { headers: HEADERS });
+      const j = res.ok ? await res.json() : null;
+      return j?.app === 'unfurl' ? { build: j.build ?? '', version: j.version } : null;
+    } catch { return null; }   // server restarting mid-update: try again next time
   }
 
   // ---- backups (server mode only: the server owns the backup folder)
@@ -151,6 +207,6 @@ export class Store {
   async replace(raw) {
     this.state = loadState(raw ?? {}).state;
     this.readOnly = false;
-    await this.#flushNow(true);
+    return this.#flushNow(true);
   }
 }

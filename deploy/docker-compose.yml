@@ -1,0 +1,23 @@
+# docker compose -f deploy/docker-compose.yml up -d --build
+# 1. cp deploy/unfurl.env.example deploy/unfurl.env   and fill it in (login, allowed host, repository)
+# 2. start it. Updates then arrive by themselves from UNFURL_REPO_URL / UNFURL_BRANCH — no rebuilds.
+name: unfurl
+services:
+  unfurl:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: unfurl
+    restart: unless-stopped
+    env_file: unfurl.env
+    environment:
+      UNFURL_HOST: 0.0.0.0
+      UNFURL_PORT: "8765"
+    ports:
+      - "8765:8765"        # use "127.0.0.1:8765:8765" if a reverse proxy on this machine fronts it
+    volumes:
+      - unfurl-app:/srv/unfurl     # downloaded versions (safe to delete: it re-downloads)
+      - unfurl-data:/data          # YOUR DATA — back this up
+volumes:
+  unfurl-app:
+  unfurl-data:

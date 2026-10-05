@@ -5,7 +5,7 @@
 
 import {
   YouTubeClient, discover, verifyVideos, spendQuota, quotaUsed, estimateRunCost, effortFor, parseSourceInput, importSource, refreshFollowed,
-  fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA,
+  fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA, PROXY_BASE,
 } from './youtube.js';
 import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
 import { applyDiscovery, addManualVideo, importRecords, followChannel } from './state.js';
@@ -35,16 +35,25 @@ export const ctx = {
     verifiedTried: false,
   },
   get state() { return this.store.state; },
-  get hasKey() { return !!this.store.config.apiKey; },
+  /** True when searching YouTube is possible: either the person's own key, or one the server keeps for everybody. */
+  get hasKey() { return !!this.store.config.apiKey || !!this.store.server.ytProxy; },
+  /** A key the person pasted themselves wins over the server's shared one (it has its own, bigger allowance). */
+  get usesServerKey() { return !this.store.config.apiKey && !!this.store.server.ytProxy; },
 };
 
-export const client = () => (ctx.hasKey
-  ? new YouTubeClient({ key: ctx.store.config.apiKey, onSpend: (u) => { spendQuota(ctx.state, u); ctx.store.save(); } })
-  : null);
+const withAppHeader = (url) => fetch(url, { headers: { 'X-Unfurl': '1' } });
+
+export const client = () => {
+  const onSpend = (u) => { spendQuota(ctx.state, u); ctx.store.save(); };
+  if (ctx.store.config.apiKey) return new YouTubeClient({ key: ctx.store.config.apiKey, onSpend });
+  if (ctx.store.server.ytProxy) return new YouTubeClient({ key: '', base: PROXY_BASE, fetchFn: withAppHeader, onSpend });
+  return null;
+};
 
 export const quotaInfo = () => {
   const used = quotaUsed(ctx.state);
-  return { used, limit: DAILY_QUOTA, left: DAILY_QUOTA - used, run: estimateRunCost(ctx.state.prefs.thoroughness), effort: effortFor(ctx.state.prefs.thoroughness) };
+  const limit = ctx.usesServerKey && ctx.store.server.ytDailyUnits ? ctx.store.server.ytDailyUnits : DAILY_QUOTA;
+  return { used, limit, left: limit - used, run: estimateRunCost(ctx.state.prefs.thoroughness), effort: effortFor(ctx.state.prefs.thoroughness) };
 };
 
 /** Options for one discovery run, capped so it can never spend more than what is left of today's allowance. */

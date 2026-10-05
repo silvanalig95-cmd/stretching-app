@@ -10,6 +10,22 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.3.0
+
+**Searches look much further.**
+- A search is now a wide net run in rounds: several differently-worded queries, deeper result pages when results are mostly familiar, new wording learned from the best hits, until enough strong fits are found or the run's unit budget is spent. 50 results per page (was 10).
+- **Thoroughness** setting (Quick / Balanced / Thorough / Exhaustive) with a stated cost; a run can never spend more than what is left of the day's allowance. A short report says what was searched, how many videos were weighed, and why it stopped.
+- Comments are read for the best candidates (up to 60), so the muscle evidence behind the top picks is solid.
+
+**Sharper keyword search.**
+- Phrases, `-exclusions`, field filters (`teacher:` `pose:` `tag:` `for:` `title:` `len:`), field-weighted ranking (BM25F), typo tolerance, synonyms and word stems, "did you mean", suggestions while typing, and an "understood as" line. Saved searches.
+
+**Combos.** When you pick several muscle areas and no single video covers them within your time, it assembles 2–3 short ones that do, and plays them in sequence.
+
+**Hosting.** `serve.py` can now run as a shared, internal website: listen address and port, allowed host names, logins (one shared or several, hashed passwords, brute-force lock-out, or a trusted login proxy), a separate library per person, an optional server-held YouTube key with a per-person daily cap, security headers, `/healthz`, and a build id so open pages can offer a reload. It refuses to listen on a network without a login. New `deploy/` kit: **self-updating from a git branch** with self-test, health check and automatic rollback; systemd, Docker and installer. See `deploy/README.md`. Running it on your own computer works exactly as before.
+
+**Data format is unchanged** (still version 2): nothing to migrate when you update from 0.2.
+
 ## 0.2.0
 
 **Your library is now yours.**

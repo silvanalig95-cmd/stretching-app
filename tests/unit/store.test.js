@@ -185,3 +185,38 @@ test('SAFETY: damaged browser-storage data is set aside, not overwritten', async
   assert.ok(store.notes.some((n) => /damaged/.test(n)), 'user told');
   assert.deepEqual(store.state.library, {});
 });
+
+test('a save that fails because the server is restarting is retried, not forgotten', async () => {
+  const srv = fakeServer();
+  let down = false;
+  const flaky = async (url, opts) => { if (down && opts?.method === 'PUT') throw new Error('connection refused'); return srv.fetchFn(url, opts); };
+  const store = await new Store({ fetchFn: flaky, retryBaseMs: 20 }).init();
+  const states = [];
+  store.onSaveState = (ok) => states.push(ok);
+  addToLibrary(store.state, 'abc12345678');
+  down = true;
+  assert.equal(await store.flush(), false, 'reports that it did not get stored');
+  assert.match(store.lastError, /Couldn’t save to the server/);
+  assert.equal(srv.db.profile.library?.abc12345678, undefined, 'nothing reached the server yet');
+  assert.deepEqual(states, [false], 'the page is told, once');
+  down = false;
+  for (let i = 0; i < 50 && !srv.db.profile.library?.abc12345678; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.ok(srv.db.profile.library.abc12345678, 'the background retry stored it once the server was back');
+  assert.equal(store.lastError, null);
+  assert.deepEqual(states, [false, true], 'and the page is told it recovered');
+});
+
+test('flushReliably waits out a short outage, and says false if the server never comes back', async () => {
+  const srv = fakeServer();
+  let failures = 3;
+  const flaky = async (url, opts) => { if (opts?.method === 'PUT' && failures > 0) { failures--; throw new Error('down'); } return srv.fetchFn(url, opts); };
+  const store = await new Store({ fetchFn: flaky, retryBaseMs: 20 }).init();
+  addToLibrary(store.state, 'def12345678');
+  assert.equal(await store.flushReliably(3000), true);
+  assert.ok(srv.db.profile.library.def12345678);
+  const dead = await new Store({ fetchFn: srv.fetchFn, retryBaseMs: 20 }).init();
+  dead.fetchFn = async () => { throw new Error('gone'); };
+  addToLibrary(dead.state, 'ghi12345678');
+  assert.equal(await dead.flushReliably(150), false);
+  clearTimeout(dead.retryTimer);
+});

@@ -4,3 +4,6 @@ node_modules/
 .DS_Store
 __pycache__/
 tests/e2e/shots/
+
+# server settings with passwords in them
+deploy/unfurl.env

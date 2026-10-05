@@ -11,6 +11,7 @@ import { SearchIndex } from './index.js';
 import { normalize } from './lexicon.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
+export const PROXY_BASE = '/api/yt';   // the Unfurl server, when it keeps the YouTube key itself (see serve.py)
 export const COST = { search: 100, videos: 1, commentThreads: 1, channels: 1, playlistItems: 1, playlists: 1 };
 export const DAILY_QUOTA = 10000;
 
@@ -22,14 +23,17 @@ export class KeyError extends YouTubeError { constructor(m, o) { super(m, o); th
 export class CommentsDisabledError extends YouTubeError { constructor(m, o) { super(m, o); this.name = 'CommentsDisabledError'; } }
 
 /** Map a real YouTube API error body to something a person can act on. */
-export function toApiError(status, body) {
+export function toApiError(status, body, viaServer = false) {
   const err = body?.error ?? {};
   const reason = err.errors?.[0]?.reason ?? '';
   const detail = err.details?.find((d) => d.reason)?.reason ?? '';
   const msg = err.message ?? `HTTP ${status}`;
   const o = { status, reason: detail || reason };
   if (['quotaExceeded', 'dailyLimitExceeded', 'rateLimitExceeded', 'userRateLimitExceeded'].includes(reason)) {
-    return new QuotaError('Today’s YouTube search allowance is used up. It resets at midnight Pacific time.', o);
+    return new QuotaError(viaServer && err.errors?.[0]?.domain === 'unfurl' ? `${msg} It resets at midnight Pacific time.` : 'Today’s YouTube search allowance is used up. It resets at midnight Pacific time.', o);
+  }
+  if (viaServer && (detail === 'API_KEY_INVALID' || detail === 'SERVICE_DISABLED' || reason === 'keyInvalid' || reason === 'accessNotConfigured')) {
+    return new KeyError('The YouTube key kept on this server isn’t working. Tell whoever runs the server, or paste a key of your own in Settings.', o);
   }
   if (['commentsDisabled', 'commentThreadNotFound'].includes(reason)) return new CommentsDisabledError('Comments are turned off for this video.', o);
   if (detail === 'API_KEY_INVALID' || reason === 'keyInvalid') return new KeyError('YouTube says this API key isn’t valid. Check it in Settings.', o);
@@ -48,16 +52,17 @@ export class YouTubeClient {
    */
   constructor({ key, base = API_BASE, fetchFn = (...a) => fetch(...a), onSpend = () => {} }) {
     this.key = key; this.base = base; this.fetchFn = fetchFn; this.onSpend = onSpend;
+    this.proxied = !key;   // no key of our own: the server adds its key (and enforces each person's daily share)
     this.spentUnits = 0;   // quota units this client has used (so a long search can respect a budget)
   }
 
   async call(endpoint, params) {
-    const url = new URL(`${this.base}/${endpoint}`);
+    const url = new URL(`${this.base}/${endpoint}`, globalThis.location?.href);   // a relative base (the server's proxy) needs the page address
     for (const [k, v] of Object.entries({ ...params, key: this.key })) if (v != null && v !== '') url.searchParams.set(k, v);
     let res;
-    try { res = await this.fetchFn(url.toString()); } catch (e) { throw new YouTubeError(`Couldn’t reach YouTube (${e.message}). Check your connection.`); }
+    try { res = await this.fetchFn(url.toString()); } catch (e) { throw new YouTubeError(`Couldn’t reach ${this.proxied ? 'the Unfurl server' : 'YouTube'} (${e.message}). Check your connection.`); }
     const body = await res.json().catch(() => null);
-    if (!res.ok) throw toApiError(res.status, body);
+    if (!res.ok) throw toApiError(res.status, body, this.proxied);
     const units = COST[endpoint] ?? 1;
     this.spentUnits += units;
     this.onSpend(units);

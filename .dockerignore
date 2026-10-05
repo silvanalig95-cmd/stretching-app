@@ -1,0 +1,7 @@
+.git
+node_modules
+tests
+userdata
+__pycache__
+deploy/unfurl.env
+*.md

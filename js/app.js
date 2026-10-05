@@ -31,6 +31,28 @@ function navigate(tab) {
   if (location.hash.slice(1) !== tab) location.hash = tab;
 }
 
+/** When the server is updated (a new build is deployed), say so and offer a reload; nothing is lost because everything is already saved. */
+function watchForUpdates(store) {
+  const seconds = store.server.pollSeconds;
+  if (store.mode !== 'server' || !seconds || !store.server.build) return;
+  const shown = { value: false };
+  const check = async () => {
+    if (shown.value || document.visibilityState === 'hidden') return;
+    const now = await store.currentBuild();
+    if (!now?.build || now.build === store.server.build) return;
+    shown.value = true;
+    document.getElementById('banner').append(h('p', { class: 'banner update', role: 'status', id: 'update-banner' },
+      `A new version of Unfurl is ready (${now.version}). `,
+      h('button', { class: 'link', type: 'button', id: 'update-reload', onclick: async () => {
+        if (!(await store.flushReliably())) { toast('The latest changes aren’t saved on the server yet, so I haven’t reloaded. Try again in a moment.', 'error'); return; }
+        location.reload();
+      } }, 'Reload to use it'),
+      ' — your data is already saved.'));
+  };
+  setInterval(check, seconds * 1000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+}
+
 async function main() {
   const store = await new Store().init();
   ctx.store = store;
@@ -46,7 +68,7 @@ async function main() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
 
   show(tabFromHash());
-  const where = store.mode === 'server' ? `Unfurl ${store.server.version}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
+  const where = store.mode === 'server' ? `Unfurl ${store.server.version}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
   document.getElementById('storage-note').textContent = where;
   if (store.readOnly) {
     document.getElementById('banner').replaceChildren(h('p', { class: 'banner', role: 'alert' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Your data is read-only.'));
@@ -54,6 +76,13 @@ async function main() {
     for (const note of store.notes) toast(note, 'success', 9000);   // upgrades and recoveries are said out loud, once
   }
   if (store.lastError) toast(store.lastError, 'error');
+  watchForUpdates(store);
+  store.onSaveState = (ok, message) => {
+    const banner = document.getElementById('banner');
+    banner.querySelector('#save-banner')?.remove();
+    if (!ok) banner.append(h('p', { class: 'banner', role: 'alert', id: 'save-banner' }, `${message} Nothing is lost while this page stays open.`));
+    else toast('Saved. The server is back.', 'success');
+  };
   window.__unfurl = Object.assign(ctx, { play, rankNow, enrichTop, findRoutine }); // handy for debugging in the console and for tests
 }
 

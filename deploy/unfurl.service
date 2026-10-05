@@ -1,0 +1,31 @@
+# systemd unit for Unfurl (install.sh fills in the @placeholders@ and puts this in /etc/systemd/system/).
+# run.sh is the whole service: it runs the server, restarts it if it stops, and applies updates from git.
+[Unit]
+Description=Unfurl (stretching and yoga routine finder)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@USER@
+EnvironmentFile=@ENVFILE@
+Environment=UNFURL_HOME=@HOME@
+Environment=UNFURL_DATA=@DATA@
+ExecStart=@HOME@/current/deploy/run.sh
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+# Containment: the app can write only to its own folders.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@HOME@ @DATA@
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

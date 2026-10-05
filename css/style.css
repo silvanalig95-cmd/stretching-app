@@ -236,6 +236,8 @@ details.panel > summary { cursor: pointer; font-weight: 600; }
 .backups li { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
 .banner { background: var(--danger-soft); color: var(--ink); border-left: 4px solid var(--danger); padding: .7rem 1rem; margin: 0; }
 #banner .banner { max-width: 1080px; margin: 12px auto 0; border-radius: 10px; }
+.banner.update { background: var(--accent-soft); border-left-color: var(--accent); }
+.banner.update .link { font-weight: 600; }
 
 .add-form.stack { display: block; margin: 8px 0; }
 

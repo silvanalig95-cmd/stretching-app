@@ -68,8 +68,8 @@ window.YT = { PlayerState: { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED
 window.onYouTubeIframeAPIReady && window.onYouTubeIframeAPIReady();
 `;
 
-async function newPage(browser, server, { colorScheme = 'light', viewport = { width: 1280, height: 900 } } = {}) {
-  const context = await browser.newContext({ viewport, colorScheme });
+async function newPage(browser, server, { colorScheme = 'light', viewport = { width: 1280, height: 900 }, httpCredentials } = {}) {
+  const context = await browser.newContext({ viewport, colorScheme, httpCredentials });
   const apiCalls = [];
   await context.route('https://www.googleapis.com/youtube/v3/**', (route) => {
     const { status, body } = fakeApi(route.request().url());
@@ -82,7 +82,8 @@ async function newPage(browser, server, { colorScheme = 'light', viewport = { wi
   const page = await context.newPage();
   page.on('pageerror', (e) => consoleProblems.push(`pageerror: ${e.message}`));
   // A 400/403 from the (fake) API is expected when a test deliberately uses a bad key or exhausts the quota.
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: the server responded with a status of (400|403)/.test(m.text())) consoleProblems.push(`console.error: ${m.text()}`); });
+  // (Connection resets/refusals only happen when a test restarts the server on purpose, to mimic a deployed update.)
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: (the server responded with a status of (400|403)|net::ERR_CONNECTION_(RESET|REFUSED))/.test(m.text())) consoleProblems.push(`console.error: ${m.text()}`); });
   page.on('dialog', (d) => d.accept()); // confirm() prompts
   page.apiCalls = apiCalls; page.context_ = context;
   await page.goto(server.url);
@@ -892,6 +893,94 @@ console.log('\nWorld 4: data outlives the app (new app copy, same data folder) a
     ok(fs.readdirSync(dataDir).some((f) => f.startsWith('profile.corrupt-')), 'damaged file kept for inspection');
   });
   await page.context_.close(); server.stop();
+}
+
+// ================================================================== World 5: hosted on a server (login, shared key, live update banner)
+console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new version" banner)');
+{
+  const http = await import('node:http');
+  const upstream = [];
+  const fakeYt = http.createServer((req, res) => {
+    const { status, body } = fakeApi(req.url);
+    upstream.push({ endpoint: new URL(req.url, 'http://x').pathname.split('/').pop(), key: new URL(req.url, 'http://x').searchParams.get('key') });
+    res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body));
+  });
+  await new Promise((r) => fakeYt.listen(0, '127.0.0.1', r));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-host-'));
+  const port = await freePort();
+  const launch = async (build) => {
+    const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', path.join(dataDir, 'none')], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, UNFURL_AUTH: 'me:pw-1234-pw', UNFURL_YOUTUBE_KEY: 'SERVER-KEY', UNFURL_YT_UPSTREAM: `http://127.0.0.1:${fakeYt.address().port}/youtube/v3`,
+        UNFURL_USER_DAILY_UNITS: '1000', UNFURL_BUILD: build, UNFURL_POLL_SECONDS: '1' },
+    });
+    for (let i = 0; i < 60; i++) { try { if ((await fetch(`http://127.0.0.1:${port}/healthz`)).ok) break; } catch { /* not up yet */ } await new Promise((r) => setTimeout(r, 100)); }
+    return proc;
+  };
+  let proc = await launch('build-A');
+  const server = { url: `http://localhost:${port}/` };
+
+  await step('a login is required; without it nothing is served', async () => {
+    eq((await fetch(server.url)).status, 401);
+    eq((await fetch(`${server.url}api/profile`, { headers: { 'X-Unfurl': '1' } })).status, 401);
+    eq((await fetch(`http://localhost:${port}/healthz`)).status, 200, 'but the health check needs no login');
+  });
+
+  const page = await newPage(browser, server, { httpCredentials: { username: 'me', password: 'pw-1234-pw' } });
+  const requests = [];
+  page.on('request', (r) => requests.push(r.url()));
+
+  await step('signed in: the footer names the person and Settings says the server provides YouTube', async () => {
+    ok((await page.locator('#storage-note').innerText()).includes('signed in as me'), await page.locator('#storage-note').innerText());
+    await goto(page, 'settings');
+    ok((await page.locator('#key-status').innerText()).includes('This server provides the YouTube connection'), await page.locator('#key-status').innerText());
+    ok((await page.locator('#data-where').innerText()).includes('on the Unfurl server'), await page.locator('#data-where').innerText());
+    ok((await page.locator('.quota').innerText()).includes('of 1,000 units'), `the person's own share is shown: ${await page.locator('.quota').innerText()}`);
+    await goto(page, 'today');
+  });
+
+  await step('web search works with no key of one\'s own, and the browser never sees the server\'s key', async () => {
+    await page.click('.chip.quick:has-text("Tight hips")');
+    ok(await page.locator('#web-toggle').isEnabled(), 'web search is available');
+    await page.click('#find');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 20000 });
+    await waitFeatured(page);
+    ok(upstream.some((u) => u.endpoint === 'search'), 'searches reached YouTube through the server');
+    ok(upstream.every((u) => u.key === 'SERVER-KEY'), 'with the server\'s key');
+    const viaProxy = requests.filter((u) => u.includes('/api/yt/'));
+    ok(viaProxy.length > 3, `${viaProxy.length} calls went through the proxy`);
+    ok(viaProxy.every((u) => !u.includes('key=')), 'the browser sent no key');
+    ok(!requests.some((u) => u.includes('googleapis.com')), 'the browser never talked to Google directly');
+    ok(!JSON.stringify(await U(page, () => window.__unfurl.store.config)).includes('SERVER-KEY'), 'the key is not in the page');
+    ok(fs.existsSync(path.join(dataDir, 'profile.json')), 'data saved on the server');
+    await shot(page, '20-hosted-today');
+  });
+
+  await step('the person\'s usage is counted against their share', async () => {
+    const used = await U(page, () => window.__unfurl.state.quota?.used ?? 0);
+    ok(used > 0, `used ${used}`);
+    ok(fs.existsSync(path.join(dataDir, 'usage.json')), 'and remembered on the server across restarts');
+    eq(JSON.parse(fs.readFileSync(path.join(dataDir, 'usage.json'), 'utf8')).used.me > 0, true);
+  });
+
+  await step('when the server is updated, an open page says so and reloads on request without losing anything', async () => {
+    eq(await page.locator('#update-banner').count(), 0, 'no banner yet');
+    const before = await U(page, () => ({ vids: Object.keys(window.__unfurl.state.videos).length, q: Object.keys(window.__unfurl.state.queryLog).length }));
+    proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r));
+    proc = await launch('build-B');          // what the updater does: same data folder, new build
+    await page.waitForSelector('#update-banner', { timeout: 15000 });
+    ok((await page.locator('#update-banner').innerText()).includes('new version of Unfurl is ready'), 'banner text');
+    await shot(page, '21-update-banner');
+    await page.click('#update-reload');
+    await page.waitForSelector('#nav a');
+    await page.waitForFunction(() => window.__unfurl?.state);
+    eq(await page.locator('#update-banner').count(), 0, 'the banner is gone after reloading');
+    const after = await U(page, () => ({ vids: Object.keys(window.__unfurl.state.videos).length, q: Object.keys(window.__unfurl.state.queryLog).length }));
+    eq(after, before, 'everything is still there');
+    eq(await page.evaluate(() => fetch('/api/ping', { headers: { 'X-Unfurl': '1' } }).then((r) => r.json()).then((j) => j.build)), 'build-B');
+  });
+
+  await page.context_.close(); proc.kill(); fakeYt.close();
 }
 
 // ------------------------------------------------------------------ report

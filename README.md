@@ -41,6 +41,9 @@ The key is stored only on your computer (in your data folder, below) and only ev
   - **Discovered**: everything the app's searches and imports found. Used for suggestions; promote the ones you like.
   - **Suggestions**: a small starter shelf of well-known routines.
   - The box at the top takes **video links, playlists, and teachers** (a channel link, an @handle, or just a name). A teacher's whole catalogue costs about 1 quota unit per 50 videos; you can **follow** a teacher and check for new uploads later.
+  - **How hard to look**: *Quick / Balanced / Thorough / Exhaustive*. A search is a **wide net**: it runs several differently-worded YouTube searches, reads further pages when results are mostly familiar, learns new wording from the best hits, and keeps going in rounds until enough *strong fits* turn up (or the unit budget for that run is spent). Balanced typically weighs a few hundred videos for ~300 units; the setting caps what one search may cost.
+  - **Build a combo** (offered when you pick two or more muscle areas): no single video usually covers them all, so it chains 2–3 short, well-fitting ones into one session that fits your time, shows how much of your list it covers versus the best single video, and plays them back to back.
+- **Searching your library** (Library tab): plain words find titles, teachers, chapters, poses, muscles, what viewers wrote, and your own tags and notes, with typo tolerance, synonyms ("glutes" ≈ "buttocks"), and suggestions as you type. Extra syntax: `"exact phrase"`, `-word` to exclude, `teacher:kassandra`, `pose:pigeon`, `tag:morning`, `for:hips`, `len:10-20` / `len:<15`. The line under the box shows how it understood you. Save a search you use often and it appears as a chip.
 - **Journal**: your history, what's working for you per muscle, and a 4-week map of which muscles you've been working.
 - **Settings**: the key, your standing tight/weak spots, how adventurous the app is, auto-add, backups.
 
@@ -101,6 +104,17 @@ backups/       a daily backup of profile.json, plus one before every data-format
 
 See `CHANGELOG.md` for the exact promise.
 
+## Running it on a server (shared, always on, self-updating)
+
+Everything above also works as an internal website for you, your household or a team: logins (one shared, or one per person each with their own library), HTTPS via a reverse proxy, an optional **server-held YouTube key** so nobody needs their own, and — the point of it — **automatic updates**: the server follows a git branch, and when a new version is pushed it tests it, switches to it, health-checks it and **rolls back by itself** if anything is wrong. Open pages offer a one-click reload. Your data lives in its own folder and is never touched.
+
+```
+sudo deploy/install.sh --branch main --host unfurl.internal      # Linux + systemd
+docker compose -f deploy/docker-compose.yml up -d --build        # or Docker
+```
+
+Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**.
+
 ## Honest limitations
 
 - **English only** for now (search and text analysis).
@@ -113,7 +127,7 @@ See `CHANGELOG.md` for the exact promise.
 ## Development
 
 ```
-npm test           # unit + storage-server tests, no dependencies (Node 18+, needs python3 for the server tests)
+npm test           # unit, storage-server, hosting and auto-update tests, no dependencies (Node 18+, needs python3, git and bash)
 npm i && npm run test:e2e   # real Chromium + real server (needs Playwright)
 ```
 
@@ -130,8 +144,9 @@ js/index.js            local BM25 search index
 js/state.js            data shape, upgrades between versions, library rules
 js/store.js            saving/loading (server files or browser storage), backups
 js/views/              Today, Library, Journal, Settings, feedback dialog
-serve.py               local server (static files + saving to disk)
-data/starter.js        the small starter shelf
+serve.py               server (static files, saving to disk, logins, shared YouTube key, --selftest)
+deploy/                hosting kit: update.sh (self-update + rollback), run.sh (supervisor), install.sh, Dockerfile, systemd unit
+data/suggestions.js    the small suggested-videos shelf
 ```
 
 ### Changing the analysis or the data format

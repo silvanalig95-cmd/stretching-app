@@ -17,14 +17,17 @@ export function mountSettings(root) {
   let backupsSlot;
 
   // ---------------------------------------------------------------- key
+  const keyNote = () => (store.config.apiKey ? 'A key is saved.'
+    : ctx.usesServerKey ? `✓ This server provides the YouTube connection, so you don’t need a key${store.server.ytDailyUnits ? ` (your share is ${store.server.ytDailyUnits.toLocaleString()} units a day)` : ''}. Paste your own below only if you want a separate allowance.`
+      : 'No key yet. The app still works from what it already knows, but can’t search the web.');
   const keyInput = h('input', { type: 'password', id: 'api-key', value: store.config.apiKey, placeholder: 'Paste your YouTube Data API key', autocomplete: 'off', spellcheck: 'false', 'aria-label': 'YouTube API key' });
-  const keyStatus = h('p', { class: 'hint', id: 'key-status', 'aria-live': 'polite' }, store.config.apiKey ? 'A key is saved.' : 'No key yet. The app still works from what it already knows, but can’t search the web.');
+  const keyStatus = h('p', { class: 'hint', id: 'key-status', 'aria-live': 'polite' }, keyNote());
   const saveKey = async () => {
     store.config.apiKey = keyInput.value.trim();
     await store.saveConfig();
     ctx.state.prefs.searchWeb = !!store.config.apiKey || prefs.searchWeb;
     ctx.ui.verifiedTried = false;
-    if (!store.config.apiKey) { keyStatus.textContent = 'Key removed.'; return; }
+    if (!store.config.apiKey) { keyStatus.textContent = `Key removed. ${ctx.usesServerKey ? 'The server’s shared connection is used instead.' : ''}`.trim(); return; }
     keyStatus.textContent = 'Testing…';
     try {
       const api = client();
@@ -36,7 +39,7 @@ export function mountSettings(root) {
   };
 
   const steps = h('details', { class: 'steps' },
-    h('summary', null, 'How do I get a key? (free, ~3 minutes)'),
+    h('summary', null, ctx.usesServerKey ? 'Want your own YouTube key instead? (optional, free, ~3 minutes)' : 'How do I get a key? (free, ~3 minutes)'),
     h('ol', null,
       h('li', null, 'Go to ', h('a', { href: 'https://console.cloud.google.com/', target: '_blank', rel: 'noopener noreferrer' }, 'console.cloud.google.com'), ' and sign in with a Google account. Create a project (any name).'),
       h('li', null, h('strong', null, 'APIs & Services → Library'), ', search for “YouTube Data API v3”, and press ', h('strong', null, 'Enable'), '.'),
@@ -114,7 +117,7 @@ export function mountSettings(root) {
     h('h2', null, 'Your data'),
     store.readOnly ? h('p', { class: 'banner' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Read-only.') : null,
     h('dl', { class: 'facts' },
-      h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? `In files on this computer: ${store.server.dataDir}` : 'In this browser only (run serve.py to keep it in files).'),
+      h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? (store.server.dataDir ? `In files on this computer: ${store.server.dataDir}` : `In files on the Unfurl server${store.server.user ? `, in ${store.server.user}’s own folder` : ''}`) : 'In this browser only (run serve.py to keep it in files).'),
       h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `Unfurl ${store.server.version ?? '(browser mode)'} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
       h('dt', null, 'Kept apart'), h('dd', null, 'Your library, history and ratings (“profile”) are saved separately from the videos the app has discovered (“index”). The index can always be rebuilt; the profile is what\'s backed up. Your API key is in a third, private file.')),
     h('p', { class: 'hint' }, 'Updating or replacing the app never touches this folder. When a new version changes how data is stored, it upgrades yours automatically and keeps a backup of the old format.'),
