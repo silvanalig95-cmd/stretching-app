@@ -1,0 +1,8 @@
+# Personal data: your API key, history and learned preferences stay on your machine.
+userdata/*
+!userdata/.gitkeep
+node_modules/
+.DS_Store
+__pycache__/
+tests/e2e/.tmp/
+tests/e2e/shots/

@@ -1,0 +1,12 @@
+{
+  "name": "unfurl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Find, judge and learn from yoga & stretching routines on YouTube.",
+  "type": "module",
+  "scripts": {
+    "start": "python3 serve.py",
+    "test": "node --test tests/unit/*.test.js",
+    "test:e2e": "node tests/e2e/run.mjs"
+  }
+}
