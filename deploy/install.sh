@@ -65,7 +65,11 @@ fi
 
 # ---- first download (as the service account, so files have the right owner)
 echo "Downloading the first version from $REPO ($BRANCH) ..."
-run_as env UNFURL_HOME="$HOME_DIR" UNFURL_REPO_URL="$REPO" UNFURL_BRANCH="$BRANCH" "$HERE/update.sh" --no-restart
+# Run the updater from a copy inside the app folder: a clone in someone's private home directory may be unreadable to the service account.
+install -m 755 "$HERE/update.sh" "$HOME_DIR/bootstrap-update.sh"
+[ "$SERVICE" = 1 ] && chown "$SVC_USER:$SVC_USER" "$HOME_DIR/bootstrap-update.sh"
+run_as env UNFURL_HOME="$HOME_DIR" UNFURL_REPO_URL="$REPO" UNFURL_BRANCH="$BRANCH" "$HOME_DIR/bootstrap-update.sh" --no-restart
+rm -f "$HOME_DIR/bootstrap-update.sh"
 [ -e "$HOME_DIR/current" ] || { echo "Couldn't download a version. If the repository is private, set up a deploy key or token (deploy/README.md) and re-run." >&2; exit 1; }
 
 if [ "$SERVICE" = 0 ]; then
@@ -82,5 +86,5 @@ echo
 echo "Unfurl is running and checks '$BRANCH' for updates every minute."
 echo "  open it:         http://${HOSTS%%,*}:$PORT/   (put HTTPS in front of it: deploy/README.md)"
 echo "  watch it:        journalctl -u unfurl -f        and        $HOME_DIR/update.log"
-echo "  update now:      sudo -u $SVC_USER UNFURL_HOME=$HOME_DIR $HOME_DIR/current/deploy/update.sh"
-echo "  go back one:     sudo -u $SVC_USER UNFURL_HOME=$HOME_DIR $HOME_DIR/current/deploy/update.sh --rollback"
+echo "  update now:      sudo -u $SVC_USER env UNFURL_HOME=$HOME_DIR $HOME_DIR/current/deploy/update.sh"
+echo "  go back one:     sudo -u $SVC_USER env UNFURL_HOME=$HOME_DIR $HOME_DIR/current/deploy/update.sh --rollback"

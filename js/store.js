@@ -5,7 +5,7 @@
 // The API key lives in "config", apart from your data, so exporting or sharing
 // your history never includes it.
 
-import { loadState, splitState, emptyState } from './state.js';
+import { loadState, splitState, emptyState, mergeImport, SCHEMA } from './state.js';
 
 const HEADERS = { 'X-Unfurl': '1' }; // custom header => other websites can't talk to the local server
 
@@ -15,6 +15,8 @@ export class Store {
     this.retryTimer = null; this.attempts = 0;
     this.onSaveState = () => {};   // called with (ok:boolean, message) when saving to the server starts failing or recovers
     this.saveOk = true;
+    this.rev = null;               // the saved profile's revision as of our last read/write (server mode)
+    this.onMerged = () => {};      // called when changes made elsewhere (another tab/device) were merged in
     this.mode = 'local';
     this.server = { version: null, dataDir: null, build: '', pollSeconds: 0, ytProxy: false, ytDailyUnits: 0, user: null, multiUser: false };
     this.state = emptyState();
@@ -45,6 +47,7 @@ export class Store {
       if (!p.ok || !ix.ok) unreadable = true;
       profile = p.data?.data ?? null;
       this.recoveredFrom = p.data?.recoveredFrom ?? null;
+      this.rev = p.data?.rev ?? null;
       index = ix.data;
       config = cfg.data;
       if (!profile && !unreadable) legacy = (await this.#fetchJson('/api/legacy')).data;
@@ -131,10 +134,54 @@ export class Store {
     const { profile, index } = splitState(this.state);
     const docs = { profile: JSON.stringify(profile), index: JSON.stringify(index) };
     let all = true;
-    if (force || docs.profile !== this.written.profile) { if (await this.#put('/api/profile', 'unfurl.profile', docs.profile)) this.written.profile = docs.profile; else all = false; }
+    if (force || docs.profile !== this.written.profile) {
+      const written = this.mode === 'server' ? await this.#putProfile(force) : (await this.#put('/api/profile', 'unfurl.profile', docs.profile) ? docs.profile : null);
+      if (written != null) this.written.profile = written; else all = false;
+    }
     if (force || docs.index !== this.written.index) { if (await this.#put('/api/index', 'unfurl.index', docs.index, true)) this.written.index = docs.index; else all = false; }
     return all;
   }
+
+  /**
+   * Save the profile on the server, but only on top of the version we last saw. If another tab or device saved
+   * in between, merge its changes into ours (nothing of either is lost) and save the combined result.
+   * @returns {Promise<string|null>} the text that was saved, or null if it couldn't be
+   */
+  async #putProfile(force) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const text = JSON.stringify(splitState(this.state).profile);
+      let res;
+      try {
+        res = await this.fetchFn('/api/profile', { method: 'PUT', headers: { ...HEADERS, 'Content-Type': 'application/json', ...(force ? {} : { 'If-Match': this.rev ?? 'none' }) }, body: text });
+      } catch (e) { return this.#failed(e.message); }
+      if (res.status === 409) {
+        const theirs = await res.json().catch(() => null);
+        this.rev = theirs?.rev ?? null;
+        if (theirs?.data && theirs.data.schema > SCHEMA) {   // written by a newer app: don't touch it
+          this.readOnly = true;
+          this.notes.push('Your data was changed by a newer version of Unfurl, so this page can no longer save. Reload it.');
+          return this.#failed('the data was changed by a newer version');
+        }
+        if (theirs?.data) { mergeImport(this.state, { profile: theirs.data, index: null }); this.#merged(); }
+        continue;
+      }
+      if (!res.ok) return this.#failed(`HTTP ${res.status}`);
+      this.rev = (await res.json().catch(() => null))?.rev ?? this.rev;
+      this.lastError = null;
+      this.#saveState(true);
+      return text;
+    }
+    return this.#failed('it keeps changing somewhere else');
+  }
+
+  #failed(why) {
+    // Not stored: report that (so it is retried) instead of pretending. The page still holds the data.
+    this.lastError = `Couldn’t save to the server just now (${why}). I’ll keep trying; please keep this page open.`;
+    this.#saveState(false, this.lastError);
+    return null;
+  }
+
+  #merged() { try { this.onMerged(); } catch { /* a UI hook must never break saving */ } }
 
   async saveConfig() { await this.#put('/api/config', 'unfurl.config', JSON.stringify(this.config)); }
 

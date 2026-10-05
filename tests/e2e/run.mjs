@@ -1025,7 +1025,21 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
     eq(JSON.parse(fs.readFileSync(path.join(dataDir, 'usage.json'), 'utf8')).used.me > 0, true);
   });
 
+  await step('two tabs on one account: the stale tab\'s save is merged with the other tab\'s work instead of erasing it', async () => {
+    const second = await page.context_.newPage();
+    await second.goto(server.url); await second.waitForFunction(() => window.__unfurl?.state);
+    await page.reload(); await page.waitForFunction(() => window.__unfurl?.state);          // both tabs now share the same starting point
+    const add = (pg, id, tag) => pg.evaluate(async ([i, t]) => { const u = window.__unfurl; u.state.library[i] = { addedAt: Date.now(), tags: [t], note: '' }; return u.store.flush(); }, [id, tag]);
+    ok(await add(page, 'TABAAAAAAA1', 'from-first-tab'), 'first tab saved');
+    ok(await add(second, 'TABBBBBBBB2', 'from-second-tab'), 'the stale tab saved too');
+    const saved = JSON.parse(fs.readFileSync(path.join(dataDir, 'profile.json'), 'utf8'));
+    ok(saved.library.TABAAAAAAA1 && saved.library.TABBBBBBBB2, `both survived: ${Object.keys(saved.library)}`);
+    ok(await second.locator('.toast', { hasText: 'merged into this page' }).count() >= 1, 'and the stale tab was told');
+    await second.close();
+  });
+
   await step('when the server is updated, an open page says so and reloads on request without losing anything', async () => {
+    await page.reload(); await page.waitForFunction(() => window.__unfurl?.state);   // start from what is really saved (the other tab's work included)
     eq(await page.locator('#update-banner').count(), 0, 'no banner yet');
     const before = await U(page, () => ({ vids: Object.keys(window.__unfurl.state.videos).length, q: Object.keys(window.__unfurl.state.queryLog).length }));
     proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r));
@@ -1033,7 +1047,7 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
     await page.waitForSelector('#update-banner', { timeout: 15000 });
     ok((await page.locator('#update-banner').innerText()).includes('new version of Unfurl is ready'), 'banner text');
     await shot(page, '21-update-banner');
-    await page.click('#update-reload');
+    await Promise.all([page.waitForEvent('load'), page.click('#update-reload')]);   // it saves first, then reloads
     await page.waitForSelector('#nav a');
     await page.waitForFunction(() => window.__unfurl?.state);
     eq(await page.locator('#update-banner').count(), 0, 'the banner is gone after reloading');

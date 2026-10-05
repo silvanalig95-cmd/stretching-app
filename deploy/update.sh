@@ -23,6 +23,7 @@
 #      seconds, otherwise the old version is put back and the new one is blacklisted;
 #   4. your data lives outside all of this ($UNFURL_DATA), so no update or rollback can touch it.
 set -uo pipefail
+umask 077   # the repository copy may hold an access token in its URL; keep everything here private to the service account
 
 HOME_DIR="${UNFURL_HOME:-/opt/unfurl}"
 REPO_URL="${UNFURL_REPO_URL:-}"
@@ -52,6 +53,8 @@ for arg in "$@"; do
 done
 
 mkdir -p "$HOME_DIR/releases" || { echo "cannot create $HOME_DIR/releases" >&2; exit 2; }
+chmod 700 "$HOME_DIR" 2>/dev/null || true
+[ -d "$HOME_DIR/repo" ] && chmod -R go-rwx "$HOME_DIR/repo" 2>/dev/null || true
 LOG="$HOME_DIR/update.log"
 
 log() {
@@ -67,7 +70,7 @@ LOCK="$HOME_DIR/.update.lock"
 acquire_lock() {
   if mkdir "$LOCK" 2>/dev/null; then echo $$ >"$LOCK/pid"; return 0; fi
   local other; other="$(cat "$LOCK/pid" 2>/dev/null || true)"
-  if [ -n "$other" ] && kill -0 "$other" 2>/dev/null; then return 1; fi
+  if [ -n "$other" ] && kill -0 "$other" 2>/dev/null && grep -q 'update.sh' "/proc/$other/cmdline" 2>/dev/null; then return 1; fi
   rm -rf "$LOCK"                       # the previous updater died without cleaning up
   mkdir "$LOCK" 2>/dev/null && { echo $$ >"$LOCK/pid"; return 0; }
   return 1
@@ -76,8 +79,9 @@ release_lock() { rm -rf "$LOCK"; }
 
 # ---------------------------------------------------------------- helpers
 build_of() { cat "$1/BUILD" 2>/dev/null || true; }
-current_dir() { readlink -f "$HOME_DIR/current" 2>/dev/null || true; }
-previous_dir() { readlink -f "$HOME_DIR/previous" 2>/dev/null || true; }
+# (readlink -f invents a path for a link that doesn't exist; an absent or dangling link must read as "nothing")
+current_dir() { [ -e "$HOME_DIR/current" ] && readlink -f "$HOME_DIR/current" 2>/dev/null || true; }
+previous_dir() { [ -e "$HOME_DIR/previous" ] && readlink -f "$HOME_DIR/previous" 2>/dev/null || true; }
 current_build() { local d; d="$(current_dir)"; [ -n "$d" ] && build_of "$d"; }
 point() {  # point <symlink-name> <release-dir>: atomically
   ln -sfn "$2" "$HOME_DIR/$1.tmp" && mv -Tf "$HOME_DIR/$1.tmp" "$HOME_DIR/$1"
@@ -86,7 +90,8 @@ point() {  # point <symlink-name> <release-dir>: atomically
 health_build() {
   "$PYTHON" -c 'import json,sys,urllib.request
 try:
-    print(json.load(urllib.request.urlopen(sys.argv[1], timeout=3)).get("build", ""))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))   # never via http_proxy: this is a local check
+    print(json.load(opener.open(sys.argv[1], timeout=3)).get("build", ""))
 except Exception:
     sys.exit(1)' "$HEALTH_URL" 2>/dev/null
 }
@@ -135,7 +140,8 @@ status() {
   echo "live:     $(current_build || true) ($(current_dir))"
   echo "previous: $(build_of "$(previous_dir)") ($(previous_dir))"
   echo "rejected: $(cat "$HOME_DIR/failed" 2>/dev/null || echo none)"
-  echo "branch:   $BRANCH  repo: ${REPO_URL:-$(git -C "$HOME_DIR/repo" remote get-url origin 2>/dev/null || echo '(none)')}"
+  local url; url="${REPO_URL:-$(git -C "$HOME_DIR/repo" remote get-url origin 2>/dev/null || echo '(none)')}"
+  echo "branch:   $BRANCH  repo: $(echo "$url" | sed -E 's#(://)[^/@]*@#\1***@#')"      # never print a token that is part of the URL
 }
 
 do_rollback() {
@@ -191,22 +197,27 @@ apply() {
   fi
 
   # --- prove the new version before it can touch anything live
-  local out
-  if [ ! -f "$rel/serve.py" ]; then out="serve.py is missing"
+  local out="" rc=0
+  if [ ! -f "$rel/serve.py" ]; then out="serve.py is missing"; rc=1
   else
-    out="$(cd "$rel" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" "$PYTHON" serve.py --selftest 2>&1)"
-    local rc=$?
+    out="$(cd "$rel" && env -i PATH="$PATH" HOME="${HOME:-/tmp}" "$PYTHON" serve.py --selftest 2>&1)"; rc=$?
+    [ "$rc" != 0 ] && [ -z "$out" ] && out="the self-test exited with status $rc and no message"
     for f in "$rel"/deploy/*.sh; do [ -f "$f" ] && ! bash -n "$f" 2>/dev/null && { out="$out; $(basename "$f") has a syntax error"; rc=1; }; done
-    [ "$rc" = 0 ] && out=""
+    if [ "$rc" = 0 ] && command -v node >/dev/null 2>&1; then   # the server can't tell a broken script from a good one, so look at them
+      for f in "$rel"/js/*.js "$rel"/js/views/*.js "$rel"/data/*.js; do
+        [ -f "$f" ] || continue
+        node --check --input-type=module - <"$f" >/dev/null 2>&1 || { out="$out; ${f#"$rel"/} has a JavaScript syntax error"; rc=1; }
+      done
+    fi
   fi
-  if [ -n "$out" ]; then
+  if [ "$rc" != 0 ]; then
     log "NOT updating to $short: it failed its self-test, so the live version ($live) keeps running. $(echo "$out" | tail -n 3 | tr '\n' ' ' | cut -c1-400)"
     echo "$short" >"$HOME_DIR/failed"
     return 1
   fi
 
   # --- switch
-  local old; old="$(current_dir)"
+  local old oldprev; old="$(current_dir)"; oldprev="$(previous_dir)"
   [ -n "$old" ] && [ "$old" != "$rel" ] && point previous "$old"
   point current "$rel"
   log "switched ${live:-(nothing)} -> $short; restarting"
@@ -215,11 +226,13 @@ apply() {
   if manages_restart; then
     if wait_healthy "$short"; then
       log "update to $short is live and healthy"
-      rm -f "$HOME_DIR/failed"
+      rm -f "$HOME_DIR/failed"; echo "$short" >"$HOME_DIR/healthy"
     else
       log "the server did not come up healthy on $short within ${HEALTH_TIMEOUT}s — putting $live back"
       if [ -n "$old" ] && [ -d "$old" ]; then
-        point current "$old"; restart_server
+        point current "$old"
+        if [ -n "$oldprev" ] && [ -d "$oldprev" ]; then point previous "$oldprev"; else rm -f "$HOME_DIR/previous"; fi   # the fallback we had before is still the fallback
+        restart_server
         wait_healthy "$live" && log "rolled back: $live is running again" || log "WARNING: $live did not come back healthy either; check the server's log"
       fi
       echo "$short" >"$HOME_DIR/failed"

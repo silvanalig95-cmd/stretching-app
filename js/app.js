@@ -77,6 +77,7 @@ async function main() {
   }
   if (store.lastError) toast(store.lastError, 'error');
   watchForUpdates(store);
+  store.onMerged = () => toast('Changes you made in another tab or on another device were merged into this page. Reload to see them everywhere.', 'info', 9000);
   store.onSaveState = (ok, message) => {
     const banner = document.getElementById('banner');
     banner.querySelector('#save-banner')?.remove();

@@ -43,7 +43,7 @@ test('ping reports version and where the data lives', async () => {
 test('profile/index/config round-trip; config is private (0600) and kept apart from the profile', async () => {
   const s = await start();
   try {
-    assert.deepEqual((await s.api('GET', '/api/profile')).json, { data: null, recoveredFrom: null });
+    assert.deepEqual((await s.api('GET', '/api/profile')).json, { data: null, recoveredFrom: null, rev: null });
     await s.api('PUT', '/api/profile', { schema: 2, history: [1] });
     await s.api('PUT', '/api/index', { videos: { a: 1 } });
     await s.api('PUT', '/api/config', { apiKey: 'SECRET' });

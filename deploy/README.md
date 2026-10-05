@@ -40,7 +40,7 @@ Day to day:
 |---|---|
 | Is it running? | `systemctl status unfurl` · `journalctl -u unfurl -f` |
 | What did the updater do? | `less /opt/unfurl/update.log` |
-| Which version is live? | `sudo -u unfurl UNFURL_HOME=/opt/unfurl /opt/unfurl/current/deploy/update.sh --status` |
+| Which version is live? | `sudo -u unfurl env UNFURL_HOME=/opt/unfurl /opt/unfurl/current/deploy/update.sh --status` |
 | Is an update waiting? | same, with `--check` (exit code 10 = yes) |
 | Update right now | same, no arguments |
 | Go back one version | same, with `--rollback` (that version is then skipped until a newer commit arrives; `--force` retries it) |
@@ -53,7 +53,7 @@ cp deploy/unfurl.env.example deploy/unfurl.env      # fill in login, allowed hos
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates itself from git exactly as above, with no rebuilds. Without a repository it just runs what is baked in (rebuild to update). Two volumes: `unfurl-data` is **your data**, back it up; `unfurl-app` holds downloaded versions and can be deleted. `docker compose logs -f` shows what the updater did.
+The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates itself from git exactly as above, with no rebuilds. Without a repository it just runs what is baked in; after `docker compose up --build` the newer copy replaces the old one automatically. Two volumes: `unfurl-data` is **your data**, back it up; `unfurl-app` holds downloaded versions and can be deleted. `docker compose logs -f` shows what the updater did.
 
 ## Who can use it (logins)
 
@@ -61,9 +61,13 @@ The server **refuses to listen on the network without a login**, so it can never
 
 - **One shared login** (a household): `UNFURL_AUTH=name:passphrase`. Everyone shares one library.
 - **A login per person**, each with their own library, history and ratings: put one `name:password` per line in a file and set `UNFURL_USERS_FILE=/etc/unfurl/users.txt`. Each person's data goes to its own folder under `users/`, and nobody can see another's.
-- **You already have SSO / a login proxy** (Authelia, oauth2-proxy, Cloudflare Access, Tailscale serve...): set `UNFURL_TRUST_PROXY_USER=X-Forwarded-User` (the header your proxy sets). The server then believes that header **only from the proxy's address** (`UNFURL_PROXY_IPS`, default `127.0.0.1`), so keep the server reachable only through the proxy.
+- **You already have SSO / a login proxy** (Authelia, oauth2-proxy, Cloudflare Access, Tailscale serve...): set `UNFURL_TRUST_PROXY_USER=X-Forwarded-User` (the header your proxy sets). The server then believes that header **only from the proxy**: requests must come from `UNFURL_PROXY_IPS` (default `127.0.0.1`; if the proxy is another machine, list exactly that machine, e.g. `10.0.0.5/32`, never a whole network — everyone on it could otherwise pose as any user) and, if you set `UNFURL_PROXY_SECRET`, must carry the same value in an `X-Unfurl-Proxy-Secret` header, which your proxy adds (Caddy: `header_up X-Unfurl-Proxy-Secret …`; nginx: `proxy_set_header X-Unfurl-Proxy-Secret …;`). Keep the server reachable only through the proxy.
 
-Passwords can be stored hashed: run `python3 serve.py --hash-password` and paste the result after the name. Five wrong passwords lock that visitor out for a minute.
+Passwords can be stored hashed (recommended, since the settings file is readable by the service account): run `python3 serve.py --hash-password` and paste the result after the name. An empty password is refused. Five wrong passwords lock that visitor out for a minute.
+
+**Moving from one shared login to several?** The first setup keeps its data directly in the data folder; with several users each person gets a folder under `users/<login name>/`, and the old files are no longer used (the server prints a note at startup). To keep that library for one of them, copy `profile.json`, `index.json` and `config.json` into their folder before they first log in.
+
+**Several browsers or devices on one account** are safe: a page saves on top of the version it last saw, and if another tab or device saved in between, the two are merged (nothing of either is lost) and the page tells you.
 
 `UNFURL_ALLOWED_HOSTS` must list the name(s) people type (`unfurl.internal`, `10.0.0.5`). The server's API refuses requests that arrive under any other name (and requests that come from other websites); this stops a malicious page from using your browser to talk to the server.
 
@@ -111,13 +115,17 @@ The server needs read access to the repository. Pick one:
 
 ## How it protects you
 
-- A new version must pass `serve.py --selftest` (serves every page and script, hides internal files, saves and reads data) **before** anything live changes; shell scripts must also parse.
+- A new version must pass `serve.py --selftest` (serves every page and script, hides internal files, saves and reads data) **before** anything live changes; shell scripts must parse, and — if `node` is installed on the server — every JavaScript file must too. A self-test that crashes without a message counts as a failure.
 - After switching, the server has `UNFURL_HEALTH_TIMEOUT` seconds (30) to report the new build on `/healthz`; otherwise the previous version is restored automatically and the bad commit is skipped until a newer one arrives.
-- If the live version keeps crashing right after starting, the supervisor falls back to the previous version by itself.
+- If a version that has **never** run properly keeps crashing right after starting, the supervisor falls back to the previous version by itself. A version that *did* run fine before and now won't start (wrong settings, port taken, disk full) is left alone — an older version would not fix that, and might be too old for your data — and the supervisor keeps retrying with a pause until the cause is fixed.
 - Only one updater runs at a time; the last 5 versions are kept; updates and rollbacks never touch the data folder; the data format only ever moves forward *after* a backup (see `CHANGELOG.md`).
 - An unreachable GitHub is logged once and retried quietly.
 
 Run the safety net's own tests with `node --test tests/unit/deploy.test.js` (they use a local git repository as a stand-in for GitHub and start real servers).
+
+## Who can change what runs on your server
+
+The updater runs whatever is on the followed branch, as the service account, within a minute. **Whoever can push to that branch controls the server**, and that account can read the settings file (logins, YouTube key). So: follow a branch only you can push to; turn on GitHub *branch protection* for it; give the server a **read-only** deploy key or token; and prefer **hashed passwords**. If you want a human gate between "pushed" and "deployed", follow a branch you move deliberately (for example `release`) rather than the one work happens on; `deploy/ci.yml.example` runs the checks on every push so a broken change is visible on GitHub too. Signed-commit verification is not built in.
 
 ## Backups
 

@@ -18,5 +18,5 @@ USER unfurl
 VOLUME ["/srv/unfurl", "/data"]
 EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python3 -c "import urllib.request,os; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('UNFURL_PORT','8765'), timeout=4)"
+  CMD python3 -c "import urllib.request,os; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:%s/healthz' % os.environ.get('UNFURL_PORT','8765'), timeout=4)"
 ENTRYPOINT ["/opt/unfurl-seed/deploy/run.sh"]

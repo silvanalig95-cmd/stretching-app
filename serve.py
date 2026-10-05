@@ -50,12 +50,14 @@ SECURITY
   and only the app's own files are served.
 """
 import argparse
+import errno
 import base64
 import getpass
 import hashlib
 import hmac
 import http.client
 import ipaddress
+import socket
 import json
 import mimetypes
 import os
@@ -82,6 +84,9 @@ ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
 DAILY_BACKUPS_KEPT = 30
+SNAPSHOTS_KEPT = 25          # other backups (manual snapshots, before-restore copies) per person; pre-upgrade copies are never pruned
+AUTH_CACHE_SECONDS = 300
+PROXY_SECRET_HEADER = "X-Unfurl-Proxy-Secret"
 FILES = {"/api/profile": "profile.json", "/api/index": "index.json", "/api/config": "config.json"}
 BACKUP_NAME = re.compile(r"^profile-[A-Za-z0-9._-]+\.json$")
 YT_UPSTREAM = "https://www.googleapis.com/youtube/v3"
@@ -111,6 +116,8 @@ class Config:
         self.users = {}                 # name -> password spec ("" = no login configured)
         self.trust_proxy_user = None    # header carrying the user's name from a login proxy
         self.proxy_nets = []            # who may act as that proxy (and tell us a visitor's real address)
+        self.proxy_secret = ""          # optional: a value the proxy must also send in X-Unfurl-Proxy-Secret
+        self.dummy_spec = ""            # compared against for unknown names, so they cost as much time as real ones
         self.yt_key = ""
         self.yt_upstream = YT_UPSTREAM
         self.user_daily_units = 3000
@@ -182,9 +189,14 @@ def build_config(args, env) -> Config:
     if uf:
         c.users.update(read_users_file(uf))
     auth = env.get("UNFURL_AUTH", "")
-    if auth and ":" in auth:
-        name, spec = auth.split(":", 1)
+    if auth:
+        name, _, spec = auth.partition(":")
+        if not name or not spec:
+            sys.exit("UNFURL_AUTH must look like  name:password  (neither part may be empty). "
+                     "If it comes from an environment file, check that the variable it reads is set.")
         c.users[name] = spec
+    c.proxy_secret = env.get("UNFURL_PROXY_SECRET", "")
+    c.dummy_spec = next((sp for sp in c.users.values() if sp.startswith(PBKDF2_PREFIXES)), "x" * 16)
     c.trust_proxy_user = pick(args.trust_proxy_user, "UNFURL_TRUST_PROXY_USER") or None
     c.proxy_nets = parse_nets(env.get("UNFURL_PROXY_IPS", "127.0.0.1,::1"))
     kf = env.get("UNFURL_YOUTUBE_KEY_FILE")
@@ -220,17 +232,20 @@ def check_exposure(c: Config):
 
 # ---------------------------------------------------------------- passwords and logins
 
+PBKDF2_PREFIXES = ("pbkdf2-sha256:", "pbkdf2_sha256$")   # the second is the older spelling; '$' gets mangled by docker compose and shells
+
+
 def hash_password(password: str, iterations: int = 200_000) -> str:
     salt = secrets.token_bytes(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, iterations)
-    return "pbkdf2_sha256${}${}${}".format(iterations, base64.b64encode(salt).decode(), base64.b64encode(dk).decode())
+    return "pbkdf2-sha256:{}:{}:{}".format(iterations, base64.b64encode(salt).decode(), base64.b64encode(dk).decode())
 
 
 def check_password(spec: str, given: str) -> bool:
-    """spec is either 'pbkdf2_sha256$iterations$salt$hash' or a plain password. Constant-time compare."""
-    if spec.startswith("pbkdf2_sha256$"):
+    """spec is either 'pbkdf2-sha256:iterations:salt:hash' or a plain password. Constant-time compare."""
+    if spec.startswith(PBKDF2_PREFIXES):
         try:
-            _, it, salt, want = spec.split("$")
+            _, it, salt, want = spec.split(spec[len("pbkdf2-sha256")])
             dk = hashlib.pbkdf2_hmac("sha256", given.encode(), base64.b64decode(salt), int(it))
             return hmac.compare_digest(dk, base64.b64decode(want))
         except (ValueError, TypeError):
@@ -297,14 +312,29 @@ def snapshot_before_overwrite(data_dir: Path, target: Path, incoming: bytes) -> 
     existing = target.read_bytes()
     daily = bdir / f"profile-{date.today().isoformat()}.json"
     if not daily.exists():
-        shutil.copy2(target, daily)  # state at the end of the previous session
+        atomic_write(daily, existing)  # state at the end of the previous session (atomic: a full disk must not leave a half copy that blocks the real one)
     old, new = schema_of(existing), schema_of(incoming)
     if old != new:
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        shutil.copy2(target, bdir / f"profile-pre-schema{old}-to-{new}-{stamp}.json")
+        atomic_write(bdir / f"profile-pre-schema{old}-to-{new}-{stamp}.json", existing)
     dailies = sorted(p for p in bdir.iterdir() if re.fullmatch(r"profile-\d{4}-\d\d-\d\d\.json", p.name))
     for p in dailies[:-DAILY_BACKUPS_KEPT]:
         p.unlink()
+
+
+def prune_snapshots(data_dir: Path) -> None:
+    """Manual snapshots and before-restore copies are capped (daily and pre-upgrade backups are handled elsewhere),
+    so no one can fill the disk by pressing a button repeatedly."""
+    bdir = data_dir / "backups"
+    keep_forever = re.compile(r"profile-(\d{4}-\d\d-\d\d|pre-schema.*|legacy-state-v1)\.json")
+    extras = sorted((p for p in bdir.iterdir() if BACKUP_NAME.match(p.name) and not keep_forever.fullmatch(p.name)), key=lambda p: p.stat().st_mtime, reverse=True)
+    for p in extras[SNAPSHOTS_KEPT:]:
+        p.unlink(missing_ok=True)
+
+
+def profile_rev(raw: bytes) -> str:
+    """A short fingerprint of the saved profile; a page sends it back to prove it saw the latest version."""
+    return hashlib.sha1(raw).hexdigest()[:16]
 
 
 def read_profile_with_recovery(data_dir: Path):
@@ -390,7 +420,8 @@ class UsageMeter:
 class Handler(SimpleHTTPRequestHandler):
     cfg: Config
     usage = UsageMeter()   # replaced in main() with one that lives in the data folder
-    failures = {}   # ip -> [count, locked_until]
+    failures = {}   # ip -> [count, locked_until, window_start]
+    auth_cache = {}  # sha256(Authorization header) -> (name, valid_until); only successful logins
 
     def __init__(self, *args, **kwargs):
         self.user = None
@@ -429,7 +460,10 @@ class Handler(SimpleHTTPRequestHandler):
             ip = ipaddress.ip_address(self.client_address[0].split("%")[0])
         except ValueError:
             return False
-        return any(ip in n for n in self.cfg.proxy_nets)
+        if not any(ip in n for n in self.cfg.proxy_nets):
+            return False
+        secret = self.cfg.proxy_secret
+        return not secret or hmac.compare_digest(secret.encode(), (self.headers.get(PROXY_SECRET_HEADER) or "").encode())
 
     def _visitor_ip(self) -> str:
         """The address to count login failures against: the real visitor when a proxy we trust tells us who it is."""
@@ -477,17 +511,26 @@ class Handler(SimpleHTTPRequestHandler):
             self._challenge(HTTPStatus.TOO_MANY_REQUESTS, "Too many failed logins. Try again in a minute.")
             return False
         header = self.headers.get("Authorization", "")
+        cache_key = hashlib.sha256(header.encode()).digest() if header.startswith("Basic ") else None
+        hit = self.auth_cache.get(cache_key) if cache_key else None
+        if hit and hit[1] > now:   # a login that checked out moments ago: a page load makes ~20 requests, don't re-hash for each
+            self.failures.pop(ip, None)
+            self.user = hit[0]
+            return True
         if header.startswith("Basic "):
             try:
                 name, _, given = base64.b64decode(header[6:]).decode("utf-8").partition(":")
             except (ValueError, UnicodeDecodeError):
                 name, given = "", ""
             spec = c.users.get(name)
-            # compare even for unknown names, so response time doesn't reveal which names exist
-            ok = check_password(spec if spec is not None else "x" * 16, given) and spec is not None
+            # compare even for unknown names (against a hash of the same cost), so response time doesn't reveal which names exist
+            ok = check_password(spec if spec is not None else c.dummy_spec, given) and spec is not None
             if ok:
                 self.failures.pop(ip, None)
                 self.user = name
+                if len(self.auth_cache) > 200:
+                    self.auth_cache.clear()
+                self.auth_cache[cache_key] = (name, now + AUTH_CACHE_SECONDS)
                 return True
             count = fails[0] + 1
             self.failures[ip] = [count, now + LOGIN_LOCK_SECONDS if count >= LOGIN_FAILS_BEFORE_LOCK else 0.0, fails[2]]
@@ -539,6 +582,11 @@ class Handler(SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_HEAD(self):
+        if urlsplit(self.path).path == "/healthz":
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if not self._authenticate():
             return
         safe = self._static_path(urlsplit(self.path).path)
@@ -625,10 +673,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/backups/restore" and method == "POST":
             raw = self._body()
             try:
-                name = json.loads(raw or b"{}").get("name", "")
+                body = json.loads(raw or b"{}")
+                name = body.get("name", "") if isinstance(body, dict) else ""
             except ValueError:
                 name = ""
-            if not BACKUP_NAME.match(name) or not (d / "backups" / name).is_file():
+            if not isinstance(name, str) or not BACKUP_NAME.match(name) or not (d / "backups" / name).is_file():
                 return self._json(HTTPStatus.BAD_REQUEST, {"error": "unknown backup"})
             with write_lock:
                 src = d / "backups" / name
@@ -638,14 +687,19 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:
                     return self._json(HTTPStatus.BAD_REQUEST, {"error": "that backup is damaged"})
                 target = d / "profile.json"
-                if target.exists():  # keep what we're replacing
-                    shutil.copy2(target, d / "backups" / f"profile-before-restore-{time.strftime('%Y%m%d-%H%M%S')}.json")
-                atomic_write(target, data)
+                try:
+                    if target.exists():  # keep what we're replacing
+                        atomic_write(d / "backups" / f"profile-before-restore-{time.strftime('%Y%m%d-%H%M%S')}.json", target.read_bytes())
+                    atomic_write(target, data)
+                    prune_snapshots(d)
+                except OSError as e:
+                    return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't restore ({e.strerror or e})"})
             return self._json(HTTPStatus.OK, {"ok": True})
 
         if path == "/api/backups/snapshot" and method == "POST":  # "keep a copy of my profile as it is right now"
             try:
-                label = re.sub(r"[^a-z0-9-]", "", str(json.loads(self._body() or b"{}").get("label", "manual")).lower())[:30] or "manual"
+                body = json.loads(self._body() or b"{}")
+                label = re.sub(r"[^a-z0-9-]", "", str(body.get("label", "manual") if isinstance(body, dict) else "manual").lower())[:30] or "manual"
             except ValueError:
                 label = "manual"
             src = d / "profile.json"
@@ -653,8 +707,12 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(HTTPStatus.OK, {"ok": True, "name": None})
             (d / "backups").mkdir(parents=True, exist_ok=True)
             name = f"profile-{label}-{time.strftime('%Y%m%d-%H%M%S')}.json"
-            with write_lock:
-                shutil.copy2(src, d / "backups" / name)
+            try:
+                with write_lock:
+                    atomic_write(d / "backups" / name, src.read_bytes())
+                    prune_snapshots(d)
+            except OSError as e:
+                return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't write the backup ({e.strerror or e})"})
             return self._json(HTTPStatus.OK, {"ok": True, "name": name})
 
         name = FILES.get(path)
@@ -665,7 +723,8 @@ class Handler(SimpleHTTPRequestHandler):
         if method == "GET":
             if name == "profile.json":
                 doc, recovered = read_profile_with_recovery(d)
-                return self._json(HTTPStatus.OK, {"data": doc, "recoveredFrom": recovered})
+                rev = profile_rev(target.read_bytes()) if target.exists() else None
+                return self._json(HTTPStatus.OK, {"data": doc, "recoveredFrom": recovered, "rev": rev})
             if not target.exists():
                 return self._json(HTTPStatus.OK, None)
             try:
@@ -682,15 +741,28 @@ class Handler(SimpleHTTPRequestHandler):
             json.loads(raw)
         except ValueError:
             return self._json(HTTPStatus.BAD_REQUEST, {"error": "not JSON"})
-        with write_lock:
-            if name == "profile.json":
-                snapshot_before_overwrite(d, target, raw)
-                legacy = d / "state.json"
-                if not target.exists() and legacy.exists():  # first profile write: archive the old-format file
-                    (d / "backups").mkdir(parents=True, exist_ok=True)
-                    os.replace(legacy, d / "backups" / "profile-legacy-state-v1.json")
-            atomic_write(target, raw, private=(name == "config.json"))
-        return self._json(HTTPStatus.OK, {"ok": True})
+        try:
+            with write_lock:
+                if name == "profile.json":
+                    # Optimistic concurrency: a page that was opened before another tab or device saved must not
+                    # silently overwrite that work. It sends the revision it last saw; if the file has moved on, we say so.
+                    want = self.headers.get("If-Match")
+                    have = profile_rev(target.read_bytes()) if target.exists() else "none"
+                    if want is not None and want != have:
+                        try:
+                            current = json.loads(target.read_text("utf-8"))
+                        except (ValueError, OSError):
+                            current = None
+                        return self._json(HTTPStatus.CONFLICT, {"error": "conflict", "rev": None if have == "none" else have, "data": current})
+                    snapshot_before_overwrite(d, target, raw)
+                    legacy = d / "state.json"
+                    if not target.exists() and legacy.exists():  # first profile write: archive the old-format file
+                        (d / "backups").mkdir(parents=True, exist_ok=True)
+                        os.replace(legacy, d / "backups" / "profile-legacy-state-v1.json")
+                atomic_write(target, raw, private=(name == "config.json"))
+        except OSError as e:   # disk full, read-only folder...: say so instead of dropping the connection
+            return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't save ({e.strerror or e})"})
+        return self._json(HTTPStatus.OK, {"ok": True, "rev": profile_rev(raw) if name == "profile.json" else None})
 
     def _youtube_proxy(self, endpoint):
         """Forward a YouTube Data API call using the server's key, so browsers never hold it."""
@@ -721,6 +793,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def __init__(self, addr, handler):
+        if ":" in addr[0]:   # an IPv6 address such as "::" or "::1"
+            self.address_family = socket.AF_INET6
+        super().__init__(addr, handler)
 
 
 # ---------------------------------------------------------------- self-test (used by the updater before it switches versions)
@@ -825,13 +906,18 @@ def main(argv=None, env=None):
     except OSError as e:
         sys.exit(f"Couldn't create the data folder {c.data_dir}: {e}\nPick another with: python3 serve.py --data-dir /some/folder")
     note = "" if c.per_user else adopt_legacy_data(c.data_dir, c.legacy_dir)
+    if c.per_user and (c.data_dir / "profile.json").exists():
+        print(f"NOTE: {c.data_dir / 'profile.json'} holds data from a single-user setup. With several users, each person gets their own "
+              f"folder under {c.data_dir / 'users'} and that file is no longer used. To keep it, copy profile.json, index.json and config.json "
+              f"into {c.data_dir / 'users' / '<login name>'} (see deploy/README.md).", file=sys.stderr)
 
     Handler.cfg = c
     Handler.usage = UsageMeter(c.data_dir / "usage.json")
     try:
-        httpd = ThreadingHTTPServer((c.host, c.port), Handler)
+        httpd = Server((c.host, c.port), Handler)
     except OSError as e:
-        sys.exit(f"Couldn't start on port {c.port}: {e}\nIs Unfurl already running? Try --port {c.port + 1}.")
+        hint = f"\nIs Unfurl already running? Try --port {c.port + 1}." if e.errno == errno.EADDRINUSE else ""
+        sys.exit(f"Couldn't listen on {c.host}:{c.port}: {e}{hint}")
 
     shown = "localhost" if c.loopback_only else (sorted(c.allowed_hosts)[0] if c.allowed_hosts else c.host)
     url = f"http://{shown}:{c.port}/"

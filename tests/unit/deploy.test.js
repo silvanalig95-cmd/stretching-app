@@ -147,7 +147,7 @@ test('only one updater runs at a time; a lock left by a dead process does not bl
   const run = updater(home, remote);
   run('--no-restart');
   const second = remote.push('v2', goodChange(2));
-  const holder = spawn('sleep', ['30']);
+  const holder = spawn('bash', ['-c', 'exec -a update.sh sleep 30']);   // looks like a running updater
   try {
     fs.mkdirSync(path.join(home, '.update.lock'));
     fs.writeFileSync(path.join(home, '.update.lock', 'pid'), String(holder.pid));
@@ -320,4 +320,134 @@ test('the settings template has no same-line comments (systemd and docker would 
     if (/^\s*#/.test(line) || !line.trim()) continue;
     assert.match(line, /^[A-Z_]+=[^\s#]*$/, `bad line: ${line}`);
   }
+});
+
+
+// ---------------------------------------------------------------- fixes from the independent review
+
+test('a self-test that dies silently (killed, crashed) still blocks the update', () => {
+  const remote = makeRemote(), home = tmp('home');
+  const run = updater(home, remote);
+  run('--no-restart');
+  const good = liveBuild(home);
+  remote.push('silent death', editFile('serve.py', (t) => t.replace('    if args.selftest:\n        sys.exit(selftest())', '    if args.selftest:\n        os._exit(3)')));
+  const r = run('--no-restart');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /exited with status 3 and no message/);
+  assert.equal(liveBuild(home), good);
+});
+
+test('a JavaScript syntax error in the app is caught before it can be deployed (when node is available)', { skip: spawnSync('node', ['--version']).status !== 0 }, () => {
+  const remote = makeRemote(), home = tmp('home');
+  const run = updater(home, remote);
+  run('--no-restart');
+  const good = liveBuild(home);
+  remote.push('broken script', editFile('js/app.js', (t) => `${t}\nconst oops = ;\n`));
+  const r = run('--no-restart');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /js\/app\.js has a JavaScript syntax error/);
+  assert.equal(liveBuild(home), good);
+});
+
+test('the status never prints an access token that is part of the repository address; the folder is private', () => {
+  const remote = makeRemote(), home = tmp('home');
+  updater(home, remote)('--no-restart');
+  const withToken = updater(home, { bare: 'https://x-access-token:ghp_SECRETSECRET@github.com/you/repo.git' });
+  const r = withToken('--status');
+  assert.ok(!r.out.includes('SECRETSECRET'), r.out);
+  assert.match(r.out, /https:\/\/\*\*\*@github\.com\/you\/repo\.git/);
+  assert.equal((fs.statSync(home).mode & 0o077), 0, 'the app folder is not readable by other accounts');
+  assert.equal((fs.statSync(path.join(home, 'repo', 'config')).mode & 0o077), 0, 'nor is the repository config');
+});
+
+test('after a failed update the earlier fallback is still the fallback (and a missing one is not invented)', () => {
+  const remote = makeRemote(), home = tmp('home');
+  const run = updater(home, remote);
+  run('--no-restart');
+  const a = liveBuild(home);
+  const b = remote.push('b', goodChange(2));
+  run('--no-restart');
+  assert.equal(liveBuild(home), b);
+  // a failing update with a health check that cannot succeed (restart is "fine", nothing ever answers on that port)
+  const c = remote.push('c', goodChange(3));
+  const failing = updater(home, remote, { UNFURL_RESTART_CMD: 'true', UNFURL_HEALTH_URL: 'http://127.0.0.1:9/healthz', UNFURL_HEALTH_TIMEOUT: '2' })();
+  assert.equal(failing.code, 1, failing.out);
+  assert.match(failing.out, /did not come up healthy/);
+  assert.equal(liveBuild(home), b, 'back on the version that was live');
+  assert.equal(fs.readFileSync(path.join(fs.realpathSync(path.join(home, 'previous')), 'BUILD'), 'utf8').trim(), a, 'the fallback is still the one before it');
+  assert.equal(fs.readFileSync(path.join(home, 'failed'), 'utf8').trim(), c);
+  assert.equal(run('--rollback', '--no-restart').code, 0, 'so a rollback still works');
+  assert.equal(liveBuild(home), a);
+});
+
+test('a first update that fails leaves no bogus fallback pointing at the live version', () => {
+  const remote = makeRemote(), home = tmp('home');
+  updater(home, remote)('--no-restart');
+  remote.push('b', goodChange(2));
+  updater(home, remote, { UNFURL_RESTART_CMD: 'true', UNFURL_HEALTH_URL: 'http://127.0.0.1:9/healthz', UNFURL_HEALTH_TIMEOUT: '2' })();
+  assert.ok(!fs.existsSync(path.join(home, 'previous')), 'nothing to roll back to, and it says so rather than pointing at itself');
+});
+
+test('running: an http_proxy setting on the machine does not break the health check (every update used to be rolled back)', async () => {
+  const s = await bring({ extraEnv: { http_proxy: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9', UNFURL_HEALTH_TIMEOUT: '10' } });
+  try {
+    const first = s.remote.head();
+    await s.until(async () => (await s.build()) === first, 40000, 'first start');
+    const second = s.remote.push('v2', goodChange(2));
+    await s.until(async () => (await s.build()) === second, 40000, 'the update to go through');
+    await s.until(() => new RegExp(`update to ${second} is live and healthy`).test(readLog(s.home)), 15000, 'the updater to confirm it');
+    assert.ok(!fs.existsSync(path.join(s.home, 'failed')));
+  } finally { await s.stop(); }
+});
+
+test('running: a build id set in the environment cannot blind the updater to a new version', async () => {
+  const s = await bring({ extraEnv: { UNFURL_BUILD: 'my-own-label' } });
+  try {
+    const first = s.remote.head();
+    await s.until(async () => (await s.build()) === first, 40000, 'the release\'s own build id wins over the environment');
+  } finally { await s.stop(); }
+});
+
+test('running: a version that worked before and now cannot start (settings problem) is NOT swapped for an older one', async () => {
+  const blocker = net.createServer();
+  const remote = makeRemote(), home = tmp('home'), port = await freePort();
+  const run = updater(home, remote);
+  run('--no-restart');
+  remote.push('v2', goodChange(2));
+  run('--no-restart');
+  const b = liveBuild(home);
+  fs.writeFileSync(path.join(home, 'healthy'), `${b}\n`);               // v2 has run fine here before
+  await new Promise((r) => blocker.listen(port, '127.0.0.1', r));        // ... and now its port is taken
+  const proc = spawn('bash', [path.join(ROOT, 'deploy', 'run.sh')], { env: { ...process.env, UNFURL_HOME: home, UNFURL_REPO_URL: '', UNFURL_PORT: String(port), UNFURL_DATA: tmp('data'), UNFURL_UPDATE_INTERVAL: '0', UNFURL_CRASH_LIMIT: '2' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  try {
+    for (let i = 0; i < 120 && !/This version ran fine before/.test(log); i++) await sleep(250);
+    assert.match(log, /This version ran fine before/, log);
+    assert.equal(liveBuild(home), b, 'still on the version that was live');
+    assert.ok(!fs.existsSync(path.join(home, 'failed')), 'and it was not blacklisted');
+    await new Promise((r) => blocker.close(r));                          // the problem is fixed
+    let got = null;
+    for (let i = 0; i < 160 && got !== b; i++) { try { got = (await (await fetch(`http://127.0.0.1:${port}/healthz`)).json()).build; } catch { await sleep(250); } }
+    assert.equal(got, b, 'it comes up by itself once the port is free');
+  } finally { proc.kill('SIGTERM'); await sleep(500); try { process.kill(Number(fs.readFileSync(path.join(home, 'server.pid'), 'utf8')), 'SIGKILL'); } catch { /* gone */ } blocker.close(); }
+});
+
+test('running from a built-in copy: rebuilding the image brings the new copy in when no repository is followed', async () => {
+  const mkSeed = (build) => {
+    const seed = tmp('seed');
+    for (const f of ['serve.py', 'index.html', 'favicon.svg', 'css', 'js', 'data', 'deploy']) fs.cpSync(path.join(ROOT, f), path.join(seed, f), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'BUILD'), `${build}\n`);
+    return seed;
+  };
+  const home = tmp('home'), port = await freePort(), data = tmp('data');
+  const start = (seed) => spawn('bash', [path.join(ROOT, 'deploy', 'run.sh')], { env: { ...process.env, UNFURL_HOME: home, UNFURL_SEED: seed, UNFURL_PORT: String(port), UNFURL_DATA: data, UNFURL_REPO_URL: '', UNFURL_UPDATE_INTERVAL: '0' }, stdio: 'ignore' });
+  const buildNow = async () => { try { return (await (await fetch(`http://127.0.0.1:${port}/healthz`)).json()).build; } catch { return null; } };
+  const until = async (want) => { for (let i = 0; i < 100; i++) { if ((await buildNow()) === want) return true; await sleep(200); } return false; };
+  let proc = start(mkSeed('image-1'));
+  try {
+    assert.ok(await until('image-1'));
+    proc.kill('SIGTERM'); await sleep(800);
+    proc = start(mkSeed('image-2'));              // "docker compose up --build": same volume, newer image
+    assert.ok(await until('image-2'), 'the volume\'s old copy was replaced');
+  } finally { proc.kill('SIGTERM'); await sleep(500); }
 });
