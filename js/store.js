@@ -73,6 +73,7 @@ export class Store {
     if (unreadable) this.notes.push(`Couldn’t read your saved data from the ${APP_NAME} server just now. To be safe nothing will be saved this session, so your real data can’t be overwritten. Reload the page (or restart serve.py) and try again.`);
     if (this.recoveredFrom) this.notes.push(`Your data file was damaged, so it was restored from the backup “${this.recoveredFrom}”. The damaged file was kept.`);
     this.config = { apiKey: '', ...(config ?? {}) };
+    if (loaded.droppedStrength && !this.readOnly && this.mode === 'server') await this.#post('/api/backups/snapshot', { label: 'before-strength-removal' });   // keep a copy: this deletes data
     if (loaded.changed && !this.readOnly) await this.#flushNow(true);
     else this.#remember();
     return this;

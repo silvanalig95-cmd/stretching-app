@@ -1,5 +1,5 @@
 @echo off
-rem Starts Palaestra so that other devices on your home network can use it too (log-in required).
+rem Starts Atlas so that other devices on your home network can use it too (log-in required).
 rem Double-click it. Close the window to stop the server.
 setlocal
 cd /d "%~dp0"
@@ -48,7 +48,7 @@ if "%UNFURL_AUTO_PULL%"=="1" if exist ".git" (
 echo.
 set "PORTSUFFIX=:%UNFURL_PORT%"
 if "%UNFURL_PORT%"=="80" set "PORTSUFFIX="
-echo Palaestra will be reachable at:
+echo Atlas will be reachable at:
 echo     http://%COMPUTERNAME%%PORTSUFFIX%/
 echo   or, using this PC's address ^(look for "IPv4"^), for example http://192.168.1.50%PORTSUFFIX%/
 ipconfig | findstr /c:"IPv4"

@@ -10,30 +10,13 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
-## 0.5.0
+## 0.6.0
 
-**A calmer look.** The Greek styling is gone. The app is now light blue and grey (with a matching dark mode that follows your system), set in Inter, a modern typeface that ships with the app, and has a new simple logo. The name is one constant (`js/brand.js`) and a few lines of `index.html`, so renaming it is a small job.
+**Atlas.** The app has a new name. Its look is the one it always had; only the name changed, and it now lives in one constant (`js/brand.js`) plus a few lines of `index.html`, so renaming it again is a small job. Technical names (`UNFURL_*` settings, the data folder, Docker volumes, the `X-Unfurl` header) keep their old spelling so nothing that exists has to move.
 
-**A tidier exercise list.** The 126 exercises are grouped by the movement they train (pulling from above, rowing, pressing, squatting, hinging, core …) under Upper body / Lower body / Core. Groups open on tap; each exercise is one line (name, main muscles, what it takes, difficulty, ＋ Add); tapping it shows how it is done, helping muscles, the progression, your last and best, the guide videos, “Never suggest”, and Edit/Delete for your own. Searching opens the groups that match. The picker dialog uses the same compact rows with an ⓘ for the details.
+**Library: your videos come first.** Adding, importing a playlist or a teacher, looking at a video first and “let the app go looking” sit in one collapsed menu under the heading, so your videos are the first thing you see (it opens by itself only while there is nothing to show yet).
 
-**Exercises, workouts and plans, explained.** A short explainer on the Workouts page (an *exercise* is one movement, a *workout* is one session, a *plan* is an order of workouts to rotate through). A **Next up** block with a Start button, “in plan: …” / “single workout” badges on each workout, the rotation spelled out on each plan, and templates that say what they will save (“Save as a plan (3 workouts)”).
-
-**An optional AI coach.** “Build it” uses simple scoring rules (and is now labelled as such: quick, offline, not an expert). New: **✨ Ask the coach** on the Workouts page, which asks Claude to design a workout, or a whole plan for a request like “4-day upper/lower split for running strength”, and **✨ Ask the coach** in the builder for ideas to round off a workout. Claude is shown only the exercises you can actually do (equipment, avoid list and “never suggest” already applied), and every exercise in its answer is checked against that list again before you see it; anything invented is dropped and mentioned. Drafts are labelled as Claude’s or as rule-based, and explain their choices.
-- It needs your own Anthropic API key (Settings → AI coach), which the server keeps in a private file (`llm.json`) and never sends back to the browser, or one key on the server for everybody (`UNFURL_ANTHROPIC_KEY`). It costs a few US cents per request, billed by Anthropic. Per-person daily cap (`UNFURL_USER_DAILY_LLM_CALLS`, default 40).
-- Sent to Anthropic, only when you press a coach button: your request, the catalogue of what you can do, your goal/level/session length/weak spots and your last two weeks of strength sessions. Never your library, notes, channels or YouTube key.
-- Models: Claude Opus 5.5 (default) or Sonnet 5.5 (about half the price) in Settings, or `UNFURL_LLM_MODEL`.
-- Without a key nothing changes; the coach explains what is missing and the rule-based builder keeps working.
-- The server now serves a bundled font file (cached for a week); `llm.json` is included in `--backup` and `--restore`.
-
-## 0.4.0
-
-**Palaestra.** The app has a new name, logo and look, drawn from ancient Greece: the *palaestra* was where athletes trained. A pillar-shaped Π logo, a Greek-key (meander) border, terracotta, olive and gold in light mode and black-figure umber in dark mode, serif headings, and the Greek word for each page above it (Έκτασις for stretching, Δύναμις for strength, Υπομνήματα for the journal). The name lives in `js/brand.js`. Settings names (`UNFURL_…`), the data folder and Docker volumes are unchanged, so nothing has to be moved.
-
-**Strength.** A new tab, kept apart from the stretching side. A catalogue of over 120 exercises (dumbbells, cable/weight station, pull-up bar, loop bands, inversion trainer, bodyweight) with muscles, difficulty, how-to cues and progression ladders, extendable with your own. Describe a workout in words, or start with a few exercises and let it suggest what is missing (every idea says why), fill to a time, swap, reorder, save and reuse. Templates (runner’s strength ×3, pistol path, full body, upper/lower, push/pull/legs, core and hips) fill in with your equipment and can be saved as a plan with “next up”. A set logger where reps, weight and time are optional and suggested from your last time (next weight you own, next rung of a progression), personal bests, an unfinished session that survives a reload, and “Stretch what you trained →”. YouTube guide videos can be attached to any exercise.
-
-**One journal for both.** Separate weekly goals for stretching and strength; one calendar and 12-week chart in two colours with an All / Stretching / Strength filter; strength sessions listed with their sets in the day view and editable afterwards; sets per muscle, push against pull, personal bests and a per-exercise history; the muscle map shows stretching and strength side by side; the CSV has a type and an exercises column. Today’s reminder line shows both goals.
-
-**Library: videos first.** Adding, importing a playlist or teacher, looking at a video first and “let the app go looking” now sit in one collapsed menu under the heading, so your videos come first. It opens by itself only while you have nothing yet.
+**The Strength section is gone.** Versions 0.4 and 0.5 briefly carried a Strength tab (an exercise catalogue, a workout builder, plans, a set logger) and an optional AI coach. They were removed again, together with the Greek and blue/grey looks that came with them, and the app is back to stretching, yoga and stability. If your data was saved by those versions, the first start of this one removes the strength workouts, plans, sessions and weekly strength goal from it, says so once, and keeps a copy of your data from just before (Settings → Your data → Backups, “before-strength-removal”).
 
 ## 0.3.0
 

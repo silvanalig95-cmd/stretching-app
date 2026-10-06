@@ -1,9 +1,9 @@
-# Hosting Palaestra on a server (with automatic updates)
+# Hosting Atlas on a server (with automatic updates)
 
 > **On Windows?** See [WINDOWS.md](WINDOWS.md) for step-by-step instructions, from "just this PC" to "always on and updating itself".
 > **Sharing with friends outside your home network?** See [EXTERNAL.md](EXTERNAL.md). **Backing up to a cloud drive, and restoring?** See [BACKUP.md](BACKUP.md).
 
-The idea: the server **follows a git branch**. Whenever a new version is pushed to that branch, the server notices within a minute, tests it, switches to it, and checks it came up healthy. If anything is wrong it keeps (or goes back to) the version that was working. People with the page open see *“A new version of Palaestra is ready — Reload”*.
+The idea: the server **follows a git branch**. Whenever a new version is pushed to that branch, the server notices within a minute, tests it, switches to it, and checks it came up healthy. If anything is wrong it keeps (or goes back to) the version that was working. People with the page open see *“A new version of Atlas is ready — Reload”*.
 
 ```
   you ask for a change in chat ─► Claude commits + pushes to the branch
@@ -60,7 +60,7 @@ The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates i
 
 ## How to tell which version is running
 
-The footer of the app shows the build (`Palaestra 0.5.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
+The footer of the app shows the build (`Atlas 0.6.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 
@@ -68,7 +68,7 @@ The server **refuses to listen on the network without a login**, so it can never
 
 - **One shared login** (a household): `UNFURL_AUTH=name:passphrase`. Everyone shares one library.
 - **A login per person**, each with their own library, history and ratings: put one `name:password` per line in a file and set `UNFURL_USERS_FILE=/etc/unfurl/users.txt`. Each person's data goes to its own folder under `users/`, and nobody can see another's.
-- **You already have SSO / a login proxy** (Authelia, oauth2-proxy, Cloudflare Access, Tailscale serve...): set `UNFURL_TRUST_PROXY_USER=X-Forwarded-User` (the header your proxy sets). The server then believes that header **only from the proxy**: requests must come from `UNFURL_PROXY_IPS` (default `127.0.0.1`; if the proxy is another machine, list exactly that machine, e.g. `10.0.0.5/32`, never a whole network — everyone on it could otherwise pose as any user) and, if you set `UNFURL_PROXY_SECRET`, must carry the same value in an `X-Palaestra-Proxy-Secret` header, which your proxy adds (Caddy: `header_up X-Palaestra-Proxy-Secret …`; nginx: `proxy_set_header X-Palaestra-Proxy-Secret …;`). Keep the server reachable only through the proxy.
+- **You already have SSO / a login proxy** (Authelia, oauth2-proxy, Cloudflare Access, Tailscale serve...): set `UNFURL_TRUST_PROXY_USER=X-Forwarded-User` (the header your proxy sets). The server then believes that header **only from the proxy**: requests must come from `UNFURL_PROXY_IPS` (default `127.0.0.1`; if the proxy is another machine, list exactly that machine, e.g. `10.0.0.5/32`, never a whole network — everyone on it could otherwise pose as any user) and, if you set `UNFURL_PROXY_SECRET`, must carry the same value in an `X-Atlas-Proxy-Secret` header, which your proxy adds (Caddy: `header_up X-Atlas-Proxy-Secret …`; nginx: `proxy_set_header X-Atlas-Proxy-Secret …;`). Keep the server reachable only through the proxy.
 
 Passwords can be stored hashed (recommended, since the settings file is readable by the service account): run `python3 serve.py --hash-password` and paste the result after the name. An empty password is refused. Five wrong passwords lock that visitor out for a minute.
 
@@ -80,7 +80,7 @@ Passwords can be stored hashed (recommended, since the settings file is readable
 
 ## HTTPS
 
-Logins and your data travel in the clear over plain `http://`. Inside a trusted network that may be acceptable; otherwise put a reverse proxy with HTTPS in front, bind Palaestra to `127.0.0.1` (`UNFURL_HOST=127.0.0.1`), and list the public name in `UNFURL_ALLOWED_HOSTS`.
+Logins and your data travel in the clear over plain `http://`. Inside a trusted network that may be acceptable; otherwise put a reverse proxy with HTTPS in front, bind Atlas to `127.0.0.1` (`UNFURL_HOST=127.0.0.1`), and list the public name in `UNFURL_ALLOWED_HOSTS`.
 
 **Caddy** (gets certificates automatically; `tls internal` makes its own for an internal name, which you install once on your devices):
 
@@ -112,10 +112,6 @@ server {
 ## YouTube access for everyone
 
 Searching YouTube needs a free API key. Either each person pastes their own in **Settings** (their own 10,000 units a day), or you keep **one key on the server** (`UNFURL_YOUTUBE_KEY` or `UNFURL_YOUTUBE_KEY_FILE`) and nobody needs one: the browser never sees it, and each person is capped (`UNFURL_USER_DAILY_UNITS`, default 3,000 of the key's 10,000 a day, counted in Pacific time like YouTube's own day and remembered across restarts). A person who pastes their own key uses that instead.
-
-## The AI coach (optional)
-
-Strength has a **✨ Ask the coach** button that lets Claude (an AI model by Anthropic) design a workout or a whole plan from a description. It needs an Anthropic API key and costs a few US cents per request, billed by Anthropic to whoever owns the key. Either each person pastes their own in **Settings → AI coach** (it is stored on the server in `llm.json`, never sent back to the browser, and included in backups), or you keep one key on the server (`UNFURL_ANTHROPIC_KEY` or `UNFURL_ANTHROPIC_KEY_FILE`) so friends can use the coach on your credit; each person is capped (`UNFURL_USER_DAILY_LLM_CALLS`, 40 by default, 0 = no cap). `UNFURL_LLM_MODEL` sets the default model. What is sent to Anthropic: only the request text, the exercises you can do, your goal and settings and your last two weeks of strength sessions; never your video library, notes, channels or keys. Without a key the rest of the app is unaffected.
 
 ## Private repository
 

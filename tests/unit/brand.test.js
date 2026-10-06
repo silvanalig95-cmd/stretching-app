@@ -1,4 +1,4 @@
-// The name lives in one place and matches the page; the look is the light-blue/grey theme with the bundled font.
+// The name lives in one place and matches the page; the Strength section and everything that went with it is gone.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -11,35 +11,28 @@ const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const walk = (dir) => fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]));
 
 test('the name in index.html matches the one constant', () => {
+  assert.equal(APP_NAME, 'Atlas');
   const html = read('index.html');
   assert.match(html, new RegExp(`<title>${APP_NAME}</title>`));
   assert.ok(html.includes(`aria-label="${APP_NAME} home"`), 'the brand link');
-  assert.ok(html.includes(`<span class="brand-name">${APP_NAME}</span>`), 'the brand text');
+  assert.ok(/<a class="brand"[\s\S]*?<\/svg>\s*Atlas\s*<\/a>/.test(html), 'the brand text');
   assert.ok(html.includes(`<noscript><p>${APP_NAME} needs JavaScript.`), 'the noscript note');
   assert.match(read('favicon.svg'), /id="mark"/);
 });
 
 test('no visible text still carries the old name; only technical names keep it', () => {
-  const files = [...walk('js'), 'index.html', 'css/style.css'];
-  for (const f of files) {
+  for (const f of [...walk('js'), 'index.html', 'css/style.css'].filter((x) => !x.endsWith('brand.js'))) {   // brand.js explains the technical names, so it has to say them
     read(f).split('\n').forEach((line, i) => {
-      const bare = line.replace(/X-Unfurl/g, '').replace(/'unfurl'/g, '');
-      assert.ok(!/Unfurl/.test(bare), `${f}:${i + 1} still says Unfurl: ${line.trim().slice(0, 100)}`);
+      const bare = line.replace(/X-Unfurl/g, '').replace(/'unfurl'/g, '').replace(/unfurl\.(profile|index|config|state)/g, '').replace(/__unfurl/g, '').replace(/UNFURL_[A-Z_]+/g, '').replace(/unfurl\.env|unfurl-[a-z]+/g, '');
+      assert.ok(!/unfurl/i.test(bare), `${f}:${i + 1} still says Unfurl: ${line.trim().slice(0, 100)}`);
     });
   }
 });
 
-test('the stylesheet: light-blue/grey in light and dark, one modern bundled font, no leftovers of the old look', () => {
-  const css = read('css/style.css');
-  assert.match(css, /prefers-color-scheme: dark/);
-  assert.match(css, /--accent: #2b6cb0/);
-  assert.match(css, /--font: "Inter", system-ui/);
-  assert.match(css, /fonts\/inter-latin-wght-normal\.woff2/);
-  assert.ok(fs.statSync(path.join(ROOT, 'css/fonts/inter-latin-wght-normal.woff2')).size > 10000, 'the font file is bundled');
-  assert.ok(fs.existsSync(path.join(ROOT, 'css/fonts/Inter-LICENSE.txt')), 'its licence travels with it');
-  for (const gone of ['Palatino', 'serif)', '--meander', '.kicker', '--gold']) assert.ok(!css.includes(gone), `${gone} should be gone`);
-  const html = read('index.html');
-  assert.ok(!html.includes('meander') && !html.includes('kicker'));
-  // the Content-Security-Policy has no font-src, so fonts fall back to default-src 'self': the bundled file is allowed, remote ones are not
-  assert.ok(!/font-src/.test(html) && /default-src 'self'/.test(html));
+test('the Strength section and the AI coach are gone: no files, no tab, no endpoints, no bundled font', () => {
+  for (const gone of ['js/strength', 'js/llm.js', 'js/views/strength.js', 'js/views/guides.js', 'js/views/settings-ai.js', 'css/fonts', 'tests/helpers/fake-anthropic.js']) assert.ok(!fs.existsSync(path.join(ROOT, gone)), `${gone} should be gone`);
+  assert.deepEqual([...read('js/app.js').matchAll(/\['(\w+)', '(\w+)', mount/g)].map((m) => m[2]), ['Today', 'Library', 'Journal', 'Settings']);
+  const server = read('serve.py');
+  for (const word of ['/api/llm', 'ANTHROPIC', 'llm.json', 'woff2']) assert.ok(!server.includes(word), `serve.py still mentions ${word}`);
+  for (const f of walk('js')) assert.ok(!/strength\/|mountStrength|\/api\/llm|normalizeStrength|logStrength/.test(read(f)), `${f} still refers to the Strength section`);
 });

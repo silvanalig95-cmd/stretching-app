@@ -22,8 +22,7 @@ WHERE THE DATA LIVES
   Override with --data-dir or UNFURL_DATA.
     profile.json   your library, history, ratings, preferences (small, precious)
     index.json     everything the app has discovered and analysed (rebuildable)
-    config.json    your YouTube API key (private, mode 600)
-    llm.json       your Anthropic key for the optional AI coach, if you saved one (private, mode 600; never sent back to the browser)
+    config.json    your API key (private, mode 600)
     backups/       rolling daily backups of profile.json + one before every
                    data-format upgrade
   With several users, each gets their own folder under users/.
@@ -43,10 +42,6 @@ SETTINGS (environment variables; every one has a command-line flag too)
   UNFURL_YOUTUBE_KEY      a YouTube Data API key kept ON THE SERVER; browsers never see it
   UNFURL_YOUTUBE_KEY_FILE same, read from a file
   UNFURL_USER_DAILY_UNITS per-user daily cap on the shared key, in quota units (default 3000)
-  UNFURL_ANTHROPIC_KEY    optional: an Anthropic API key kept ON THE SERVER for the AI coach (Strength); people can also save their own in Settings
-  UNFURL_ANTHROPIC_KEY_FILE  same, read from a file
-  UNFURL_LLM_MODEL        model the AI coach uses (default claude-opus-5-5; people can pick claude-sonnet-5-5 in Settings)
-  UNFURL_USER_DAILY_LLM_CALLS  per-user daily cap on AI-coach requests (default 40; 0 = no cap)
   UNFURL_BUILD            a label for this build (default: the git commit)
   UNFURL_POLL_SECONDS     how often open pages check for a new version (default 60)
   Passwords may be plain text or hashed: run  python3 serve.py --hash-password
@@ -89,7 +84,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode, unquote, quote
 
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
@@ -100,12 +95,6 @@ PROXY_SECRET_HEADER = "X-Unfurl-Proxy-Secret"
 FILES = {"/api/profile": "profile.json", "/api/index": "index.json", "/api/config": "config.json"}
 BACKUP_NAME = re.compile(r"^profile-[A-Za-z0-9._-]+\.json$")
 YT_UPSTREAM = "https://www.googleapis.com/youtube/v3"
-LLM_UPSTREAM = "https://api.anthropic.com"
-LLM_MODELS = ("claude-opus-5-5", "claude-sonnet-5-5")   # what a person may pick in Settings
-LLM_KEY = re.compile(r"^sk-ant-[A-Za-z0-9_-]{16,400}$")
-LLM_MAX_TEXT = 60_000        # characters of instructions or of question: the whole exercise catalogue fits easily
-LLM_MAX_SCHEMA = 20_000
-LLM_MAX_TOKENS = 12_000
 YT_COST = {"search": 100, "videos": 1, "commentThreads": 1, "channels": 1, "playlistItems": 1, "playlists": 1}
 LOGIN_FAILS_BEFORE_LOCK = 5
 LOGIN_LOCK_SECONDS = 60
@@ -114,7 +103,6 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
-mimetypes.add_type("font/woff2", ".woff2")
 
 write_lock = threading.Lock()
 
@@ -138,10 +126,6 @@ class Config:
         self.dummy_spec = ""            # compared against for unknown names, so they cost as much time as real ones
         self.yt_key = ""
         self.yt_upstream = YT_UPSTREAM
-        self.llm_key = ""               # an Anthropic key kept on the server (optional); a person's own key in llm.json wins
-        self.llm_upstream = LLM_UPSTREAM
-        self.llm_model = LLM_MODELS[0]
-        self.user_daily_llm_calls = 40
         self.user_daily_units = 3000
         self.build = ""
         self.poll_seconds = 60
@@ -240,15 +224,6 @@ def build_config(args, env) -> Config:
     c.yt_key = (Path(kf).expanduser().read_text("utf-8").strip() if kf else env.get("UNFURL_YOUTUBE_KEY", "")).strip()
     c.yt_upstream = env.get("UNFURL_YT_UPSTREAM", YT_UPSTREAM).rstrip("/")
     c.user_daily_units = int(env.get("UNFURL_USER_DAILY_UNITS", c.user_daily_units))
-    lf = env.get("UNFURL_ANTHROPIC_KEY_FILE")
-    c.llm_key = (Path(lf).expanduser().read_text("utf-8").strip() if lf else env.get("UNFURL_ANTHROPIC_KEY", "")).strip()
-    c.llm_upstream = env.get("UNFURL_ANTHROPIC_BASE", LLM_UPSTREAM).rstrip("/")
-    model = env.get("UNFURL_LLM_MODEL", "").strip()
-    if model:
-        if not re.fullmatch(r"claude-[a-z0-9.-]{3,60}", model):
-            sys.exit(f"UNFURL_LLM_MODEL={model!r} doesn't look like a model name (for example {LLM_MODELS[0]}).")
-        c.llm_model = model
-    c.user_daily_llm_calls = int(env.get("UNFURL_USER_DAILY_LLM_CALLS", c.user_daily_llm_calls))
     c.build = env.get("UNFURL_BUILD") or git_build()
     c.poll_seconds = int(env.get("UNFURL_POLL_SECONDS", c.poll_seconds))
     c.open_browser = not args.no_open
@@ -439,10 +414,10 @@ def adopt_root_data(c: Config) -> str:
         return ""
     dest.mkdir(parents=True, exist_ok=True)
     copied = []
-    for f in ("profile.json", "index.json", "config.json", "llm.json"):
+    for f in ("profile.json", "index.json", "config.json"):
         src = c.data_dir / f
         if src.exists() and not (dest / f).exists():
-            atomic_write(dest / f, src.read_bytes(), private=(f in ("config.json", "llm.json")))
+            atomic_write(dest / f, src.read_bytes(), private=(f == "config.json"))
             copied.append(f)
     return f"Gave the existing data ({', '.join(copied)}) to {name} (copied into {dest}; the originals were left in place)." if copied else ""
 
@@ -494,27 +469,12 @@ class UsageMeter:
             if self.used.get(key, 0) + units > cap:
                 return False
             self.used[key] = self.used.get(key, 0) + units
-            self._save()
+            if self.path:
+                try:
+                    atomic_write(Path(self.path), json.dumps({"day": self.day, "used": self.used}).encode())
+                except OSError:
+                    pass  # counting is best effort; never fail a request over it
             return True
-
-    def refund(self, user, units):
-        """Give back what a request that never got an answer had reserved."""
-        with self.lock:
-            key = user or ""
-            if self.day == self.today() and self.used.get(key, 0) > 0:
-                self.used[key] = max(0, self.used[key] - units)
-                self._save()
-
-    def spent(self, user):
-        with self.lock:
-            return self.used.get(user or "", 0) if self.day == self.today() else 0
-
-    def _save(self):
-        if self.path:
-            try:
-                atomic_write(Path(self.path), json.dumps({"day": self.day, "used": self.used}).encode())
-            except OSError:
-                pass  # counting is best effort; never fail a request over it
 
 
 # ---------------------------------------------------------------- HTTP
@@ -522,7 +482,6 @@ class UsageMeter:
 class Handler(SimpleHTTPRequestHandler):
     cfg: Config
     usage = UsageMeter()   # replaced in main() with one that lives in the data folder
-    llm_usage = UsageMeter()   # the same, for AI-coach requests (llm-usage.json)
     failures = {}   # ip -> [count, locked_until, window_start]
     auth_cache = {}  # sha256(Authorization header) -> (name, valid_until); only successful logins
 
@@ -552,8 +511,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def end_headers(self):
-        # everything is re-fetched on purpose (the app updates itself), except the bundled font, which never changes
-        self.send_header("Cache-Control", "public, max-age=604800" if str(getattr(self, "path", "")).startswith("/css/fonts/") else "no-store")
+        self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")  # YouTube embeds need the referrer
@@ -778,12 +736,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self._youtube_proxy(path[len("/api/yt/"):])
 
         d.mkdir(parents=True, exist_ok=True)
-        if path == "/api/llm/status" and method == "GET":
-            return self._json(HTTPStatus.OK, self._llm_status())
-        if path == "/api/llm/settings" and method == "PUT":
-            return self._llm_settings()
-        if path == "/api/llm" and method == "POST":
-            return self._llm_call()
         if path == "/api/legacy" and method == "GET":  # a version-1 state.json, if one is waiting to be migrated
             f = d / "state.json"
             try:
@@ -888,133 +840,6 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't save ({e.strerror or e})"})
         return self._json(HTTPStatus.OK, {"ok": True, "rev": profile_rev(raw) if name == "profile.json" else None})
 
-    # ---- the optional AI coach: the browser asks, the server holds the Anthropic key and makes the call
-    def _llm_pick(self):
-        """(key, where it came from, model) for this person. Their own key wins over the one on the server."""
-        c = self.cfg
-        mine = read_llm_file(self.data_dir)
-        own = mine.get("key") if isinstance(mine.get("key"), str) and LLM_KEY.match(mine["key"]) else ""
-        model = mine.get("model") if mine.get("model") in LLM_MODELS else c.llm_model
-        if own:
-            return own, "own", model
-        if c.llm_key:
-            return c.llm_key, "server", model
-        return "", None, model
-
-    def _llm_status(self):
-        c = self.cfg
-        key, source, model = self._llm_pick()
-        own = read_llm_file(self.data_dir).get("key", "")
-        return {"ready": bool(key), "source": source, "model": model, "models": list(LLM_MODELS),
-                "ownKey": f"…{own[-4:]}" if isinstance(own, str) and LLM_KEY.match(own) else "",   # a hint that one is saved; the key itself never leaves the server
-                "dailyCap": c.user_daily_llm_calls, "usedToday": self.llm_usage.spent(self.user)}
-
-    def _llm_settings(self):
-        d = self.data_dir
-        try:
-            body = json.loads(self._body() or b"{}")
-        except ValueError:
-            body = None
-        if not isinstance(body, dict):
-            return self._json(HTTPStatus.BAD_REQUEST, {"error": "not JSON"})
-        cur = read_llm_file(d)
-        if "key" in body:
-            k = body["key"].strip() if isinstance(body["key"], str) else body["key"]
-            if k in ("", None):
-                cur.pop("key", None)
-            elif isinstance(k, str) and LLM_KEY.match(k):
-                cur["key"] = k
-            else:
-                return self._json(HTTPStatus.BAD_REQUEST, {"error": "That doesn't look like an Anthropic API key (they start with sk-ant-)."})
-        if "model" in body:
-            if body["model"] in LLM_MODELS:
-                cur["model"] = body["model"]
-            elif body["model"] in ("", None):
-                cur.pop("model", None)
-            else:
-                return self._json(HTTPStatus.BAD_REQUEST, {"error": "unknown model"})
-        try:
-            d.mkdir(parents=True, exist_ok=True)
-            with write_lock:
-                atomic_write(d / "llm.json", json.dumps(cur).encode(), private=True)
-        except OSError as e:
-            return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't save ({e.strerror or e})"})
-        return self._json(HTTPStatus.OK, self._llm_status())
-
-    def _llm_call(self):
-        """One question to Claude, one answer. The page sends the instructions, the question and (optionally) a JSON
-        schema for the answer; the model, the key, the size limits and the daily cap are the server's business."""
-        c = self.cfg
-        key, source, model = self._llm_pick()
-        if not key:
-            return self._json(HTTPStatus.BAD_REQUEST, {"error": "no_key", "message": "The AI coach needs an Anthropic API key. Add yours in Settings."})
-        try:
-            body = json.loads(self._body() or b"{}")
-        except ValueError:
-            body = None
-        system, prompt = (body or {}).get("system", ""), (body or {}).get("prompt", "")
-        schema, max_tokens = (body or {}).get("schema"), (body or {}).get("maxTokens", 8000)
-        if not (isinstance(body, dict) and isinstance(system, str) and isinstance(prompt, str) and prompt.strip()
-                and len(system) <= LLM_MAX_TEXT and len(prompt) <= LLM_MAX_TEXT
-                and (schema is None or (isinstance(schema, dict) and len(json.dumps(schema)) <= LLM_MAX_SCHEMA))
-                and isinstance(max_tokens, int) and not isinstance(max_tokens, bool)):
-            return self._json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "message": "That request was malformed or too large."})
-        max_tokens = max(256, min(LLM_MAX_TOKENS, max_tokens))
-        cap = c.user_daily_llm_calls
-        if cap > 0 and not self.llm_usage.charge(self.user, 1, cap):
-            return self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "daily_cap", "message": f"You have used today's {cap} AI-coach requests on this server. It resets tomorrow (US Pacific time)."})
-
-        def give_back():
-            if cap > 0:
-                self.llm_usage.refund(self.user, 1)
-
-        output = {"effort": "medium"}
-        if schema:
-            output["format"] = {"type": "json_schema", "schema": schema}
-        payload = {"model": model, "max_tokens": max_tokens, "output_config": output, "messages": [{"role": "user", "content": prompt}]}
-        if system.strip():   # the long, stable part (the exercise catalogue): marked so repeat questions are billed at the cheaper cached rate
-            payload["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
-        req = urllib.request.Request(f"{c.llm_upstream}/v1/messages", data=json.dumps(payload).encode(), method="POST",
-                                     headers={"content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "User-Agent": f"Unfurl/{APP_VERSION}"})
-        try:
-            with urllib.request.urlopen(req, timeout=170) as resp:
-                status, data = resp.status, resp.read()
-        except urllib.error.HTTPError as e:
-            status, data = e.code, e.read()
-        except (urllib.error.URLError, TimeoutError, OSError):
-            give_back()
-            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "unreachable", "message": "The server couldn't reach Anthropic. Check its internet connection and try again."})
-        try:
-            doc = json.loads(data)
-        except ValueError:
-            doc = {}
-        if not isinstance(doc, dict):
-            doc = {}
-        if status != 200:
-            err = doc.get("error") if isinstance(doc.get("error"), dict) else {}
-            msg = str(err.get("message", "")).replace(key, "…")[:300]
-            if status in (401, 403):
-                return self._json(HTTPStatus.BAD_GATEWAY, {"error": "invalid_key", "message": "Anthropic did not accept the API key" + (" saved on the server." if source == "server" else ". Check the one you saved in Settings.")})
-            if status == 429 or status >= 500:
-                give_back()
-                return self._json(HTTPStatus.BAD_GATEWAY, {"error": "busy", "message": "Anthropic is busy or rate-limiting right now. Try again in a minute."})
-            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "rejected", "message": msg or f"Anthropic refused the request (HTTP {status})."})
-        stop = doc.get("stop_reason")
-        if stop == "refusal":
-            return self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "refused", "message": "Claude declined to answer that."})
-        if stop == "max_tokens":
-            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "too_long", "message": "The answer was cut off. Ask for something smaller."})
-        text = "".join(b.get("text", "") for b in doc.get("content", []) if isinstance(b, dict) and b.get("type") == "text")
-        result = None
-        if schema:
-            try:
-                result = json.loads(text)
-            except ValueError:
-                return self._json(HTTPStatus.BAD_GATEWAY, {"error": "bad_answer", "message": "Claude's answer wasn't in the expected form. Try again."})
-        u = doc.get("usage") if isinstance(doc.get("usage"), dict) else {}
-        return self._json(HTTPStatus.OK, {"ok": True, "result": result, "text": text, "model": doc.get("model", model), "stopReason": stop,
-                                          "usage": {k: u.get(k) for k in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens") if isinstance(u.get(k), int)}})
-
     def _youtube_proxy(self, endpoint):
         """Forward a YouTube Data API call using the server's key, so browsers never hold it."""
         c = self.cfg
@@ -1044,15 +869,6 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-
-
-def read_llm_file(d: Path) -> dict:
-    """A person's AI-coach settings (their own Anthropic key, their model choice). Missing or damaged = none."""
-    try:
-        doc = json.loads((Path(d) / "llm.json").read_text("utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return doc if isinstance(doc, dict) else {}
 
 
 def port_in_use(host: str, port: int) -> bool:
@@ -1146,7 +962,7 @@ def selftest() -> int:
 
 ARCHIVE_NAME = re.compile(r"^unfurl-backup-\d{4}-\d{2}-\d{2}\.zip$")
 _USER = r"users/[a-z0-9_-][a-z0-9._-]{0,63}/"
-RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage|llm|llm-usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
+RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
 USER_FOLDER = re.compile(r"^[a-z0-9_-][a-z0-9._-]{0,63}$")
 RECENT_COPIES = 3            # of the app's own rolling profile backups, per person, that go into the archive
 MAX_RESTORE_BYTES = 4 << 30
@@ -1158,7 +974,7 @@ def backup_sources(data_dir: Path, small: bool = False):
     found = []
 
     def folder(path: Path, prefix: str):
-        for name in ("profile.json", "config.json", "llm.json", "usage.json", "llm-usage.json") + (() if small else ("index.json",)):
+        for name in ("profile.json", "config.json", "usage.json") + (() if small else ("index.json",)):
             f = path / name
             if f.is_file() and not f.is_symlink():
                 found.append((prefix + name, f))
@@ -1253,7 +1069,7 @@ def restore_backup(archive: Path, data_dir: Path, force: bool = False) -> str:
         if bad:
             sys.exit(f"{archive} is damaged ({bad}). Nothing was changed.")
         data_dir.mkdir(parents=True, exist_ok=True)
-        current = [n for n in ("profile.json", "index.json", "config.json", "llm.json", "usage.json", "llm-usage.json", "users") if (data_dir / n).exists()]
+        current = [n for n in ("profile.json", "index.json", "config.json", "usage.json", "users") if (data_dir / n).exists()]
         aside = None
         if current:
             if not force:
@@ -1264,7 +1080,7 @@ def restore_backup(archive: Path, data_dir: Path, force: bool = False) -> str:
             for n in current:
                 shutil.move(str(data_dir / n), str(aside / n))
         for i in wanted:
-            atomic_write(data_dir.joinpath(*i.filename.split("/")), z.read(i), private=i.filename.endswith(("config.json", "llm.json")))
+            atomic_write(data_dir.joinpath(*i.filename.split("/")), z.read(i), private=i.filename.endswith("config.json"))
     people = sorted({i.filename.split("/")[1] for i in wanted if i.filename.startswith("users/")})
     msg = f"Restored {len(wanted)} files{f' for {len(people)} people' if people else ''} from {archive} into {data_dir}."
     if aside:
@@ -1335,7 +1151,6 @@ def main(argv=None, env=None):
                  f"or choose another port (UNFURL_PORT / --port {c.port + 1}).")
     Handler.cfg = c
     Handler.usage = UsageMeter(c.data_dir / "usage.json")
-    Handler.llm_usage = UsageMeter(c.data_dir / "llm-usage.json")
     try:
         httpd = Server((c.host, c.port), Handler)
     except OSError as e:

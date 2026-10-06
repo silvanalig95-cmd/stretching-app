@@ -6,15 +6,8 @@
 
 import { RATING_VALUE, localDate } from './model.js';
 import { areaLabel, parentOf } from './lexicon.js';
-import { summarizeSets } from './strength/rx.js';
 
 export const DEFAULT_WEEKLY_GOAL = 3;
-
-// ---------------------------------------------------------------- what kind of entry
-
-/** 'strength' for a strength session, otherwise 'stretch' (videos, and things you logged by hand unless you called them strength or other). */
-export const categoryOf = (h) => (h.kind === 'strength' || h.category === 'strength' ? 'strength' : h.category === 'other' ? 'other' : 'stretch');
-export const byCategory = (history, cat) => (cat && cat !== 'all' ? history.filter((h) => categoryOf(h) === cat) : history);
 
 // ---------------------------------------------------------------- dates
 
@@ -65,11 +58,11 @@ export function streaks(history, today = localDate()) {
 export function weekly(history, videos, { today = localDate(), weeks = 12 } = {}) {
   const thisWeek = weekStart(today);
   const out = [];
-  for (let i = weeks - 1; i >= 0; i--) out.push({ start: addDays(thisWeek, -7 * i), sessions: 0, minutes: 0, stretch: 0, strength: 0, other: 0, _days: new Set() });
+  for (let i = weeks - 1; i >= 0; i--) out.push({ start: addDays(thisWeek, -7 * i), sessions: 0, minutes: 0, _days: new Set() });
   const by = new Map(out.map((w) => [w.start, w]));
   for (const h of sessionsUpTo(history, today)) {
     const w = by.get(weekStart(h.date));
-    if (w) { w.sessions++; w[categoryOf(h)]++; w.minutes += sessionMinutes(h, videos); w._days.add(h.date); }
+    if (w) { w.sessions++; w.minutes += sessionMinutes(h, videos); w._days.add(h.date); }
   }
   return out.map(({ _days, ...w }) => ({ ...w, days: _days.size }));
 }
@@ -100,25 +93,6 @@ export function goalStreak(history, goal, today = localDate()) {
   return { current: run, best };
 }
 
-/**
- * Weeks in a row in which every goal that is switched on was met (e.g. 3 stretching routines AND 2 strength sessions).
- * @param {{stretch?:number, strength?:number}} goals sessions per week; 0 or missing = no goal for that kind
- */
-export function goalsStreak(history, goals, today = localDate()) {
-  const on = ['stretch', 'strength'].filter((c) => goals?.[c] > 0);
-  if (!on.length) return null;
-  const counts = {};
-  for (const c of on) counts[c] = weekCounts(byCategory(history, c), today);
-  const firsts = on.flatMap((c) => [...counts[c].keys()]).sort();
-  if (!firsts.length) return { current: 0, best: 0 };
-  const now = weekStart(today);
-  let run = 0, best = 0;
-  for (let w = firsts[0]; w <= now; w = addDays(w, 7)) {
-    if (on.every((c) => (counts[c].get(w) ?? 0) >= goals[c])) { run++; best = Math.max(best, run); } else if (w !== now) run = 0;
-  }
-  return { current: run, best };
-}
-
 /** This week and this month so far, each against the one before. */
 export function periods(history, videos, today = localDate()) {
   const list = sessionsUpTo(history, today);
@@ -140,8 +114,8 @@ export function monthGrid(year, month, history, videos, today = localDate()) {
   const last = localDate(new Date(year, month + 1, 0, 12));
   const per = new Map();
   for (const h of sessionsUpTo(history, today)) {
-    const e = per.get(h.date) ?? { sessions: 0, minutes: 0, titles: [], stretch: 0, strength: 0 };
-    e.sessions++; e.minutes += sessionMinutes(h, videos); if (categoryOf(h) in e) e[categoryOf(h)]++;
+    const e = per.get(h.date) ?? { sessions: 0, minutes: 0, titles: [] };
+    e.sessions++; e.minutes += sessionMinutes(h, videos);
     e.titles.push(h.title ?? videos[h.videoId]?.title ?? 'a routine');
     per.set(h.date, e);
   }
@@ -149,7 +123,7 @@ export function monthGrid(year, month, history, videos, today = localDate()) {
   for (let d = weekStart(first); d <= last; d = addDays(d, 7)) {
     weeks.push(Array.from({ length: 7 }, (_, i) => {
       const date = addDays(d, i), e = per.get(date);
-      return { date, inMonth: date.slice(0, 7) === first.slice(0, 7), sessions: e?.sessions ?? 0, minutes: e?.minutes ?? 0, titles: e?.titles ?? [], stretch: e?.stretch ?? 0, strength: e?.strength ?? 0, today: date === today, future: date > today };
+      return { date, inMonth: date.slice(0, 7) === first.slice(0, 7), sessions: e?.sessions ?? 0, minutes: e?.minutes ?? 0, titles: e?.titles ?? [], today: date === today, future: date > today };
     }));
   }
   return weeks;
@@ -165,7 +139,6 @@ export const MILESTONES = [
   { id: 'weeks', icon: '📅', unit: 'weeks with a routine', steps: [2, 4, 12, 26, 52], label: (n) => `${n} weeks of practice` },
   { id: 'areas', icon: '🧍', unit: 'muscle areas worked', steps: [5, 10, 15, 25], label: (n) => `${n} different muscle areas` },
   { id: 'felt', icon: '😀', unit: '“much better” answers', steps: [1, 10, 25, 50], label: (n) => (n === 1 ? 'First “much better”' : `“Much better” ${n}×`) },
-  { id: 'strength', icon: '🏛️', unit: 'strength sessions', steps: [1, 10, 25, 50, 100, 200], label: (n) => (n === 1 ? 'First strength session' : `${n} strength sessions`) },
 ];
 
 const areasOf = (h) => [...new Set([...(h.areas ?? []).map((a) => a.id), ...Object.keys(h.ratings ?? {})])].filter((a) => a !== 'full_body');
@@ -177,13 +150,12 @@ const areasOf = (h) => [...new Set([...(h.areas ?? []).map((a) => a.id), ...Obje
 export function milestones(history, videos, today = localDate()) {
   const hit = new Map();            // "family:step" -> date it was first reached
   const weeks = new Set(), areas = new Set();
-  let routines = 0, minutes = 0, felt = 0, run = 0, prev = null, strength = 0;
-  const value = () => ({ routines, streak: run, hours: Math.floor(minutes / 60), weeks: weeks.size, areas: areas.size, felt, strength });
+  let routines = 0, minutes = 0, felt = 0, run = 0, prev = null;
+  const value = () => ({ routines, streak: run, hours: Math.floor(minutes / 60), weeks: weeks.size, areas: areas.size, felt });
   for (const h of sessionsUpTo(history, today)) {
     routines++; minutes += sessionMinutes(h, videos); weeks.add(weekStart(h.date));
     for (const a of areasOf(h)) areas.add(a);
     felt += Object.values(h.ratings ?? {}).filter((r) => r === 'much').length;
-    if (categoryOf(h) === 'strength') strength++;
     if (h.date !== prev) { run = prev && daysBetween(prev, h.date) === 1 ? run + 1 : 1; prev = h.date; }
     const now = value();
     for (const f of MILESTONES) for (const step of f.steps) if (now[f.id] >= step && !hit.has(`${f.id}:${step}`)) hit.set(`${f.id}:${step}`, h.date);
@@ -193,8 +165,7 @@ export function milestones(history, videos, today = localDate()) {
     return { id: key, icon: f.icon, label: f.label(Number(step)), date };
   }).sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
   const final = { ...value(), streak: streaks(history, today).current };
-  const everStrength = strength > 0;
-  const next = MILESTONES.filter((f) => f.id !== 'strength' || everStrength).map((f) => {
+  const next = MILESTONES.map((f) => {
     const step = f.steps.find((s) => !hit.has(`${f.id}:${s}`));
     return step == null ? null : { id: `${f.id}:${step}`, icon: f.icon, label: f.label(step), have: final[f.id], need: step, unit: f.unit };
   }).filter(Boolean).sort((a, b) => b.have / b.need - a.have / a.need).slice(0, 3);
@@ -233,21 +204,16 @@ export function areaProgress(history, { min = 6, top = 8, today = localDate() } 
 // ---------------------------------------------------------------- encouragement
 
 /** One to three plain sentences about where you stand. No fluff: every line is a fact about your log. */
-export function encouragement(history, videos, { goal = DEFAULT_WEEKLY_GOAL, strengthGoal = 0, today = localDate() } = {}) {
+export function encouragement(history, videos, { goal = DEFAULT_WEEKLY_GOAL, today = localDate() } = {}) {
   const t = totals(history, videos, today);
   if (!t.sessions) return ['Do your first routine and it shows up here: your streak, your week, and what has been helping.'];
   const out = [];
-  const s = streaks(history, today);
-  const line = (cat, goal_, noun, nounMany, label) => {
-    if (!(goal_ > 0)) return;
-    const g = goalProgress(byCategory(history, cat), goal_, today);
-    const kind = label === 'Weekly ' ? '' : label.toLowerCase();
-    if (g.met) out.push(`${label}goal reached: ${g.done} of ${goal_} ${nounMany} this week. Anything more is a bonus.`);
-    else if (g.onTrack) out.push(`${plural(g.remaining, `more ${noun}`, `more ${nounMany}`)} to reach this week’s ${kind}goal (${g.done} of ${goal_}), with ${plural(g.daysLeft, 'day', 'days')} left.`);
-    else out.push(`This week’s ${kind}goal (${goal_}) is out of reach now (${g.done} done, ${plural(g.daysLeft, 'day', 'days')} left). A short one still counts, and next week starts fresh on Monday.`);
-  };
-  line('stretch', goal, 'routine', 'routines', strengthGoal > 0 ? 'Stretching ' : 'Weekly ');
-  line('strength', strengthGoal, 'session', 'sessions', 'Strength ');
+  const s = streaks(history, today), g = goalProgress(history, goal, today);
+  if (goal > 0) {
+    if (g.met) out.push(`Weekly goal reached: ${g.done} of ${goal} routines this week. Anything more is a bonus.`);
+    else if (g.onTrack) out.push(`${plural(g.remaining, 'more routine', 'more routines')} to reach this week’s goal (${g.done} of ${goal}), with ${plural(g.daysLeft, 'day', 'days')} left.`);
+    else out.push(`This week’s goal (${goal}) is out of reach now (${g.done} done, ${plural(g.daysLeft, 'day', 'days')} left). A short one still counts, and next week starts fresh on Monday.`);
+  }
   if (s.daysSince >= 3) out.push(`It has been ${s.daysSince} days. A 10-minute routine is enough to start again.`);
   else if (s.current >= 2 && s.current >= s.best) out.push(`${s.current} days in a row: your longest streak so far.`);
   else if (s.current >= 1 && s.best > s.current) out.push(`${s.current} day${s.current === 1 ? '' : 's'} in a row; your best is ${s.best}, ${plural(s.best - s.current, 'more day', 'more days')} to match it.`);
@@ -268,7 +234,7 @@ export function csvCell(v) {
 
 /** The whole training log as CSV (UTF-8 with a BOM so Excel reads accents correctly). */
 export function historyCsv(history, videos = {}) {
-  const head = ['date', 'title', 'channel', 'minutes', 'muscle areas', 'did it help', 'intensity', 'note', 'video', 'type', 'exercises'];
+  const head = ['date', 'title', 'channel', 'minutes', 'muscle areas', 'did it help', 'intensity', 'note', 'video'];
   const rows = [...history].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (a.at ?? '') < (b.at ?? '') ? -1 : 1)).map((h) => {
     const v = videos[h.videoId];
     return [
@@ -276,7 +242,6 @@ export function historyCsv(history, videos = {}) {
       areasOf(h).map(areaLabel).join('; '),
       Object.entries(h.ratings ?? {}).map(([a, r]) => `${areaLabel(a)}: ${r}`).join('; '),
       h.intensity ?? '', h.note ?? '', h.videoId ? `https://www.youtube.com/watch?v=${h.videoId}` : '',
-      categoryOf(h), (h.exercises ?? []).map((x) => `${x.name ?? x.exId}${(x.sets ?? []).length ? `: ${summarizeSets(x.sets)}` : ''}`).join('; '),
     ];
   });
   return `﻿${[head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}\r\n`;

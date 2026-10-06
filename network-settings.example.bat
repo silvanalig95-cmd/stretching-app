@@ -1,5 +1,5 @@
 @echo off
-rem Settings for sharing Palaestra with other devices on your home network.
+rem Settings for sharing Atlas with other devices on your home network.
 rem start-network.bat copies this file to network-settings.bat the first time; edit THAT copy (it is never overwritten or uploaded).
 rem Keep the quotes exactly as they are. Avoid these characters in the password:  &  ^  %  "  <  >  |
 

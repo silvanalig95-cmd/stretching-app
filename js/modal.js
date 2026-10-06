@@ -10,7 +10,6 @@ export function openModal({ title, body, wide = false, onClose = null }) {
     onClose?.();
   };
   const onKey = (e) => {
-    if ([...document.querySelectorAll('.overlay')].at(-1) !== overlay) return;   // only the dialog on top reacts (a guide opened from the picker)
     if (e.key === 'Escape') { e.stopPropagation(); close(); }
     if (e.key === 'Tab') { // keep focus inside the dialog
       const f = [...dialog.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')].filter((x) => !x.disabled);

@@ -21,7 +21,7 @@ test('the profile (precious) and the index (rebuildable) are separate documents'
   const s = freshState();
   addToLibrary(s, 'zPzSkLHp9ws', { tags: ['a'] });
   const { profile, index } = splitState(s);
-  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'blockedChannels', 'favoriteChannels', 'following', 'history', 'library', 'prefs', 'savedSearches', 'schema', 'strength']);
+  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'blockedChannels', 'favoriteChannels', 'following', 'history', 'library', 'prefs', 'savedSearches', 'schema']);
   assert.ok(!('videos' in profile) && 'videos' in index);
   assert.ok(profile.library.zPzSkLHp9ws.snapshot.title, 'library keeps a snapshot so it survives losing the index');
   assert.ok(!JSON.stringify(profile).includes('apiKey'));
@@ -280,4 +280,36 @@ test('profiles written before saved searches existed still load (additive keys n
   const r = loadState({ profile, index });
   assert.deepEqual(r.state.savedSearches, []);
   assert.equal(r.readOnly, false);
+});
+
+test('data saved by the short-lived Strength versions is cleaned on load; everything else is kept', async () => {
+  const { loadState, splitState } = await import('../../js/state.js');
+  const base = splitState(freshState()).profile;
+  const old = {
+    ...base,
+    history: [
+      { id: 's1', kind: 'strength', videoId: '', title: 'Upper A', date: '2026-10-03', exercises: [] },
+      { id: 'm1', kind: 'manual', category: 'strength', videoId: '', title: 'Heavy lifting at the gym', date: '2026-10-04', durationSec: 1800 },
+      { id: 'v1', videoId: 'zPzSkLHp9ws', date: '2026-10-05', areas: ['hips'], ratings: {} },
+    ],
+    prefs: { ...base.prefs, weeklyGoal: 4, strengthGoal: 3, strengthGoalSet: true },
+    strength: { workouts: [{ id: 'w', name: 'Upper A', items: [] }], plans: [] },
+  };
+  const r = loadState({ profile: JSON.parse(JSON.stringify(old)) });
+  assert.equal(r.droppedStrength, true);
+  assert.equal(r.changed, true, 'so it is written back, without the old data');
+  assert.deepEqual(r.state.history.map((h) => h.id), ['m1', 'v1'], 'strength sessions go; what you logged without a video and your videos stay');
+  assert.ok(!('category' in r.state.history[0]), 'the old "stretching / strength / other" label goes');
+  assert.equal(r.state.prefs.weeklyGoal, 4);
+  assert.ok(!('strengthGoal' in r.state.prefs) && !('strengthGoalSet' in r.state.prefs) && !('strength' in r.state));
+  assert.ok(r.notes.some((n) => /Strength section has been removed/.test(n)), 'and you are told');
+  assert.ok(!('strength' in splitState(r.state).profile), 'it is not saved again');
+  // clean data: nothing to announce
+  const clean = loadState({ profile: JSON.parse(JSON.stringify(base)) });
+  assert.equal(clean.droppedStrength, false);
+  assert.ok(!clean.notes.some((n) => /Strength/.test(n)));
+  // data from a NEWER version is never modified, not even to remove this
+  const future = loadState({ profile: { ...JSON.parse(JSON.stringify(old)), schema: 99 } });
+  assert.equal(future.readOnly, true);
+  assert.equal(future.droppedStrength, false);
 });

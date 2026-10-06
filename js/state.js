@@ -12,7 +12,6 @@ import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
 import { mergeVideo } from './youtube.js';
 import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
-import { defaultStrength, normalizeStrength, mergeStrength } from './strength/store.js';
 import { APP_NAME } from './brand.js';
 
 export const SCHEMA = 2;
@@ -25,8 +24,7 @@ export const DEFAULT_PREFS = {
   thoroughness: 'balanced',   // how wide a web search goes: quick | balanced | thorough | exhaustive (see THOROUGHNESS)
   autoLibrary: false,  // true: everything a search finds is added to your library automatically
   focus: [],           // your standing tight / weak spots: [{id, mode}]
-  weeklyGoal: 3,       // stretching routines per week you aim for in the training log (0 = no goal)
-  strengthGoal: 0,     // strength sessions per week you aim for (0 = no goal; switched on when you set up Strength)
+  weeklyGoal: 3,       // routines per week you aim for in the training log (0 = no goal)
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
   showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
 };
@@ -41,7 +39,6 @@ export function emptyState() {
     history: [],     // every routine you've done, with your "did it help?" answers
     blocked: [],     // video ids you never want to see again
     blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
-    strength: defaultStrength(), // equipment, own exercises, saved workouts, plans, guide videos (see strength/store.js)
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
@@ -57,7 +54,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, strength: state.strength, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -118,6 +115,7 @@ const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
  * @returns {{state:object, readOnly:boolean, changed:boolean, notes:string[]}}
  *   changed: something was upgraded/repaired/seeded, so it should be saved.
  *   readOnly: the data is from a NEWER version of the app; don't write anything.
+ *   droppedStrength: the data came from versions 0.4/0.5, which had a Strength section; it was removed (see dropStrength).
  */
 export function loadState({ profile = null, index = null, legacy = null } = {}) {
   const notes = [];
@@ -138,6 +136,12 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     changed = true;
   }
 
+  let droppedStrength = false;
+  if (p && !readOnly && dropStrength(p)) {
+    droppedStrength = true; changed = true;
+    notes.push('The Strength section has been removed: its saved workouts, plans and sessions are gone from your data. A copy of your data from just before is kept under Settings → Your data → Backups.');
+  }
+
   const s = emptyState();
   if (p) {
     if (isObj(p.library)) s.library = p.library;
@@ -145,7 +149,6 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
-    s.strength = normalizeStrength(p.strength);
     if (Array.isArray(p.following)) s.following = p.following;
     if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
@@ -173,7 +176,24 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     v.id = id;
     if (!v.profile) v.profile = analyzeVideoText(v);
   }
-  return { state: s, readOnly, changed, notes };
+  return { state: s, readOnly, changed, notes, droppedStrength };
+}
+
+/**
+ * Versions 0.4 and 0.5 briefly carried a Strength section (workouts, plans, logged sessions, a weekly strength goal).
+ * It no longer exists, so what it left in a profile is removed rather than shown as something it was not.
+ * Everything else is untouched. Works on `p` in place and says whether there was anything to remove.
+ */
+function dropStrength(p) {
+  let found = false;
+  if ('strength' in p) { delete p.strength; found = true; }
+  if (Array.isArray(p.history)) {
+    const kept = p.history.filter((h) => !(isObj(h) && h.kind === 'strength'));
+    if (kept.length !== p.history.length) { p.history = kept; found = true; }
+    for (const h of p.history) if (isObj(h) && 'category' in h) { delete h.category; found = true; }   // "stretching / strength / other" on things logged without a video
+  }
+  if (isObj(p.prefs)) for (const k of ['strengthGoal', 'strengthGoalSet']) if (k in p.prefs) { delete p.prefs[k]; found = true; }
+  return found;
 }
 
 /** Fresh install / tests: an empty library and the suggestions shelf. */
@@ -377,7 +397,7 @@ export function logSession(state, entry, { library = true } = {}) {
     videoId: entry.videoId ?? '',
     title: v?.title ?? (manual ? String(entry.title ?? '').trim().slice(0, 120) || 'Something I did' : undefined), channel: v?.channel,
     durationSec: v?.durationSec ?? (minutes ? minutes * 60 : null),   // kept so the minutes in your training log don't change if the video does
-    ...(manual ? { kind: 'manual', ...(['stretch', 'strength', 'other'].includes(entry.category) ? { category: entry.category } : {}) } : {}),
+    ...(manual ? { kind: 'manual' } : {}),
     areas: entry.areas ?? [],
     ratings: entry.ratings ?? {},
     intensity: entry.intensity ?? null,
@@ -405,7 +425,7 @@ export function updateSession(state, id, patch, { library = true } = {}) {
   if ('note' in patch) rec.note = String(patch.note ?? '').slice(0, 500);
   if ('title' in patch && rec.kind === 'manual') rec.title = String(patch.title ?? '').trim().slice(0, 120) || rec.title;
   if ('minutes' in patch && rec.kind === 'manual') rec.durationSec = Math.max(0, Math.min(600, Math.round(Number(patch.minutes) || 0))) * 60 || null;
-  if (rec.videoId) {
+  if (rec.kind !== 'manual') {
     refreshMine(state, rec.videoId);
     if (rec.repeat === 'no') { if (!wasNo) { blockVideo(state, rec.videoId); removeFromLibrary(state, rec.videoId); } }
     else if (library) addToLibrary(state, rec.videoId);
@@ -506,7 +526,6 @@ export function mergeImport(state, incoming) {
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);
   state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));
-  mergeStrength(state, inc.strength);
   for (const f of inc.following) followChannel(state, f);
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;
