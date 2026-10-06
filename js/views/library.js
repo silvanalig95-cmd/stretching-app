@@ -10,6 +10,7 @@ import { toggleLibrary, unblockVideo, unblockChannel, hiddenReason, isFavoriteCh
 import { attachTranscript, cleanTranscript } from '../analyze.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
+import { didTodayButton } from './quicklog.js';
 import { buildModel, coverage } from '../model.js';
 import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
@@ -305,6 +306,7 @@ export function mountLibrary(root) {
         editing === v.id ? editor(v, lib) : null),
       h('div', { class: 'row-actions' },
         h('button', { class: 'btn small primary', type: 'button', onclick: () => play(v.id) }, 'Play'),
+        didTodayButton(v, { cls: 'btn small', onChange: rerender }),
         h('button', { class: 'btn small', type: 'button', 'data-action': 'toggle-library', onclick: () => { toggleLibrary(ctx.state, v.id); ctx.store.save(); rerender(); } }, lib ? 'Remove' : '＋ Library'),
         lib ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'edit', onclick: () => { editing = editing === v.id ? null : v.id; renderList(); } }, 'Tags & note') : null,
         reason === 'channel'

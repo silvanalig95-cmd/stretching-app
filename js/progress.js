@@ -241,7 +241,7 @@ export function historyCsv(history, videos = {}) {
       h.date, h.title ?? v?.title ?? '', h.channel ?? v?.channel ?? '', sessionMinutes(h, videos) || '',
       areasOf(h).map(areaLabel).join('; '),
       Object.entries(h.ratings ?? {}).map(([a, r]) => `${areaLabel(a)}: ${r}`).join('; '),
-      h.intensity ?? '', h.note ?? '', `https://www.youtube.com/watch?v=${h.videoId}`,
+      h.intensity ?? '', h.note ?? '', h.videoId ? `https://www.youtube.com/watch?v=${h.videoId}` : '',
     ];
   });
   return `﻿${[head, ...rows].map((r) => r.map(csvCell).join(',')).join('\r\n')}\r\n`;

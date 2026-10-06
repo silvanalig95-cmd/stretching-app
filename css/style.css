@@ -334,10 +334,12 @@ details.menu .menu-note.small { font-size: .78rem; }
 .cal-dows, .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
 .cal-dows span { text-align: center; font-size: .72rem; color: var(--muted); }
 .cal-grid { list-style: none; margin: 4px 0 0; padding: 0; }
-.cal-day { position: relative; aspect-ratio: 1 / 0.82; border-radius: 8px; border: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: .8rem; color: var(--muted); background: var(--surface); }
+.cal-day { font: inherit; cursor: pointer; width: 100%; position: relative; aspect-ratio: 1 / 0.82; border-radius: 8px; border: 1px solid var(--line); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: .8rem; color: var(--muted); background: var(--surface); }
 .cal-day.out { opacity: .35; } .cal-day.future { opacity: .55; }
 .cal-day.today { border-color: var(--accent); }
 .cal-day.done { background: var(--accent-soft); color: var(--ink); border-color: var(--accent); }
+.cal-day:disabled { cursor: default; }
+.cal-day.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
 .cal-day.done b { color: var(--accent); font-size: .78rem; line-height: 1; }
 .trophies { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .trophies li { display: inline-flex; align-items: center; gap: 6px; background: var(--warm-soft); border-radius: 999px; padding: .25rem .7rem; font-size: .88rem; }
@@ -349,3 +351,24 @@ details.menu .menu-note.small { font-size: .78rem; }
 .trend.up { color: var(--accent); font-weight: 600; } .trend.down { color: var(--warm); font-weight: 600; }
 @media (max-width: 560px) { .prog-row { grid-template-columns: 1fr; } .prog-row .c-label { grid-row: auto; } .log-form select { min-width: 0; width: 100%; } }
 .week-line { margin: 10px 0 0; font-size: .9rem; color: var(--muted); }
+
+/* ---- your notes on the video */
+.my-notes { margin: 14px 0; }
+.my-notes h3 { margin: 0 0 6px; }
+.my-notes input[type=text], .my-notes textarea { width: 100%; font: inherit; padding: .5rem; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); margin-bottom: 8px; }
+.my-note { margin: 6px 0; padding: .4rem .8rem; border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 8px 8px 0; white-space: pre-wrap; }
+.my-sessions { list-style: none; margin: 6px 0; padding: 0; font-size: .92rem; }
+.my-sessions li { margin: 3px 0; }
+
+/* ---- what you did on a day */
+.cal-grid li { margin: 0; padding: 0; }
+.day-entries { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 10px; }
+.day-entry { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 14px; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); }
+.day-entry .ttl { margin: 0 0 4px; font-weight: 600; } .day-entry .badges { margin: 4px 0; } .day-entry .note-text { margin: 4px 0 0; }
+#day-log { margin-top: 14px; }
+.log-panel { background: var(--accent-soft); border-radius: 10px; padding: 8px 12px 12px; margin-bottom: 12px; display: grid; gap: 10px; justify-items: start; }
+.log-panel .tabs { margin: 0; border-bottom-color: transparent; } .log-panel .tab { padding: .4rem .8rem; }
+.log-panel .log-form { background: none; padding: 0; margin: 0; }
+.log-panel input[type=text] { min-width: 18rem; max-width: 100%; }
+.log-panel input[type=number] { width: 5rem; }
+.log-panel .chips { display: flex; flex-wrap: wrap; gap: 6px; }

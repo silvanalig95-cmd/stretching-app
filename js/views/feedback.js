@@ -5,7 +5,7 @@
 import { h, fill } from '../dom.js';
 import { openModal, toast } from '../modal.js';
 import { ctx, rankNow } from '../ctx.js';
-import { logSession } from '../state.js';
+import { logSession, updateSession } from '../state.js';
 import { localDate } from '../model.js';
 import { AREAS, AREA_BY_ID, POSE_BY_ID, areaLabel, areaPath } from '../lexicon.js';
 
@@ -13,7 +13,7 @@ const RATINGS = [['much', '😀', 'Much better'], ['some', '🙂', 'A little'], 
 const INTENSITY = [['easy', 'Too easy'], ['right', 'Just right'], ['hard', 'Too hard']];
 
 /** Areas worth asking about when none were targeted: the video's strongest. */
-function fallbackAreas(video) {
+export function fallbackAreas(video) {
   const ranked = Object.entries(video.profile?.areas ?? {})
     .filter(([a, s]) => s >= 0.5 && a !== 'full_body' && AREA_BY_ID[a])
     .sort((a, b) => b[1] - a[1]).map(([id]) => id);
@@ -23,16 +23,23 @@ function fallbackAreas(video) {
 }
 
 /**
- * @param {{onDone?: (how:'saved'|'dismissed')=>void, date?: string}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo;
- *   date logs the routine for an earlier day (the training log's “log a routine I did”).
+ * @param {{onDone?: (how:'saved'|'dismissed')=>void, date?: string, sessionId?: string}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo;
+ *   date logs the routine for an earlier day (the training log's “log a routine I did”);
+ *   sessionId opens an entry that is already in your log (logged with “Did today”, or to change your answers later) instead of making a new one.
  */
-export function openFeedback(videoId, { onDone = null, date = null } = {}) {
-  const video = ctx.state.videos[videoId];
-  if (!video) return;
-  const targeted = ctx.ui.featuredId === videoId ? ctx.ui.featuredAreas : [];
-  const areas = (targeted.length ? targeted : fallbackAreas(video)).map((a) => ({ ...a }));
-  const ratings = {};
-  let intensity = null, repeat = null, when = date || localDate();
+export function openFeedback(videoId, { onDone = null, date = null, sessionId = null } = {}) {
+  const existing = sessionId ? ctx.state.history.find((x) => x.id === sessionId) : null;
+  if (sessionId && !existing) return;
+  const video = videoId ? ctx.state.videos[videoId] : null;
+  if (!video && !existing) return;
+  const title = video?.title ?? existing?.title ?? 'Something I did';
+  const targeted = !existing && ctx.ui.featuredId === videoId ? ctx.ui.featuredAreas : [];
+  const areas = (existing
+    ? [...(existing.areas ?? []), ...Object.keys(existing.ratings ?? {}).filter((id) => !(existing.areas ?? []).some((a) => a.id === id)).map((id) => ({ id, mode: 'tight' }))]
+    : targeted.length ? targeted : video ? fallbackAreas(video) : []).map((a) => ({ ...a }));
+  const ratings = { ...(existing?.ratings ?? {}) };
+  let intensity = existing?.intensity ?? null, repeat = existing?.repeat ?? null, when = existing?.date || date || localDate();
+  const noteInit = existing?.note ?? '';
 
   const body = h('div', { class: 'feedback' });
   let modal, finished = false;
@@ -51,10 +58,10 @@ export function openFeedback(videoId, { onDone = null, date = null } = {}) {
 
   const render = () => {
     const unused = AREAS.filter((a) => !areas.some((x) => x.id === a.id) && a.id !== 'full_body');
-    const note = body.querySelector('textarea')?.value ?? '';
+    const note = body.querySelector('textarea')?.value ?? noteInit;
     fill(body, 
-      h('p', { class: 'lead' }, h('strong', null, video.title)),
-      h('p', { class: 'hint' }, 'Saving adds this routine to your training log. Answering is optional, but the answers are what teach the app what works for you.'),
+      h('p', { class: 'lead' }, h('strong', null, title)),
+      h('p', { class: 'hint' }, existing ? 'This routine is already in your training log. Say how it went, or change the day.' : 'Saving adds this routine to your training log. Answering is optional, but the answers are what teach the app what works for you.'),
       h('label', { class: 'note' }, h('span', null, 'When did you do it?'),
         h('input', { type: 'date', id: 'feedback-date', value: when, max: localDate(), onchange: (e) => { when = e.target.value || localDate(); } })),
       h('h3', null, 'Did it help?'),
@@ -69,8 +76,8 @@ export function openFeedback(videoId, { onDone = null, date = null } = {}) {
           h('option', { value: '' }, 'add a muscle area…'), unused.map((a) => h('option', { value: a.id }, areaPath(a.id))))) : null,
       h('h3', null, 'How was the intensity?'),
       group('Intensity', INTENSITY, () => intensity, (v) => { intensity = v; }),
-      h('h3', null, 'Show it to me again?'),
-      group('Repeat', [['yes', 'Yes, sometime'], ['no', 'Never show again']], () => repeat, (v) => { repeat = v; }),
+      video ? h('h3', null, 'Show it to me again?') : null,
+      video ? group('Repeat', [['yes', 'Yes, sometime'], ['no', 'Never show again']], () => repeat, (v) => { repeat = v; }) : null,
       h('label', { class: 'note' }, h('span', null, 'Notes (optional)'), h('textarea', { rows: 2, maxlength: 500, placeholder: 'e.g. pigeon pose was the one that finally released it' }, note)),
       h('div', { class: 'actions' },
         h('button', { type: 'button', class: 'btn ghost', onclick: () => modal.close() }, 'Don’t log it'),
@@ -82,14 +89,15 @@ export function openFeedback(videoId, { onDone = null, date = null } = {}) {
 
   const save = () => {
     const note = body.querySelector('textarea')?.value ?? '';
-    logSession(ctx.state, { videoId, areas, ratings, intensity, repeat, note, date: when });
+    if (existing) updateSession(ctx.state, existing.id, { areas, ratings, intensity, repeat, note, date: when });
+    else logSession(ctx.state, { videoId: videoId ?? '', areas, ratings, intensity, repeat, note, date: when });
     ctx.store.save();
     finished = true;      // the close below must not also report 'dismissed'
     modal.close();
     rankNow();
     ctx.hooks.renderResults();
-    toast(learningSummary(video, ratings) || 'Saved. This will shape your next suggestions.', 'success', 6000);
-    if (repeat === 'no') toast('Won’t show that one again.', 'info');
+    toast((video && learningSummary(video, ratings)) || (existing ? 'Saved.' : 'Saved. This will shape your next suggestions.'), 'success', 6000);
+    if (repeat === 'no' && video) toast('Won’t show that one again.', 'info');
     onDone?.('saved');
   };
 

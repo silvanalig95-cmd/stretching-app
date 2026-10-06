@@ -18,10 +18,10 @@ const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 // Bump this whenever the analysis changes in a way that alters profiles (lexicon,
 // weights, parsing). On load the app re-runs the analysis over everything it has
 // stored, so improvements apply retroactively without re-fetching anything.
-export const ANALYSIS_VERSION = 3;
+export const ANALYSIS_VERSION = 4;
 
 // How much we trust each kind of evidence.
-export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75 };
+export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75, mine: 0.8 };
 
 // ---------------------------------------------------------------- small parsers
 
@@ -153,6 +153,32 @@ function transcriptEvidence(stored) {
   return { areas, poseCounts, timeline, words, lines: lines.length };
 }
 
+/**
+ * What the person wrote about a video themselves: their note, their tags, and what they wrote after doing it.
+ * Their own words about what it did for them are strong evidence. A sentence that says it did NOT help
+ * ("didn't do anything for my hamstrings") is skipped, so it never raises that area.
+ * @param {{note?:string, tags?:string[], sessions?:string[]}} mine
+ */
+export function mineEvidence(mine) {
+  const sums = {}, poseCounts = {};
+  const read = (text, factor) => {
+    for (const sentence of String(text ?? '').split(/[.!?;\n]+/)) {
+      const s = sentence.trim();
+      if (s.length < 2) continue;
+      const n = normalize(s);
+      if (NEG_RE.test(n)) continue;
+      const cue = CUE_RE.test(n) ? 1.5 : 1;
+      for (const [a, v] of Object.entries(sumByArea(scan(AREA_TERMS, s)))) sums[a] = (sums[a] ?? 0) + v * cue * factor;
+      for (const { entry } of scan(POSE_TERMS, s)) poseCounts[entry.id] = (poseCounts[entry.id] ?? 0) + 1;
+    }
+  };
+  read(mine?.note, 1);
+  for (const t of mine?.tags ?? []) read(t, 1.3);          // a tag is a deliberate label
+  for (const t of mine?.sessions ?? []) read(t, 0.8);      // written right after doing it
+  if (!Object.keys(sums).length && !Object.keys(poseCounts).length) return null;
+  return { areas: Object.fromEntries(Object.entries(sums).map(([a, v]) => [a, sat(v, 0.9)])), poseCounts };
+}
+
 function noisyOrByArea(matches) {
   const miss = {};
   for (const { entry } of matches) {
@@ -252,6 +278,9 @@ export function analyzeVideoText(video) {
   // What the teacher says out loud (if a transcript was added): the best evidence of what each move is for.
   const spoken = video.transcript ? transcriptEvidence(video.transcript) : null;
   if (spoken) for (const [id, n] of Object.entries(spoken.poseCounts)) poseCounts[id] = (poseCounts[id] ?? 0) + n;
+  // What the person wrote themselves (note, tags, what they said after doing it).
+  const mine = video.mine ? mineEvidence(video.mine) : null;
+  if (mine) for (const [id, n] of Object.entries(mine.poseCounts)) poseCounts[id] = (poseCounts[id] ?? 0) + n;
 
   const sources = {
     title: noisyOrByArea(scan(AREA_TERMS, title)),
@@ -260,6 +289,7 @@ export function analyzeVideoText(video) {
     chapters: Object.fromEntries(Object.entries(sumByArea(scan(AREA_TERMS, chapterText))).map(([a, s]) => [a, sat(s, 0.8)])),
     poses: poseEvidence(poseCounts),
     ...(spoken ? { transcript: spoken.areas } : {}),
+    ...(mine ? { mine: mine.areas } : {}),
   };
   return {
     sources,
@@ -452,6 +482,7 @@ export function explainMatch(video, areaIds) {
     const bits = [];
     if ((src.title?.[a] ?? 0) >= 0.5) bits.push('in the title');
     if ((src.chapters?.[a] ?? 0) >= 0.4) bits.push('in the chapter list');
+    if ((src.mine?.[a] ?? 0) >= 0.4) bits.push('in your own notes');
     const moves = (p.poses ?? [])
       .map(({ id, count }) => ({ id, w: (POSE_BY_ID[id]?.areas[a] ?? 0) * count }))
       .filter((x) => x.w >= 0.5).sort((x, y) => y.w - x.w).slice(0, 3).map((x) => POSE_BY_ID[x.id].label);

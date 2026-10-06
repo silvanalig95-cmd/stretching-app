@@ -200,11 +200,43 @@ function ensureStubs(s) {
 /** If the analysis code changed since this data was last analysed, redo it from the stored raw material. */
 function reindex(s) {
   if (s.analysisVersion === ANALYSIS_VERSION) return false;
-  for (const [id, v] of Object.entries(s.videos)) if (isObj(v)) s.videos[id] = reanalyze(v);
+  for (const [id, v] of Object.entries(s.videos)) if (isObj(v)) s.videos[id] = reanalyze(withMine(s, id, v));
   s.analysisVersion = ANALYSIS_VERSION;
   return true;
 }
 export const reindexAll = (s) => { s.analysisVersion = -1; return reindex(s); };
+
+// ---------------------------------------------------------------- your own words about a video
+
+/**
+ * What you wrote about a video: its library note and tags, and what you wrote after doing it. The notes live in your
+ * profile (they are yours); a copy rides along on the video record so the analysis can read them, and is renewed
+ * whenever they change or the index is rebuilt.
+ */
+export function mineFor(state, id) {
+  const lib = state.library[id];
+  const note = lib?.note ?? '', tags = lib?.tags ?? [];
+  const sessions = state.history.filter((h) => h.videoId === id && h.note).map((h) => h.note).slice(-5);
+  return note || tags.length || sessions.length ? { note, tags: [...tags], sessions } : null;
+}
+function withMine(state, id, video) {
+  const mine = mineFor(state, id);
+  const next = { ...video };
+  if (mine) next.mine = mine; else delete next.mine;
+  return next;
+}
+/** Re-read one video with your latest words about it (after a note, tag or session note changed). */
+export function refreshMine(state, id) {
+  const v = state.videos[id];
+  if (!isObj(v)) return;
+  const had = JSON.stringify(v.mine ?? null);
+  const next = withMine(state, id, v);
+  if (JSON.stringify(next.mine ?? null) !== had) state.videos[id] = reanalyze(next);
+}
+/** The same for every video that has (or just lost) words of yours. */
+export function refreshAllMine(state) {
+  for (const id of Object.keys(state.videos)) refreshMine(state, id);
+}
 
 // ---------------------------------------------------------------- library
 
@@ -221,7 +253,7 @@ export function addToLibrary(state, id, extra = {}) {
   snapshot(state, id);
   return state.library[id];
 }
-export function removeFromLibrary(state, id) { delete state.library[id]; }
+export function removeFromLibrary(state, id) { delete state.library[id]; refreshMine(state, id); }
 /** Returns true if the video is in the library afterwards. */
 export function toggleLibrary(state, id) {
   if (inLibrary(state, id)) { removeFromLibrary(state, id); return false; }
@@ -232,6 +264,7 @@ export function updateLibraryItem(state, id, { tags, note }) {
   if (!item) return null;
   if (tags) item.tags = [...new Set(tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 12);
   if (note != null) item.note = String(note).slice(0, 500);
+  refreshMine(state, id);
   return item;
 }
 export const allTags = (state) => [...new Set(Object.values(state.library).flatMap((l) => l.tags ?? []))].sort();
@@ -328,15 +361,18 @@ const validDay = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) 
  * Record a finished routine and what you thought of it. A routine you've done is
  * part of your practice, so it joins your library.
  */
-export function logSession(state, entry) {
+export function logSession(state, entry, { library = true } = {}) {
   const v = state.videos[entry.videoId];
+  const manual = !entry.videoId;                 // something you did that is not a video: a class, a walk, your own routine
+  const minutes = Math.max(0, Math.min(600, Math.round(Number(entry.minutes) || 0)));
   const rec = {
     id: newId(),
     at: new Date().toISOString(),
     date: validDay(entry.date) ?? localDate(),   // a routine can be logged for an earlier day, never a future one
-    videoId: entry.videoId,
-    title: v?.title, channel: v?.channel,
-    durationSec: v?.durationSec ?? null,         // kept so the minutes in your training log don't change if the video does
+    videoId: entry.videoId ?? '',
+    title: v?.title ?? (manual ? String(entry.title ?? '').trim().slice(0, 120) || 'Something I did' : undefined), channel: v?.channel,
+    durationSec: v?.durationSec ?? (minutes ? minutes * 60 : null),   // kept so the minutes in your training log don't change if the video does
+    ...(manual ? { kind: 'manual' } : {}),
     areas: entry.areas ?? [],
     ratings: entry.ratings ?? {},
     intensity: entry.intensity ?? null,
@@ -344,9 +380,40 @@ export function logSession(state, entry) {
     note: (entry.note ?? '').slice(0, 500),
   };
   state.history.push(rec);
+  if (rec.note && !manual) refreshMine(state, rec.videoId);
+  if (manual) return rec;
   if (rec.repeat === 'no') { blockVideo(state, rec.videoId); removeFromLibrary(state, rec.videoId); }
-  else addToLibrary(state, rec.videoId);
+  else if (library) addToLibrary(state, rec.videoId);
   return rec;
+}
+
+/** Change an entry of your log afterwards (how it went, the day, the note). Same rules as when it was logged. */
+export function updateSession(state, id, patch, { library = true } = {}) {
+  const rec = state.history.find((x) => x.id === id);
+  if (!rec) return null;
+  const wasNo = rec.repeat === 'no';
+  if ('date' in patch && validDay(patch.date)) rec.date = patch.date;
+  if ('areas' in patch) rec.areas = patch.areas ?? [];
+  if ('ratings' in patch) rec.ratings = patch.ratings ?? {};
+  if ('intensity' in patch) rec.intensity = patch.intensity ?? null;
+  if ('repeat' in patch) rec.repeat = patch.repeat ?? null;
+  if ('note' in patch) rec.note = String(patch.note ?? '').slice(0, 500);
+  if ('title' in patch && rec.kind === 'manual') rec.title = String(patch.title ?? '').trim().slice(0, 120) || rec.title;
+  if ('minutes' in patch && rec.kind === 'manual') rec.durationSec = Math.max(0, Math.min(600, Math.round(Number(patch.minutes) || 0))) * 60 || null;
+  if (rec.kind !== 'manual') {
+    refreshMine(state, rec.videoId);
+    if (rec.repeat === 'no') { if (!wasNo) { blockVideo(state, rec.videoId); removeFromLibrary(state, rec.videoId); } }
+    else if (library) addToLibrary(state, rec.videoId);
+  }
+  return rec;
+}
+
+/** Put a removed entry back (the "Undo" after removing one), in its place. */
+export function restoreSession(state, rec) {
+  if (state.history.some((x) => x.id === rec.id)) return;
+  state.history.push(rec);
+  state.history.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  if (rec.videoId) refreshMine(state, rec.videoId);
 }
 
 export function blockVideo(state, id) { if (!state.blocked.includes(id)) state.blocked.push(id); }
@@ -391,7 +458,11 @@ export function hiddenReason(state, video) {
   if (state.blocked.includes(video.id)) return 'video';
   return channelBlocker(state.blockedChannels)(video) ? 'channel' : null;
 }
-export function deleteSession(state, sessionId) { state.history = state.history.filter((h) => h.id !== sessionId); }
+export function deleteSession(state, sessionId) {
+  const gone = state.history.find((h) => h.id === sessionId);
+  state.history = state.history.filter((h) => h.id !== sessionId);
+  if (gone) refreshMine(state, gone.videoId);
+}
 
 /** What the embedded player tells us once it has actually loaded the video. */
 export function applyPlayerInfo(state, id, info) {
@@ -434,5 +505,6 @@ export function mergeImport(state, incoming) {
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;
   ensureStubs(state);
+  refreshAllMine(state);   // notes that came with the backup count too
   return state;
 }

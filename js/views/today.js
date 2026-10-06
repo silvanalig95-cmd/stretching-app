@@ -7,6 +7,8 @@ import { STYLES, QUICK_PICKS, areaLabel, parentOf, areaPath } from '../lexicon.j
 import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
+import { notesBlock } from './notes.js';
+import { didTodayButton } from './quicklog.js';
 import { streaks, goalProgress, DEFAULT_WEEKLY_GOAL } from '../progress.js';
 import { channelBlocker } from '../model.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
@@ -311,11 +313,13 @@ function featuredInfo(entry) {
       !v.verified && badge('Details unverified', 'warn', 'Length and channel come from a guess; they’ll be checked when you add a YouTube key or play it')),
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => finishVideo(v.id) }, 'I did it ✓'),
+      didTodayButton(v, { onChange: () => { weekLine(); renderFeaturedInfo(); renderAlts(); } }),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
       favoriteButton(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
+    notesBlock(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
     reasonsBlock(entry, wanted),
     quotes.length ? h('div', { class: 'quotes' }, h('h3', null, 'What viewers say'),
       quotes.slice(0, 3).map((q) => h('blockquote', null, `“${q.text}”`, h('footer', null, q.areas.map(areaLabel).slice(0, 3).join(', '), q.likes ? ` · ${q.likes} 👍` : '')))) : null,

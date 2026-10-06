@@ -10,7 +10,8 @@ import { sessionMinutes } from '../progress.js';
 
 const FACE = { much: ['😀', 'much better'], some: ['🙂', 'a little'], none: ['😐', 'not really'] };
 
-export function mountJournal(root) {
+/** @param {{keep?:boolean}} [o] keep: a redraw after you changed something (stay on the same day and month) rather than arriving on the page */
+export function mountJournal(root, { keep = false } = {}) {
   const { state } = ctx;
   const model = buildModel(state.history, state.videos);
   const ins = insights(model, state.videos);
@@ -21,7 +22,7 @@ export function mountJournal(root) {
     h('h1', null, 'Journal'),
     h('p', { class: 'sub' }, 'Your training log, and what the app is learning about what works for your body.'),
 
-    trainingLog(() => mountJournal(root)),
+    trainingLog(() => mountJournal(root, { keep: true }), { keep }),
 
     heatmap(state),
 
@@ -40,19 +41,19 @@ export function mountJournal(root) {
     h('section', { class: 'panel' },
       h('h2', null, 'History'),
       state.history.length
-        ? h('ol', { class: 'history' }, [...state.history].reverse().map((s) => {
-          const v = state.videos[s.videoId];
+        ? h('ol', { class: 'history' }, [...state.history].sort((a, b) => (a.date === b.date ? (a.at < b.at ? 1 : -1) : a.date < b.date ? 1 : -1)).map((s) => {
+          const v = s.videoId ? state.videos[s.videoId] : null;
           return h('li', { class: 'hist-item', 'data-session': s.id },
             h('div', null,
               h('p', { class: 'when' }, s.date),
-              h('p', null, v ? h('button', { class: 'link', type: 'button', onclick: () => play(v.id) }, v.title) : 'Video no longer in library',
-                v ? h('small', { class: 'muted' }, ` · ${v.channel || 'unknown'}${sessionMinutes(s, state.videos) ? ` · ${sessionMinutes(s, state.videos)} min` : ''}`) : null),
+              h('p', null, v ? h('button', { class: 'link', type: 'button', onclick: () => play(v.id) }, v.title) : (s.kind === 'manual' ? (s.title ?? 'Something I did') : (s.title ? `${s.title} (video no longer in your data)` : 'Video no longer in library')),
+                v || s.kind === 'manual' ? h('small', { class: 'muted' }, ` · ${s.kind === 'manual' ? 'no video' : (v.channel || 'unknown')}${sessionMinutes(s, state.videos) ? ` · ${sessionMinutes(s, state.videos)} min` : ''}`) : null),
               h('p', { class: 'rates' }, Object.entries(s.ratings).map(([a, r]) => h('span', { class: `badge rate-${r}`, title: FACE[r][1] }, `${FACE[r][0]} ${areaLabel(a)}`)),
                 s.intensity ? h('span', { class: 'badge' }, { easy: 'too easy', right: 'just right', hard: 'too hard' }[s.intensity]) : null),
               s.note ? h('p', { class: 'note-text' }, `“${s.note}”`) : null),
             h('button', { class: 'btn small ghost', type: 'button', 'aria-label': 'Delete this entry', onclick: () => {
               if (!confirm('Delete this entry? The app will also forget what it learned from it.')) return;
-              deleteSession(state, s.id); ctx.store.save(); mountJournal(root);
+              deleteSession(state, s.id); ctx.store.save(); mountJournal(root, { keep: true });
             } }, 'Delete'));
         }))
         : h('p', { class: 'empty-note' }, 'No routines logged yet.')));

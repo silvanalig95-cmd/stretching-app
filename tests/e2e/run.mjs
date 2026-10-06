@@ -346,7 +346,7 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok(await page.locator('.insight').count() >= 1, 'an insight card exists');
     ok((await page.locator('.insight .big').first().innerText()).startsWith('100%'), 'one "much better" = 100% helpful');
     ok((await page.locator('.insight').first().innerText()).includes('early signal'), 'honest about a tiny sample');
-    ok((await page.locator('.note-text').innerText()).includes('<b>great</b>'), 'note shown as literal text');
+    ok((await page.locator('.hist-item .note-text').innerText()).includes('<b>great</b>'), 'note shown as literal text');
     ok(await page.locator('#heatmap .heat-row').count() >= 1, 'heat-map rows');
     ok((await page.locator('#heatmap .heat-row').first().innerText()).includes('today'), 'worked today');
     await shot(page, '02-journal');
@@ -398,6 +398,101 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok((await page.locator('#week-line').innerText()).startsWith('This week: 1 of 3'), await page.locator('#week-line').innerText());
     await page.click('#week-line button');
     await page.waitForSelector('#training-log');
+    await goto(page, 'today');
+  });
+
+  await step('Your notes on the video: tags and a note are shown on it, edited right there, read by the analysis, and what you wrote after doing it is listed (as text, never HTML)', async () => {
+    await goto(page, 'today');
+    await waitFeatured(page);
+    const id = await featuredId(page);
+    eq(id, await U(page, () => window.__unfurl.state.history[0].videoId), 'the video you just did is still on show');
+    const area = () => U(page, (i) => window.__unfurl.state.videos[i].profile.areas.hamstrings ?? 0, id);
+    ok((await page.locator('.my-sessions li').innerText()).includes('felt <b>great</b>'), 'what you wrote after doing it is listed');
+    eq(await page.locator('.my-sessions b').count(), 0, 'as text');
+    const before = await area();
+    await page.click('#my-edit');
+    await page.fill('#my-tags', 'hamstrings, morning');
+    await page.fill('#my-note', 'Great for my hamstrings, the long fold at the end.');
+    await shot(page, '27-your-notes');
+    await page.click('#my-save');
+    await page.waitForSelector('.my-note');
+    eq(await U(page, (i) => ({ t: window.__unfurl.state.library[i].tags, n: window.__unfurl.state.library[i].note }), id), { t: ['hamstrings', 'morning'], n: 'Great for my hamstrings, the long fold at the end.' });
+    ok((await page.locator('.my-notes .badge.tag').first().innerText()) === '#hamstrings', 'tags shown');
+    ok((await page.locator('.my-note').innerText()).includes('long fold'), 'note shown on the video');
+    ok(await area() >= 0.4 && await area() > before, `the analysis read it: ${before} -> ${await area()}`);
+    // and taking it back takes the evidence back
+    await page.click('#my-edit');
+    await page.fill('#my-tags', ''); await page.fill('#my-note', '');
+    await page.click('#my-save');
+    await page.waitForFunction((i) => !window.__unfurl.state.videos[i].mine || !window.__unfurl.state.videos[i].mine.note, id);
+    ok(Math.abs(await area() - before) < 1e-9, 'back to what it was');
+    ok(await page.locator('.my-note').count() === 0, 'nothing shown any more');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));   // so the next step's Undo is its own
+  });
+
+  await step('"✓ Did today": one click logs it (no questions), "How did it go?" adds the answers to that same entry', async () => {
+    const id = await featuredId(page);
+    const count = () => U(page, () => window.__unfurl.state.history.length);
+    const n0 = await count();
+    await page.click('#did-today');
+    await page.waitForFunction((n) => window.__unfurl.state.history.length === n + 1, n0);
+    ok(await page.locator('.toast', { hasText: 'Logged for today' }).count() >= 1, 'says so');
+    ok(/Did today \(2×\)/.test(await page.locator('#did-today').innerText()), await page.locator('#did-today').innerText());
+    ok((await page.locator('#week-line').innerText()).includes('This week: 2'), await page.locator('#week-line').innerText());
+    await page.click('[data-toast=rate-log]');
+    await page.waitForSelector('[role=dialog]');
+    ok((await page.locator('[role=dialog]').innerText()).includes('already in your training log'), 'it is the same entry');
+    await page.click('.rate-row .choice:has-text("Much better")');
+    await page.click('#save-feedback');
+    await page.waitForFunction(() => document.querySelectorAll('[role=dialog]').length === 0);
+    eq(await count(), n0 + 1, 'updated, not duplicated');
+    ok(Object.values(await U(page, () => window.__unfurl.state.history.at(-1).ratings)).includes('much'), 'answers saved on it');
+    eq(await U(page, () => window.__unfurl.state.history.at(-1).videoId), id);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));   // so the next step's Undo is its own
+  });
+
+  await step('Training log, day by day: everything done that day is listed, you can log something that is not a video, change an entry, and undo removing it', async () => {
+    await goto(page, 'journal');
+    await page.waitForSelector('#day-log');
+    const todayN = await U(page, () => window.__unfurl.state.history.filter((h) => h.date === new Date().toLocaleDateString('en-CA')).length);
+    eq(await page.locator('#day-entries .day-entry').count(), todayN, 'the list for today has all of them');
+    ok((await page.locator('#day-log h3').innerText()).startsWith('Today'), 'headed Today');
+    // another day, then back
+    await page.locator('.cal-day:not(.today):not(.out):not([disabled])').first().click();
+    ok(await page.locator('#day-empty').count() === 1 || await page.locator('#day-entries').count() === 1, 'shows that day');
+    await page.click('#day-today');
+    eq(await page.locator('#day-entries .day-entry').count(), todayN);
+    // something without a video
+    const lib0 = await U(page, () => Object.keys(window.__unfurl.state.library).length);
+    await page.click('#log-open');
+    await page.click('#log-mode-other');
+    await page.fill('#other-title', 'Morning mobility');
+    await page.fill('#other-minutes', '20');
+    await page.click('#other-areas [data-area=hamstrings]');
+    await shot(page, '28-log-something-else');
+    await page.click('#other-save');
+    await page.waitForSelector('.day-entry:has-text("Morning mobility")');
+    const row = page.locator('.day-entry:has-text("Morning mobility")');
+    ok((await row.innerText()).includes('no video') && (await row.innerText()).includes('20 min'), await row.innerText());
+    eq(await U(page, () => Object.keys(window.__unfurl.state.library).length), lib0, 'not added to the library');
+    ok((await page.locator('#tile-total').innerText()).startsWith(String(todayN + 1)), 'counted in the totals');
+    // change it, remove it, undo
+    await row.locator('[data-action=rate-entry]').click();
+    await page.waitForSelector('[role=dialog]');
+    await page.click('.rate-row .choice:has-text("A little")');
+    await page.click('#save-feedback');
+    await page.waitForSelector('.day-entry:has-text("Morning mobility") .badge.rate-some');
+    await page.locator('.day-entry:has-text("Morning mobility") [data-action=remove-entry]').click();
+    await page.waitForFunction(() => !document.querySelector('.day-entry') || ![...document.querySelectorAll('.day-entry')].some((e) => e.innerText.includes('Morning mobility')));
+    await page.click('.toast .link:has-text("Undo")');
+    await page.waitForSelector('.day-entry:has-text("Morning mobility")');
+    // clean up for the steps that follow: remove it and the extra "did today" entry
+    await page.locator('.day-entry:has-text("Morning mobility") [data-action=remove-entry]').click();
+    await page.waitForFunction((n) => document.querySelectorAll('#day-entries .day-entry').length === n, todayN);
+    await page.locator('#day-entries .day-entry [data-action=remove-entry]').last().click();
+    await page.waitForFunction(() => window.__unfurl.state.history.length === 1);
+    eq(await U(page, () => window.__unfurl.state.history.length), 1);
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));   // so the next step's Undo is its own
     await goto(page, 'today');
   });
 
