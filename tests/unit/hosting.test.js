@@ -483,3 +483,15 @@ test('a second copy on the same port refuses to start and says why (on Windows t
     assert.equal((await first.call({ path: '/api/ping' })).status, 200, 'the first copy is unharmed');
   } finally { first.stop(); }
 });
+
+test('names typed into UNFURL_HOST (the listen address) are caught with an explanation', async () => {
+  const s = await start({ env: { UNFURL_HOST: 'OLYMPUS,192.168.1.127', UNFURL_AUTH: 'me:pw-pw-pw' }, expectExit: true });
+  assert.notEqual(s.code, 0);
+  assert.match(s.err(), /UNFURL_HOST is the single address the server listens on/);
+  assert.match(s.err(), /UNFURL_ALLOWED_HOSTS/);
+});
+
+test('the "no login" message also warns that the last assignment in a settings file wins', async () => {
+  const s = await start({ args: ['--host', '0.0.0.0'], expectExit: true });
+  assert.match(s.err(), /LAST one wins/);
+});

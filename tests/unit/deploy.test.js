@@ -451,3 +451,25 @@ test('running from a built-in copy: rebuilding the image brings the new copy in 
     assert.ok(await until('image-2'), 'the volume\'s old copy was replaced');
   } finally { proc.kill('SIGTERM'); await sleep(500); }
 });
+
+test('the settings template assigns each variable only once (a later empty line silently cancelled a password the person had typed)', () => {
+  const seen = new Map();
+  for (const line of fs.readFileSync(path.join(ROOT, 'deploy', 'unfurl.env.example'), 'utf8').split('\n')) {
+    const m = line.match(/^([A-Z_]+)=/);
+    if (m) seen.set(m[1], (seen.get(m[1]) ?? 0) + 1);
+  }
+  for (const [name, n] of seen) assert.equal(n, 1, `${name} appears ${n} times`);
+  assert.ok(seen.has('UNFURL_AUTH') && seen.has('UNFURL_HOST') && seen.has('UNFURL_ALLOWED_HOSTS'));
+});
+
+test('running: a first version that cannot start, with nothing to fall back to, says it is the settings (once, not four confusing lines)', async () => {
+  const remote = makeRemote(); const home = tmp('home'); const port = await freePort();
+  remote.push('broken from the start', breaksStartup());
+  const proc = spawn('bash', [path.join(ROOT, 'deploy', 'run.sh')], { env: { ...process.env, UNFURL_HOME: home, UNFURL_REPO_URL: remote.bare, UNFURL_BRANCH: 'main', UNFURL_PORT: String(port), UNFURL_DATA: tmp('data'), UNFURL_UPDATE_INTERVAL: '0', UNFURL_CRASH_LIMIT: '2' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = ''; proc.stdout.on('data', (d) => { log += d; }); proc.stderr.on('data', (d) => { log += d; });
+  try {
+    for (let i = 0; i < 120 && !/almost certainly the settings/.test(log); i++) await sleep(250);
+    assert.match(log, /no earlier version to fall back to, so the cause is almost certainly the settings/);
+    assert.ok(!/nothing to roll back to/.test(log), 'no confusing rollback chatter');
+  } finally { proc.kill('SIGTERM'); await sleep(500); try { process.kill(Number(fs.readFileSync(path.join(home, 'server.pid'), 'utf8')), 'SIGKILL'); } catch { /* gone */ } }
+});

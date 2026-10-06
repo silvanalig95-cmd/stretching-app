@@ -82,8 +82,12 @@ while [ "$stopping" = 0 ]; do
     # has a configuration or environment problem (missing login, port in use, full disk); an older version won't fix that,
     # and could be too old for the saved data.
     if [ "$live_build" != "$(cat "$HOME_DIR/healthy" 2>/dev/null || true)" ]; then
-      say "this version has never run properly and keeps failing right after starting; trying the previous one"
-      "$UPDATER" --rollback --no-restart >/dev/null || say "no earlier version to fall back to"
+      if [ -e "$HOME_DIR/previous" ] && [ "$(readlink -f "$HOME_DIR/previous")" != "$(readlink -f "$HOME_DIR/current")" ]; then
+        say "this version has never run properly and keeps failing right after starting; trying the previous one"
+        "$UPDATER" --rollback --no-restart >/dev/null || say "the earlier version could not be restored either"
+      else
+        say "the server keeps failing right after starting and there is no earlier version to fall back to, so the cause is almost certainly the settings: read the message printed just above this line. It will keep retrying every 30 seconds."
+      fi
     else
       say "it keeps failing right after starting. This version ran fine before, so the cause is probably the settings or the machine (see the lines above); not switching versions."
     fi

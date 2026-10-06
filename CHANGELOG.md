@@ -32,6 +32,8 @@ Your library, history and ratings are never left behind by an update:
 
 **Addresses.** With a login on, home-network names and numbers (`192.168.1.50`, `mypc`, `mypc.local`, `.lan`, `.home.arpa`, `.internal`) are accepted without being listed, and `UNFURL_ALLOWED_HOSTS` takes wildcards (`*.fritz.box`). A page opened through a name the server refuses now says so in a red banner (and saves nothing) instead of silently falling back to browser storage. The Windows setup uses port 80 by default so addresses need no `:8765` (Docker publishes both 80 and 8765; the systemd unit may bind port 80). The "why this video" box is no longer empty when the match is only the fifth muscle you picked.
 
+**Settings file mistakes are caught.** The settings template no longer has two `UNFURL_AUTH=` lines (the second, empty one cancelled a typed password); the server explains that the last assignment wins when it refuses to start without a login, and rejects names typed into `UNFURL_HOST` (the listen address). The supervisor no longer pretends to roll back when there is nothing to roll back to.
+
 **One copy per port.** The server now refuses to start when something already answers on its port, and says what to do. (On Windows two programs can silently share a port, which made a leftover copy hide a broken one.)
 
 **Windows.** `deploy/WINDOWS.md` walks from "this PC only" through "shared on my home network" (`start-network.bat`, `network-settings.example.bat`, `install-autostart.bat`) to "updates itself" with Docker Desktop. `.gitattributes` keeps batch files CRLF and Linux scripts LF so a Windows checkout can't break the Docker image. The installer now follows the branch you cloned (the repository has no `main` yet).

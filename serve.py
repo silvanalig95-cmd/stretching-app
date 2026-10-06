@@ -178,7 +178,10 @@ def build_config(args, env) -> Config:
     """Command-line flags win over environment variables, which win over defaults."""
     c = Config()
     pick = lambda flag, key, default=None: flag if flag not in (None, "") else env.get(key, default)  # noqa: E731
-    c.host = pick(args.host, "UNFURL_HOST", c.host)
+    c.host = pick(args.host, "UNFURL_HOST", c.host).strip()
+    if "," in c.host or " " in c.host or not c.host:
+        sys.exit(f"UNFURL_HOST is the single address the server listens on (0.0.0.0 or 127.0.0.1), but it is set to {c.host!r}.\n"
+                 "The names people type in their browser (like the PC's name) belong in UNFURL_ALLOWED_HOSTS instead, and are optional behind a login.")
     c.port = int(pick(args.port, "UNFURL_PORT", c.port))
     d = pick(args.data_dir, "UNFURL_DATA")
     c.data_dir = (Path(d).expanduser() if d else default_data_dir()).resolve()
@@ -243,7 +246,9 @@ def check_exposure(c: Config):
             f"Refusing to listen on {c.host} without a login: anyone who can reach this address could read and change "
             "your data and use your YouTube key.\n"
             "Set UNFURL_AUTH=name:password (or UNFURL_USERS_FILE, or UNFURL_TRUST_PROXY_USER if a login proxy sits in front), "
-            "or listen on 127.0.0.1 only."
+            "or listen on 127.0.0.1 only.\n"
+            "(If you already set UNFURL_AUTH in a settings file, look for a second, empty UNFURL_AUTH= line further down: "
+            "when a name appears twice, the LAST one wins.)"
         )
     return None
 
