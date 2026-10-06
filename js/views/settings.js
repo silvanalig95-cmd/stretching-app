@@ -3,12 +3,38 @@
 
 import { h, fill } from '../dom.js';
 import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
-import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel } from '../state.js';
+import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel } from '../state.js';
 import { verifyVideos, THOROUGHNESS } from '../youtube.js';
 import { ANALYSIS_VERSION } from '../analyze.js';
-import { AREAS, GROUPS } from '../lexicon.js';
+import { parentOf, areaPath } from '../lexicon.js';
+import { areaPicker } from './areapicker.js';
 import { toast } from '../modal.js';
-import { localDate } from '../model.js';
+import { localDate, channelBlocker } from '../model.js';
+
+const HIDDEN_SHOWN = 40;
+
+/** Everything you told the app never to suggest again, each with a way back. */
+function hiddenPanel() {
+  const { state, store } = ctx;
+  const redraw = () => { const next = hiddenPanel(); document.getElementById('hidden-panel')?.replaceWith(next); };
+  const channels = state.blockedChannels;
+  const videos = state.blocked.map((id) => state.videos[id] ?? { id, title: id, channel: '' });
+  const countFor = (c) => Object.values(state.videos).filter(channelBlocker([c])).length;
+  const expanded = hiddenPanel.expanded === true;
+  return h('section', { class: 'panel', id: 'hidden-panel' },
+    h('h2', null, 'Hidden videos & channels'),
+    h('p', { class: 'hint' }, 'Things you told Unfurl never to suggest again (“Not for me” on a video, or Hide in the Library). They stay in your library if you added them, but are never offered as a routine.'),
+    !channels.length && !videos.length ? h('p', { class: 'empty-note', id: 'hidden-empty' }, 'Nothing is hidden. Use “Not for me ▾” on a suggestion to stop a video, or a whole channel, from coming back.') : null,
+    channels.length ? h('div', null, h('h3', null, `Blocked channels (${channels.length})`),
+      h('ul', { class: 'backups', id: 'blocked-channels' }, channels.map((c) => h('li', { 'data-channel': c.key },
+        h('span', null, c.name, h('small', { class: 'muted' }, ` · ${countFor(c)} known video${countFor(c) === 1 ? '' : 's'}`)),
+        h('button', { class: 'btn small ghost', type: 'button', 'data-unblock-channel': c.key, onclick: () => { unblockChannel(state, c.key); store.save(); toast(`“${c.name}” can be suggested again.`, 'success'); redraw(); } }, 'Allow again'))))) : null,
+    videos.length ? h('div', null, h('h3', null, `Hidden videos (${videos.length})`),
+      h('ul', { class: 'backups', id: 'blocked-videos' }, videos.slice(0, expanded ? undefined : HIDDEN_SHOWN).map((v) => h('li', { 'data-video': v.id },
+        h('span', null, v.title, v.channel ? h('small', { class: 'muted' }, ` · ${v.channel}`) : null),
+        h('button', { class: 'btn small ghost', type: 'button', 'data-unhide': v.id, onclick: () => { unblockVideo(state, v.id); store.save(); redraw(); } }, 'Allow again')))),
+      videos.length > HIDDEN_SHOWN && !expanded ? h('button', { class: 'link', type: 'button', onclick: () => { hiddenPanel.expanded = true; redraw(); } }, `Show all ${videos.length}`) : null) : null);
+}
 
 export function mountSettings(root) {
   const { state, store } = ctx;
@@ -62,14 +88,16 @@ export function mountSettings(root) {
 
   // ---------------------------------------------------------------- body profile
   const spotsSlot = h('div', { id: 'spots' });
-  const renderSpots = () => fill(spotsSlot, h('div', { class: 'groups' }, GROUPS.map((g) => h('fieldset', { class: 'group' },
-    h('legend', null, g.label),
-    h('div', { class: 'chips' }, AREAS.filter((a) => a.group === g.id && a.id !== 'full_body').map((a) => {
-      const m = prefs.focus.find((f) => f.id === a.id)?.mode;
-      return h('button', { type: 'button', class: `chip area${m ? ` on ${m}` : ''}`, 'aria-pressed': !!m, 'aria-label': `${a.label}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not set'}`,
+  const renderSpots = () => {
+    const picker = areaPicker({
+      skipWhole: true, showSpecific: !!prefs.showSpecific, modeOf: (id) => prefs.focus.find((f) => f.id === id)?.mode,
+      onToggle: () => { prefs.showSpecific = !prefs.showSpecific; store.save(); renderSpots(); },
+      makeChip: (a, m) => h('button', { type: 'button', class: `chip area${parentOf(a.id) ? ' sub' : ''}${m ? ` on ${m}` : ''}`, 'aria-pressed': !!m, 'aria-label': `${areaPath(a.id)}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not set'}`,
         onclick: () => { cycleArea(a.id, prefs.focus); store.save(); renderSpots(); } },
-      a.label, m ? h('small', { class: 'mode' }, m === 'weak' ? 'weak' : 'tight') : null);
-    }))))));
+      a.label, m ? h('small', { class: 'mode' }, m === 'weak' ? 'weak' : 'tight') : null),
+    });
+    fill(spotsSlot, picker.toggle, picker.groups);
+  };
 
   // ---------------------------------------------------------------- data
   const importInput = h('input', { type: 'file', accept: 'application/json,.json', hidden: true, id: 'import-file', onchange: async (e) => {
@@ -165,6 +193,7 @@ export function mountSettings(root) {
         h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.')),
       state.following.length ? h('div', null, h('h3', null, 'Teachers you follow'),
         h('ul', { class: 'backups' }, state.following.map((f) => h('li', null, f.name, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { unfollowChannel(state, f.channelId); store.save(); mountSettings(root); } }, 'Unfollow'))))) : null),
+    hiddenPanel(),
     dataPanel);
   renderSpots();
   renderBackups();

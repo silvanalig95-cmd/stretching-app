@@ -4,7 +4,7 @@
 // every query it has used (and the result page it reached), and prefers
 // phrasings/teachers/sort orders it hasn't tried yet.
 
-import { AREA_TERMS, STYLE_TERMS, POSE_TERMS, POSE_BY_ID, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
+import { AREA_TERMS, COMMAND_ONLY_TERMS, STYLE_TERMS, POSE_TERMS, POSE_BY_ID, AREA_BY_ID, TEACHERS, normalize, scan } from './lexicon.js';
 import { STOP_WORDS } from './index.js';
 
 // ---------------------------------------------------------------- video URLs
@@ -72,8 +72,10 @@ export function parseCommand(text) {
     mode = 'tight';
     for (const seg of sentence.split(/,|\band\b|\bbut\b|\bplus\b|\bwith\b|\bthen\b/)) {
       if (WEAK_CUES.test(seg)) mode = 'weak'; else if (TIGHT_CUES.test(seg)) mode = 'tight';
-      for (const { entry } of scan(AREA_TERMS, seg)) {
-        for (const [a, w] of Object.entries(entry.map)) if (w >= 0.5 && !seen.has(a)) seen.set(a, mode);
+      for (const compiled of [AREA_TERMS, COMMAND_ONLY_TERMS]) {
+        for (const { entry } of scan(compiled, seg)) {
+          for (const [a, w] of Object.entries(entry.map)) if (w >= 0.5 && !seen.has(a)) seen.set(a, mode);
+        }
       }
     }
   }
@@ -92,7 +94,7 @@ export function parseCommand(text) {
 
   // --- whatever is left over ("pigeon", a teacher's name, "sphinx") is searched for as free text
   let rest = ` ${normalize(raw)} `;
-  for (const compiled of [AREA_TERMS, STYLE_TERMS]) {
+  for (const compiled of [AREA_TERMS, COMMAND_ONLY_TERMS, STYLE_TERMS]) {
     for (const m of scan(compiled, raw)) rest = rest.replace(new RegExp(`\\b${m.phrase}s?\\b`, 'g'), ' ');
   }
   const noise = new Set([...HINT_WORDS, 'half', 'hour', 'hours', 'quick', 'short', 'long', 'extended', 'brief', 'few', 'under', 'over', 'around', 'about', 'approximately', 'roughly', 'least', 'most', 'than', 'less', 'more', 'within', 'max', 'maximum', 'minimum', 'one', 'today', 'tonight']);

@@ -2,7 +2,7 @@
 // named poses, viewer comments) into a plain report a person can read before deciding to keep the video.
 // Pure functions: no DOM, no network.
 
-import { AREA_BY_ID, POSE_BY_ID, BENEFITS, STYLES } from './lexicon.js';
+import { AREA_BY_ID, POSE_BY_ID, BENEFITS, STYLES, SPECIFIC_TO_GENERIC } from './lexicon.js';
 import { qualityScore, isHiddenGem, likeRatioScore } from './analyze.js';
 import { coverage, isTrusted, channelKey } from './model.js';
 
@@ -20,6 +20,7 @@ function whyArea(video, a) {
   if ((src.chapters?.[a] ?? 0) >= 0.4) bits.push('in the chapter list');
   else if ((src.desc?.[a] ?? 0) >= 0.4) bits.push('described in the description');
   if ((src.tags?.[a] ?? 0) >= 0.4) bits.push('in its tags');
+  if ((src.transcript?.[a] ?? 0) >= 0.25) bits.push('the teacher talks about it');
   const moves = (p.poses ?? []).map(({ id, count }) => ({ id, w: (POSE_BY_ID[id]?.areas[a] ?? 0) * count }))
     .filter((x) => x.w >= 0.5).sort((x, y) => y.w - x.w).slice(0, 3).map((x) => POSE_BY_ID[x.id].label);
   if (moves.length) bits.push(`exercises: ${moves.join(', ')}`);
@@ -53,8 +54,10 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
   const ev = video.evidence ?? null;
   const prefs = state.prefs ?? {};
 
-  const areas = Object.entries(p.areas ?? {})
-    .filter(([a, s]) => s >= 0.3 && a !== 'full_body' && AREA_BY_ID[a])
+  const all = Object.entries(p.areas ?? {}).filter(([a, s]) => s >= 0.3 && a !== 'full_body' && AREA_BY_ID[a]);
+  // Show "Core" separately only when the video says something about it beyond what its specific parts already imply.
+  const merely = (a, s) => all.some(([c, cs]) => AREA_BY_ID[c].parent === a && s <= SPECIFIC_TO_GENERIC * cs + 0.01);
+  const areas = all.filter(([a, s]) => !merely(a, s))
     .sort((x, y) => y[1] - x[1]).slice(0, 8)
     .map(([id, score]) => ({ id, label: AREA_BY_ID[id].label, score, strength: score >= 0.7 ? 'clearly' : score >= 0.5 ? 'probably' : 'a little', why: whyArea(video, id) }));
   const fullBody = (p.areas?.full_body ?? 0) >= 0.5;
@@ -93,7 +96,15 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
     inLibrary: inLib,
   };
 
+  const spoken = p.transcript ? {
+    words: p.transcript.words, lines: p.transcript.lines,
+    timeline: (p.transcript.timeline ?? []).slice(0, 12).map(({ id, t }) => ({ at: clock(t), label: POSE_BY_ID[id]?.label ?? id })),
+    heard: Object.entries(p.sources?.transcript ?? {}).filter(([a, s]) => s >= 0.3 && AREA_BY_ID[a]).sort((x, y) => y[1] - x[1]).slice(0, 5)
+      .map(([id, score]) => ({ id, label: AREA_BY_ID[id].label, score })),
+  } : null;
+
   const limits = [];
+  if (!spoken) limits.push('No transcript was read. Paste one (below) and the analysis gets much sharper, because it then knows what the teacher says each move is for.');
   if (!video.evidence) limits.push('No viewer comments were read, so what viewers say it does is unknown.');
   else if (video.evidence.n < 10) limits.push(`Only ${video.evidence.n} comments could be read; treat what viewers say as an early signal.`);
   if (!video.verified) limits.push('The length and channel are unverified (no YouTube key was used).');
@@ -102,7 +113,7 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
 
   return {
     id: video.id, title: video.title, channel: video.channel || '', durationSec: video.durationSec ?? null, durationApprox: !!video.durationApprox,
-    level: LEVELS[p.level] ?? null, styles, areas, fullBody, poses, chapters, viewers, quality, fit, limits,
+    level: LEVELS[p.level] ?? null, styles, areas, fullBody, poses, chapters, transcript: spoken, viewers, quality, fit, limits,
     summary: summarize(areas, fullBody),
   };
 }

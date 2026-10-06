@@ -96,7 +96,8 @@ fieldset.group legend { font-size: .8rem; text-transform: uppercase; letter-spac
 .spinner { width: 34px; height: 34px; margin: 0 auto 12px; border-radius: 50%; border: 4px solid var(--accent-soft); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } }
-.featured .player { aspect-ratio: 16 / 9; background: #0b0f0d; display: flex; align-items: center; justify-content: center; }
+.card.featured { overflow: visible; }   /* the "Not for me" menu drops out of the card */
+.featured .player { border-radius: var(--radius) var(--radius) 0 0; overflow: hidden; aspect-ratio: 16 / 9; background: #0b0f0d; display: flex; align-items: center; justify-content: center; }
 .featured .player iframe { width: 100%; height: 100%; border: 0; display: block; }
 .player-problem { color: #e7efe9; padding: 24px; text-align: center; max-width: 520px; }
 .info { padding: 18px 22px 22px; }
@@ -286,3 +287,28 @@ details.panel > summary { cursor: pointer; font-weight: 600; }
   .a-area .a-why { grid-column: 1 / -1; order: 4; }
   .analyze-form { flex-direction: column; }
 }
+
+/* ---- specific muscles */
+#toggle-specific { margin: 4px 0 10px; }
+.chip.sub { font-size: .86rem; padding: .25rem .65rem; border-style: dashed; }
+.chip.sub::before { content: "↳"; color: var(--muted); }
+.chip.sub.on { border-style: solid; }
+.cov-row.sub { padding-left: 1.4rem; font-size: .93rem; }
+.cov-row.sub .c-label::before { content: "↳ "; color: var(--muted); }
+
+/* ---- "Not for me" menu */
+details.menu { position: relative; display: inline-block; }
+details.menu > summary { list-style: none; cursor: pointer; }
+details.menu > summary::-webkit-details-marker { display: none; }
+details.menu .menu-items { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 17rem; max-width: 22rem; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 8px; display: grid; gap: 4px; }
+details.menu .menu-items button { text-align: left; font: inherit; background: none; border: 0; border-radius: 8px; padding: .5rem .6rem; color: var(--ink); cursor: pointer; }
+details.menu .menu-items button:hover:not(:disabled) { background: var(--accent-soft); }
+details.menu .menu-items button:disabled { color: var(--muted); cursor: default; }
+details.menu .menu-note { margin: 2px 6px; color: var(--muted); font-size: .85rem; }
+details.menu .menu-note.small { font-size: .78rem; }
+@media (max-width: 560px) { details.menu .menu-items { position: fixed; left: 12px; right: 12px; top: auto; bottom: 12px; max-width: none; } }
+
+.transcript-box { margin-top: 8px; }
+.transcript-box summary { cursor: pointer; font-weight: 600; font-size: .93rem; }
+.transcript-box textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: .9rem; padding: .6rem .8rem; border-radius: 10px; border: 2px solid var(--line); background: var(--surface); color: var(--ink); }
+.editor .transcript-box { margin: 6px 0; }

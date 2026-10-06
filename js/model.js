@@ -11,7 +11,7 @@
 // The learned part is rebuilt from the history log every time (no hidden
 // state), so editing or deleting a history entry changes the model honestly.
 
-import { POSE_BY_ID, AREA_BY_ID } from './lexicon.js';
+import { POSE_BY_ID, AREA_BY_ID, parentOf } from './lexicon.js';
 import { qualityScore, isHiddenGem, explainMatch } from './analyze.js';
 
 const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
@@ -48,6 +48,19 @@ export function localDate(d = new Date()) {
 // ---------------------------------------------------------------- identity helpers
 
 export const channelKey = (v) => (v.channelId || v.channel || '').toLowerCase();
+
+/** A test for "does this video come from a channel the person blocked?". Entries look like {key, name, channelId?}. */
+export function channelBlocker(blockedChannels = []) {
+  const ids = new Set(), keys = new Set(), names = new Set();
+  for (const c of blockedChannels) {
+    if (c.channelId) ids.add(c.channelId);
+    if (c.key) keys.add(c.key);
+    if (c.name) names.add(normName(c.name));
+  }
+  if (!ids.size && !keys.size && !names.size) return () => false;
+  // by id when YouTube gave one, else by the channel's name (the starter suggestions only know the name)
+  return (v) => !!((v.channelId && ids.has(v.channelId)) || keys.has(channelKey(v)) || (v.channel && names.has(normName(v.channel))));
+}
 const normName = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 export function isTrusted(video, trusted = []) {
   const ch = normName(video.channel);
@@ -199,16 +212,17 @@ export function recencyPenalty(model, videoId, today = localDate()) {
  * @param {object} p.model           from buildModel
  */
 export function rankCandidates({
-  videos, filters, model, trusted = [], blocked = [], adventure = 0.35, today = localDate(), now = Date.now(),
+  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], adventure = 0.35, today = localDate(), now = Date.now(),
   textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
   libraryIds = null,   // Set of ids in the user's library
 }) {
   const selected = filters.areas ?? [];
   const blockedSet = new Set(blocked);
+  const channelBlocked = channelBlocker(blockedChannels);
   const useText = !!(filters.terms?.length && textScores);
   const out = [];
   for (const video of videos) {
-    if (blockedSet.has(video.id) || video.broken || video.embeddable === false) continue;
+    if (blockedSet.has(video.id) || channelBlocked(video) || video.broken || video.embeddable === false) continue;
     const inLib = !!libraryIds?.has(video.id);
     if (filters.source === 'library' && !inLib) continue;
     if (filters.source === 'discovered' && inLib) continue;
@@ -345,11 +359,16 @@ export function areaHeat(history, { days = 28, today = localDate() } = {}) {
   const out = {};
   for (const h of history) {
     const age = daysBetween(h.date, today);
-    for (const a of sessionAreas(h)) {
+    // Working a specific area (lower abs) also counts for the general one it belongs to (core).
+    const ids = new Set(sessionAreas(h));
+    for (const a of [...ids]) { const p = parentOf(a); if (p) ids.add(p); }
+    for (const a of ids) {
       const e = (out[a] ??= { sessions: 0, last: null, daysAgo: null, helped: null, _sum: 0, _n: 0 });
       if (age <= days) e.sessions++;
       if (!e.last || h.date > e.last) e.last = h.date;
-      const v = RATING_VALUE[h.ratings?.[a]];
+      // a rating given to the area itself, or else the one its specific part was given
+      const rated = h.ratings?.[a] ?? [...ids].map((c) => (parentOf(c) === a ? h.ratings?.[c] : null)).find(Boolean);
+      const v = RATING_VALUE[rated];
       if (v != null) { e._sum += v; e._n++; }
     }
   }

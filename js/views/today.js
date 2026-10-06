@@ -3,11 +3,14 @@
 import { h, fill } from '../dom.js';
 import { THOROUGHNESS } from '../youtube.js';
 import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow, useMySpots, aimAtNeglected, buildCombos, startCombo, advanceCombo, comboKey } from '../ctx.js';
-import { AREAS, GROUPS, STYLES, QUICK_PICKS, areaLabel } from '../lexicon.js';
+import { STYLES, QUICK_PICKS, areaLabel, parentOf, areaPath } from '../lexicon.js';
+import { areaPicker } from './areapicker.js';
+import { blockMenu } from './blockmenu.js';
+import { channelBlocker } from '../model.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
 import { mountPlayer } from '../player.js';
 import { formatDuration, attachComments } from '../analyze.js';
-import { applyPlayerInfo, toggleLibrary, addToLibrary, inLibrary, blockVideo, unblockVideo } from '../state.js';
+import { applyPlayerInfo, toggleLibrary, addToLibrary, inLibrary } from '../state.js';
 import { mulberry32 } from '../model.js';
 import { fmtViews, thumb } from '../dom.js';
 import { openFeedback } from './feedback.js';
@@ -84,6 +87,14 @@ export function renderFilters() {
   const presets = [['Under 10', 3, 10], ['10–20', 10, 20], ['20–30', 20, 30], ['30–45', 30, 45], ['Any', null, null]];
 
   const hasBodyData = prefs.focus.length || ctx.state.history.length;
+  const picker = areaPicker({
+    modeOf, showSpecific: !!prefs.showSpecific,
+    onToggle: () => { prefs.showSpecific = !prefs.showSpecific; ctx.store.save(); again(); },
+    makeChip: (a, m) => chip(a.label, !!m, () => { cycleArea(a.id); again(); }, {
+      cls: `area${parentOf(a.id) ? ' sub' : ''}`, mode: m,
+      aria: `${areaPath(a.id)}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not selected'}`,
+    }),
+  });
   fill(slots.filters, 
     f.terms?.length ? h('div', { class: 'row' }, h('div', { class: 'label' }, 'Also matching'),
       h('div', { class: 'chips' }, h('button', { type: 'button', class: 'chip on', id: 'clear-terms', 'aria-label': `Stop matching “${f.terms.join(' ')}”`, onclick: () => { f.terms = []; again(); } }, `“${f.terms.join(' ')}”`, h('small', { class: 'mode' }, '✕')))) : null,
@@ -107,12 +118,7 @@ export function renderFilters() {
       }, { cls: 'quick' })))),
     h('div', { class: 'row' },
       h('div', { class: 'label' }, 'Muscles & spots', h('small', { class: 'hint inline' }, ' tap once = tight (stretch), twice = weak (strengthen), third = off')),
-      h('div', { class: 'groups' }, GROUPS.map((g) => h('fieldset', { class: 'group' },
-        h('legend', null, g.label),
-        h('div', { class: 'chips' }, AREAS.filter((a) => a.group === g.id).map((a) => {
-          const m = modeOf(a.id);
-          return chip(a.label, !!m, () => { cycleArea(a.id); again(); }, { cls: 'area', mode: m, aria: `${a.label}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not selected'}` });
-        })))))),
+      picker.toggle, picker.groups),
     h('div', { class: 'row inline-row' },
       h('div', null, h('div', { class: 'label' }, 'Length (minutes)'),
         h('div', { class: 'len' }, minIn, h('span', null, 'to'), maxIn),
@@ -288,12 +294,7 @@ function featuredInfo(entry) {
       h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => finishVideo(v.id) }, 'I did it ✓'),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
-      h('button', { class: 'btn ghost', type: 'button', onclick: () => {
-        blockVideo(state, v.id); ctx.store.save();
-        const t = toast('Won’t suggest that one again. ', 'info', 7000);
-        t.append(h('button', { class: 'link', type: 'button', onclick: () => { unblockVideo(state, v.id); ctx.store.save(); t.remove(); } }, 'Undo'));
-        another();
-      } }, 'Not for me'),
+      blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
     reasonsBlock(entry, wanted),
     quotes.length ? h('div', { class: 'quotes' }, h('h3', null, 'What viewers say'),

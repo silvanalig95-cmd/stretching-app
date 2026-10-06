@@ -9,6 +9,7 @@
 import {
   AREA_TERMS, POSE_TERMS, STYLE_TERMS, DIFFICULTY_TERMS, BENEFIT_TERMS,
   POSE_BY_ID, AREA_BY_ID, NEG_RE, POS_RE, PACE_RE, BENEFITS, normalize, scan,
+  rootOf, SPECIFIC_TO_GENERIC, GENERIC_TO_SPECIFIC,
 } from './lexicon.js';
 
 const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
@@ -17,10 +18,10 @@ const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 // Bump this whenever the analysis changes in a way that alters profiles (lexicon,
 // weights, parsing). On load the app re-runs the analysis over everything it has
 // stored, so improvements apply retroactively without re-fetching anything.
-export const ANALYSIS_VERSION = 2;
+export const ANALYSIS_VERSION = 3;
 
 // How much we trust each kind of evidence.
-export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7 };
+export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75 };
 
 // ---------------------------------------------------------------- small parsers
 
@@ -84,6 +85,74 @@ function sumByArea(matches, { skipWeak = false } = {}) {
   return sums;
 }
 
+// ---------------------------------------------------------------- transcripts
+
+export const TRANSCRIPT_MAX_CHARS = 40000;
+
+/** Turn pasted transcript text into [{t:seconds|null, text}] lines. Copes with YouTube's "0:12" / "1:02:03" stamps, SRT and plain prose. */
+export function parseTranscript(raw) {
+  const text = String(raw ?? '').replace(/\r/g, '').replace(/<[^>]+>/g, ' ').slice(0, TRANSCRIPT_MAX_CHARS * 2);
+  const lines = [];
+  let pendingT = null;
+  for (const line of text.split('\n')) {
+    const l = line.trim();
+    if (!l || /^\d+$/.test(l) || /^WEBVTT/i.test(l)) continue;
+    const srt = l.match(/^(\d{1,2}):(\d{2}):(\d{2})[,.]\d{1,3}\s*-->/);
+    if (srt) { pendingT = +srt[1] * 3600 + +srt[2] * 60 + +srt[3]; continue; }
+    const vtt = l.match(/^(\d{1,2}):(\d{2})[.]\d{1,3}\s*-->/);
+    if (vtt) { pendingT = +vtt[1] * 60 + +vtt[2]; continue; }
+    const stamped = l.match(/^\[?((?:\d{1,2}:)?\d{1,2}:\d{2})\]?\s*[-–—:]?\s*(.*)$/);   // "0:12 text" or "0:12" alone, text on the next line
+    if (stamped) {
+      const t = parseTimestamp(stamped[1]);
+      if (stamped[2]) { lines.push({ t, text: stamped[2] }); pendingT = null; } else pendingT = t;
+      continue;
+    }
+    lines.push({ t: pendingT, text: l.replace(/\s+/g, ' ') });
+    pendingT = null;
+  }
+  return lines.filter((x) => x.text.replace(/\[[^\]]*\]|♪/g, '').trim());
+}
+
+/** The transcript as stored: plain text, one line per caption, capped. */
+export function cleanTranscript(raw) {
+  const lines = parseTranscript(raw);
+  let out = '', n = 0;
+  for (const { t, text } of lines) {
+    const row = `${t == null ? '' : `@${t} `}${text.replace(/\s+/g, ' ').trim()}\n`;
+    if (out.length + row.length > TRANSCRIPT_MAX_CHARS) break;
+    out += row; n++;
+  }
+  return { text: out.trimEnd(), lines: n };
+}
+const storedLines = (stored) => String(stored ?? '').split('\n').map((l) => {
+  const m = l.match(/^@(\d+)\s(.*)$/);
+  return m ? { t: +m[1], text: m[2] } : { t: null, text: l };
+}).filter((x) => x.text);
+
+// An instructor describing what a move does is the best evidence there is. These phrases mark such sentences.
+const CUE_RE = /\b(?:you(?:'ll| will| should| might| may)? (?:feel|notice)|feel(?:ing)? (?:this|it|that|a|the|your)|stretch(?:ing|es)?|opening|release|releasing|loosen(?:ing)?|lengthen(?:ing)?|strengthen(?:ing)?|engag(?:e|ing)|activat(?:e|ing)|squeez(?:e|ing)|working|targets?|targeting|tightness|tension)\b/;
+
+/** Evidence per area, how many words were read, and when each exercise first comes up. */
+function transcriptEvidence(stored) {
+  const lines = storedLines(stored);
+  if (!lines.length) return null;
+  const sums = {}, poseCounts = {}, firstAt = {};
+  let words = 0;
+  for (const { t, text } of lines) {
+    words += text.split(/\s+/).length;
+    const cue = CUE_RE.test(normalize(text)) ? 2.5 : 1;
+    const matches = scan(AREA_TERMS, text);
+    for (const [a, v] of Object.entries(sumByArea(matches))) sums[a] = (sums[a] ?? 0) + v * cue;
+    for (const { entry } of scan(POSE_TERMS, text)) {
+      poseCounts[entry.id] = (poseCounts[entry.id] ?? 0) + 1;
+      if (t != null && firstAt[entry.id] == null) firstAt[entry.id] = t;
+    }
+  }
+  const areas = Object.fromEntries(Object.entries(sums).map(([a, s]) => [a, sat(s, 0.16)]));
+  const timeline = Object.entries(firstAt).map(([id, t]) => ({ id, t })).sort((x, y) => x.t - y.t).slice(0, 30);
+  return { areas, poseCounts, timeline, words, lines: lines.length };
+}
+
 function noisyOrByArea(matches) {
   const miss = {};
   for (const { entry } of matches) {
@@ -123,7 +192,8 @@ export function combineSources(sources) {
   }
   // A video that claims to cover everything is a generalist: dampen it a bit so
   // a focused video wins when you ask for something specific.
-  const strong = Object.entries(areas).filter(([a, v]) => a !== 'full_body' && v >= 0.45).length;
+  // (A specific area and its general one are one thing here, so "lower abs" + "core" count once.)
+  const strong = new Set(Object.entries(areas).filter(([a, v]) => a !== 'full_body' && v >= 0.45).map(([a]) => rootOf(a))).size;
   if (strong > 3) {
     const scale = Math.max(0.7, 1 - 0.06 * (strong - 3));
     for (const a of Object.keys(areas)) if (a !== 'full_body') areas[a] *= scale;
@@ -131,6 +201,18 @@ export function combineSources(sources) {
   // "Full body" videos do touch everything, just not specifically.
   const fb = areas.full_body ?? 0;
   if (fb >= 0.5) for (const a of Object.keys(AREA_BY_ID)) if (a !== 'full_body') areas[a] = Math.max(areas[a] ?? 0, 0.35 * fb);
+  // Specific <-> general. Working "lower abs" works "core" almost as much; a video that only says "core" is a
+  // weak (never strong) match for each specific part. The general score is taken before it is raised by its
+  // children, so one specific part never lends strength to its siblings.
+  const generic = {};
+  for (const a of Object.keys(areas)) if (!AREA_BY_ID[a]?.parent) generic[a] = areas[a];
+  for (const [a, v] of Object.entries({ ...areas })) {
+    const parent = AREA_BY_ID[a]?.parent;
+    if (parent) areas[parent] = Math.max(areas[parent] ?? 0, SPECIFIC_TO_GENERIC * v);
+  }
+  for (const def of Object.values(AREA_BY_ID)) {
+    if (def.parent && generic[def.parent]) areas[def.id] = Math.max(areas[def.id] ?? 0, GENERIC_TO_SPECIFIC * generic[def.parent]);
+  }
   return Object.fromEntries(Object.entries(areas).map(([a, v]) => [a, Math.round(v * 1000) / 1000]));
 }
 
@@ -167,6 +249,9 @@ export function analyzeVideoText(video) {
   const poseCounts = {};
   // The description already contains the chapter lines, so don't scan them twice.
   countPoses(scan(POSE_TERMS, `${title} . ${description}`), poseCounts);
+  // What the teacher says out loud (if a transcript was added): the best evidence of what each move is for.
+  const spoken = video.transcript ? transcriptEvidence(video.transcript) : null;
+  if (spoken) for (const [id, n] of Object.entries(spoken.poseCounts)) poseCounts[id] = (poseCounts[id] ?? 0) + n;
 
   const sources = {
     title: noisyOrByArea(scan(AREA_TERMS, title)),
@@ -174,14 +259,16 @@ export function analyzeVideoText(video) {
     tags: Object.fromEntries(Object.entries(sumByArea(scan(AREA_TERMS, tags))).map(([a, s]) => [a, sat(s, 0.45)])),
     chapters: Object.fromEntries(Object.entries(sumByArea(scan(AREA_TERMS, chapterText))).map(([a, s]) => [a, sat(s, 0.8)])),
     poses: poseEvidence(poseCounts),
+    ...(spoken ? { transcript: spoken.areas } : {}),
   };
   return {
     sources,
     areas: combineSources(sources),
     poses: Object.entries(poseCounts).map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count),
     chapters: chapters.slice(0, 40),
-    styles: detectStyles(title, description, poseCounts),
+    styles: detectStyles(title, `${description} ${String(video.transcript ?? '').slice(0, 3000)}`, poseCounts),
     level: detectLevel(title, description),
+    ...(spoken ? { transcript: { words: spoken.words, lines: spoken.lines, timeline: spoken.timeline } } : {}),
   };
 }
 
@@ -280,6 +367,14 @@ export function compactComments(comments) {
     const text = decodeEntities(typeof c === 'string' ? c : c?.text).replace(/\s+/g, ' ').trim().slice(0, 240);
     return { t: text, l: typeof c === 'object' ? c.likes ?? c.l ?? 0 : 0 };
   }).filter((c) => c.t.length >= 4);
+}
+
+/** Add (or replace) a pasted transcript and re-derive the profile from everything stored. An empty text removes it. */
+export function attachTranscript(video, raw) {
+  const { text, lines } = cleanTranscript(raw);
+  const next = { ...video };
+  if (lines) next.transcript = text; else delete next.transcript;
+  return reanalyze(next);
 }
 
 /** Store comments on a video and (re)derive its evidence + profile. */

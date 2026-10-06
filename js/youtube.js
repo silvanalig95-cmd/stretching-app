@@ -270,7 +270,7 @@ export async function discover({ client, filters, state, rng, progress = () => {
       const rel = SearchIndex.fromVideos(Object.fromEntries(videos.map((v) => [v.id, v])), state.library).relevance(filters.terms, {});
       if (rel.size) textScores = rel;
     }
-    return rankCandidates({ videos, filters, model, textScores, libraryIds, trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure });
+    return rankCandidates({ videos, filters, model, textScores, libraryIds, trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, adventure: state.prefs.adventure });
   };
   const isStrong = (r) => r.parts.match >= 0.65 && r.parts.fit >= 0.99 && r.parts.quality >= 0.45;
 

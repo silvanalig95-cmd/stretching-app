@@ -201,6 +201,31 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok(!(await U(page, () => window.__unfurl.ui.filters.areas.some((a) => a.id === 'core'))), 'third tap turns it off');
   });
 
+  await step('specific muscles stay out of the way until asked for, then work like any other chip; a typed request shows the one it picked', async () => {
+    const mode = (id) => U(page, (i) => window.__unfurl.ui.filters.areas.find((a) => a.id === i)?.mode ?? null, id);
+    eq(await page.locator('.chip.area:has-text("Lower abdomen")').count(), 0, 'hidden by default');
+    ok(await page.locator('.chip.area:has-text("Core")').count() === 1, 'the general area is always there');
+    await page.click('#toggle-specific');
+    ok(await page.locator('.chip.sub:has-text("Lower abdomen")').count() === 1, 'shown after asking');
+    ok(await page.locator('.chip.sub:has-text("Side abs")').count() === 1 && await page.locator('.chip.sub:has-text("Psoas")').count() === 1, 'many specific options');
+    await page.click('.chip.sub:has-text("Lower abdomen")');
+    eq(await mode('abs_lower'), 'tight');
+    await page.click('.chip.sub:has-text("Lower abdomen")');
+    eq(await mode('abs_lower'), 'weak');
+    await page.click('#toggle-specific');   // hide again: the selected one must stay visible
+    ok(await page.locator('.chip.sub.on:has-text("Lower abdomen")').count() === 1, 'a selected specific muscle is never hidden');
+    ok(await page.locator('.chip.sub:has-text("Side abs")').count() === 0, 'unselected ones are');
+    await page.click('.chip.sub:has-text("Lower abdomen")');
+    eq(await mode('abs_lower'), null);
+    await page.fill('#command', 'side abs, 10 min'); await page.press('#command', 'Enter');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy && window.__unfurl.ui.filters.areas.some((a) => a.id === 'obliques'));
+    eq(await U(page, () => window.__unfurl.ui.filters.areas.map((a) => a.id)), ['obliques'], 'exactly the muscle asked for');
+    ok(await page.locator('.chip.sub.on:has-text("Side abs")').count() === 1, 'and its chip is shown even though specific muscles are hidden');
+    await shot(page, '23-specific-muscles');
+    await U(page, () => { const f = window.__unfurl.ui.filters; f.terms = []; f.areas = []; f.minMin = 7; f.maxMin = 13; });
+    await page.waitForFunction(() => true);
+  });
+
   await step('quick pick + Find gives a routine that actually works those muscles', async () => {
     await page.click('.chip.quick:has-text("Desk posture")');
     await page.click('#find');
@@ -232,6 +257,43 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok(await U(page, (i) => i in window.__unfurl.state.library, id), 'this video');
     ok((await page.locator('#lib-toggle').innerText()).includes('In library'), 'button reflects it');
     ok(await page.locator('.featured .badge.lib').count() === 1, 'badge shown');
+  });
+
+  await step('"Not for me ▾": hide this video, or its whole channel; both are listed in Settings and can be allowed again', async () => {
+    const ranked = () => U(page, () => window.__unfurl.ui.ranked.map((r) => r.video.id));
+    // --- just this video
+    const first = await featuredId(page);
+    await page.click('details.menu summary');
+    await shot(page, '24-not-for-me-menu');
+    ok(await page.locator('details.menu [data-block=video]').isVisible(), 'the menu offers the video');
+    ok((await page.locator('details.menu .menu-items').innerText()).includes('Just this video'), 'in plain words');
+    await page.click('details.menu [data-block=video]');
+    await page.waitForFunction((id) => window.__unfurl.ui.featuredId !== id, first);
+    ok(await U(page, (id) => window.__unfurl.state.blocked.includes(id), first), 'recorded');
+    ok(!(await ranked()).includes(first), 'never suggested again');
+    ok(await page.locator('.toast', { hasText: 'Won’t suggest this video again' }).count() >= 1, 'says what happened');
+    // --- the whole channel
+    const second = await featuredId(page);
+    const channel = await U(page, (id) => window.__unfurl.state.videos[id].channel, second);
+    ok(channel, 'the next video has a known channel');
+    const sameChannel = await U(page, (ch) => Object.values(window.__unfurl.state.videos).filter((v) => v.channel === ch).map((v) => v.id), channel);
+    await page.click('details.menu summary');
+    ok((await page.locator('details.menu [data-block=channel]').innerText()).includes(channel), 'names the channel');
+    await page.click('details.menu [data-block=channel]');
+    await page.waitForFunction((id) => window.__unfurl.ui.featuredId !== id, second);
+    eq(await U(page, () => window.__unfurl.state.blockedChannels.map((c) => c.name)), [channel]);
+    const after = await ranked();
+    ok(sameChannel.every((id) => !after.includes(id)), `nothing from ${channel} is suggested (${sameChannel.length} videos)`);
+    ok(after.length > 0, 'other channels still are');
+    // --- Settings lists both, and lets you take them back
+    await goto(page, 'settings');
+    ok(await page.locator('#blocked-channels li', { hasText: channel }).count() === 1, 'channel listed');
+    ok(await page.locator(`#blocked-videos li[data-video="${first}"]`).count() === 1, 'video listed');
+    await page.click(`[data-unhide="${first}"]`);
+    await page.click('[data-unblock-channel]');
+    eq(await U(page, () => ({ v: window.__unfurl.state.blocked.length, c: window.__unfurl.state.blockedChannels.length })), { v: 0, c: 0 });
+    ok(await page.locator('#hidden-empty').count() === 1, 'the list says nothing is hidden');
+    await goto(page, 'today');
   });
 
   await step('finishing a video opens the feedback dialog; answers are logged, learned from, and the video joins the library', async () => {
@@ -280,7 +342,8 @@ console.log('\nWorld 1: first run, no YouTube key');
   await step('"Not for me" hides a video for good (with undo)', async () => {
     await waitFeatured(page);
     const id = await featuredId(page);
-    await page.click('button:has-text("Not for me")');
+    await page.click('details.menu summary');
+    await page.click('details.menu [data-block=video]');
     await page.waitForFunction((i) => window.__unfurl.ui.featuredId !== i, id);
     ok(await U(page, (i) => window.__unfurl.state.blocked.includes(i), id), 'blocked');
     await page.click('.toast .link:has-text("Undo")');
@@ -393,7 +456,7 @@ console.log('\nWorld 1: first run, no YouTube key');
     const row = page.locator('.row-card[data-video="ABCDEFGHIJK"]');
     await row.locator('[data-action=edit]').click();
     await row.locator('.editor input').fill('Morning, hips');
-    await row.locator('.editor textarea').fill('my go-to when stiff');
+    await row.locator('.editor textarea[aria-label="Note"]').fill('my go-to when stiff');
     await row.locator('[data-action=save-edit]').click();
     eq(await U(page, () => window.__unfurl.state.library.ABCDEFGHIJK.tags), ['morning', 'hips']);
     ok(await row.locator('.badge.tag', { hasText: '#morning' }).count() === 1, 'tag shown');
@@ -767,6 +830,20 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     ok(await page.locator('#analysis .a-area').count() >= 1, 'muscles listed, each with a bar');
     ok((await page.locator('#analysis').innerText()).includes('What viewers say'), 'comments section');
     ok((await page.locator('#analysis .a-limits').innerText()).includes('can’t watch the footage'), 'honest about its limits');
+    // a pasted transcript sharpens the analysis (and is then kept with the video)
+    ok((await page.locator('#analysis-transcript-section').innerText()).includes('No transcript yet'), 'invites a transcript');
+    await page.click('#analysis-transcript-section summary:has-text("Add the transcript")');
+    await page.fill('#analysis-transcript', '0:00\nwelcome to this short routine\n0:20\nfirst a low lunge, you will feel a deep stretch in your hip flexors\n1:10\nnow pigeon pose to release your glutes and piriformis\n2:00\nfinish with a dead bug for your lower abs');
+    await page.click('#transcript-apply');
+    await page.waitForFunction(() => document.getElementById('analysis-transcript-section').innerText.includes('spoken words'));
+    ok((await page.locator('#analysis-transcript-section').innerText()).includes('Talks most about'), 'says what the teacher talks about');
+    ok(await page.locator('#analysis-transcript-section li', { hasText: 'Low lunge' }).count() === 1, 'and when each exercise comes up');
+    // text with no words in it must not wipe what is there
+    await page.click('#analysis-transcript-section summary:has-text("Replace the transcript")');
+    await page.fill('#analysis-transcript', '[Music]');
+    await page.click('#transcript-apply');
+    await page.waitForFunction(() => document.getElementById('transcript-status').textContent.includes('couldn’t read any text'));
+    ok((await page.locator('#analysis-transcript-section').innerText()).includes('spoken words'), 'the earlier transcript is still there');
     eq(await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length })), before, 'nothing kept yet');
     ok(await page.locator('#analysis-add').isEnabled(), 'Add is offered');
     await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => { t.style.display = 'none'; }));
@@ -784,11 +861,32 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     eq(await libCount(page), libBefore + 1);
     const v = await U(page, (i) => { const x = window.__unfurl.state.videos[i]; return { src: x.source, comments: x.comments?.length, ev: x.evidence?.n, areas: Object.keys(x.profile.areas).length }; }, id);
     ok(v.src === 'manual' && v.comments > 0 && v.ev > 0 && v.areas > 0, JSON.stringify(v));
+    ok(await U(page, (i) => window.__unfurl.state.videos[i].transcript?.includes('low lunge') && window.__unfurl.state.videos[i].profile.transcript.words > 20, id), 'the transcript was kept with the video');
     ok(await page.locator('#analysis-add').isDisabled(), 'the button now says it is done');
     ok((await page.locator('#analysis-add').innerText()).includes('In your library'));
     ok(await page.locator('#lib-list').innerText().then((t) => t.length > 0));
     await page.click('#analysis-discard');
     eq(await page.locator('#analysis').count(), 0, 'closing removes the report');
+  });
+
+  await step('Library: a transcript can be added to (or removed from) any video in your library, and sharpens its analysis', async () => {
+    const id = page.analyzeId;
+    const row = page.locator(`.row-card[data-video="${id}"]`);
+    // find it in My library
+    await page.click('#tab-mine');
+    await page.waitForSelector(`.row-card[data-video="${id}"]`);
+    await row.locator('[data-action=edit]').click();
+    ok((await row.locator('.transcript-box summary').innerText()).includes('words read'), 'shows that a transcript is already there');
+    await row.locator('.transcript-box summary').click();
+    await row.locator('[data-field=transcript]').fill('0:00\nlet us start with a long calf stretch against the wall, you will feel it in your calves and achilles\n1:00\nnow ankle circles for stability');
+    await row.locator('[data-action=save-edit]').click();
+    await page.waitForFunction((i) => { const t = window.__unfurl.state.videos[i].profile.transcript; return t && t.words < 40; }, id);
+    ok(await U(page, (i) => (window.__unfurl.state.videos[i].profile.areas.achilles ?? 0) > 0.2, id), 'the new transcript changed the analysis');
+    await page.waitForSelector(`.row-card[data-video="${id}"]`);
+    await row.locator('[data-action=edit]').click();
+    await row.locator('.transcript-box summary').click();
+    await row.locator('[data-action=remove-transcript]').click();
+    await page.waitForFunction((i) => !window.__unfurl.state.videos[i].transcript, id);
   });
 
   await step('a playlist or a nonsense link in that box is explained, not analysed', async () => {

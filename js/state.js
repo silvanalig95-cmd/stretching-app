@@ -11,7 +11,7 @@
 import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
 import { mergeVideo } from './youtube.js';
-import { localDate } from './model.js';
+import { localDate, channelKey, channelBlocker } from './model.js';
 
 export const SCHEMA = 2;
 export const MAX_VIDEOS = 2000;
@@ -24,6 +24,7 @@ export const DEFAULT_PREFS = {
   autoLibrary: false,  // true: everything a search finds is added to your library automatically
   focus: [],           // your standing tight / weak spots: [{id, mode}]
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
+  showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
 };
 
 export function emptyState() {
@@ -35,6 +36,7 @@ export function emptyState() {
     library: {},     // id -> {addedAt, tags[], note, snapshot:{title, channel, durationSec}}  (starts EMPTY: you build it)
     history: [],     // every routine you've done, with your "did it help?" answers
     blocked: [],     // video ids you never want to see again
+    blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     prefs: { ...DEFAULT_PREFS, trusted: [...DEFAULT_TRUSTED], focus: [] },
@@ -49,7 +51,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -135,6 +137,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (isObj(p.library)) s.library = p.library;
     if (Array.isArray(p.history)) s.history = p.history.filter((h) => isObj(h) && typeof h.videoId === 'string');
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
+    if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.following)) s.following = p.following;
     if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
@@ -342,6 +345,21 @@ export function logSession(state, entry) {
 
 export function blockVideo(state, id) { if (!state.blocked.includes(id)) state.blocked.push(id); }
 export function unblockVideo(state, id) { state.blocked = state.blocked.filter((x) => x !== id); }
+
+/** Never suggest anything from this video's channel again. Returns the entry, or null if the channel is unknown. */
+export function blockChannel(state, video) {
+  const key = channelKey(video);
+  if (!key) return null;
+  let entry = state.blockedChannels.find((c) => c.key === key || (video.channelId && c.channelId === video.channelId));
+  if (!entry) { entry = { key, name: video.channel || key, ...(video.channelId ? { channelId: video.channelId } : {}) }; state.blockedChannels.push(entry); }
+  return entry;
+}
+export function unblockChannel(state, key) { state.blockedChannels = state.blockedChannels.filter((c) => c.key !== key); }
+/** Why a video is hidden from suggestions: 'video', 'channel', or null. */
+export function hiddenReason(state, video) {
+  if (state.blocked.includes(video.id)) return 'video';
+  return channelBlocker(state.blockedChannels)(video) ? 'channel' : null;
+}
 export function deleteSession(state, sessionId) { state.history = state.history.filter((h) => h.id !== sessionId); }
 
 /** What the embedded player tells us once it has actually loaded the video. */
@@ -376,6 +394,7 @@ export function mergeImport(state, incoming) {
   for (const h of inc.history) if (!have.has(h.id)) state.history.push(h);
   state.history.sort((a, b) => (a.at < b.at ? -1 : 1));
   state.blocked = [...new Set([...state.blocked, ...inc.blocked])];
+  for (const c of inc.blockedChannels ?? []) if (!state.blockedChannels.some((x) => x.key === c.key)) state.blockedChannels.push(c);
   for (const f of inc.following) followChannel(state, f);
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;

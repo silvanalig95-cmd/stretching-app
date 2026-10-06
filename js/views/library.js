@@ -4,9 +4,11 @@
 
 import { h, fill, thumb, fmtViews } from '../dom.js';
 import { ctx, play, growLibrary, importInputs, refreshFollowedNow } from '../ctx.js';
-import { AREAS, areaLabel } from '../lexicon.js';
+import { AREAS, areaLabel, areaPath, parentOf } from '../lexicon.js';
 import { formatDuration, qualityScore } from '../analyze.js';
-import { toggleLibrary, blockVideo, unblockVideo, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
+import { toggleLibrary, unblockVideo, unblockChannel, hiddenReason, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
+import { attachTranscript, cleanTranscript } from '../analyze.js';
+import { blockMenu } from './blockmenu.js';
 import { buildModel, coverage } from '../model.js';
 import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
@@ -119,11 +121,13 @@ export function mountLibrary(root) {
     covSlot.hidden = !items.length;
     fill(covSlot,
       h('summary', null, `Coverage by muscle (${lf.tab === 'mine' ? 'your library' : lf.tab})`),
-      h('p', { class: 'hint' }, 'Videos that clearly work each area. Short bars are where more videos would help.'),
-      h('div', { class: 'cov' }, AREAS.filter((a) => a.id !== 'full_body').map((a) => {
+      h('p', { class: 'hint' }, 'Videos that clearly work each area. Short bars are where more videos would help. ',
+        h('button', { class: 'link', type: 'button', id: 'cov-specific', onclick: () => { ctx.state.prefs.showSpecific = !ctx.state.prefs.showSpecific; ctx.store.save(); renderCoverage(); } },
+          ctx.state.prefs.showSpecific ? 'Hide the specific muscles' : 'Show the specific muscles too')),
+      h('div', { class: 'cov' }, AREAS.filter((a) => a.id !== 'full_body' && (!parentOf(a.id) || ctx.state.prefs.showSpecific || lf.area === a.id)).map((a) => {
         const bar = h('span', { class: 'bar' }, h('i'));
         bar.firstChild.style.width = `${Math.max(3, (cov[a.id] / max) * 100)}%`;
-        return h('button', { type: 'button', class: `cov-row${lf.area === a.id ? ' on' : ''}${cov[a.id] < 3 ? ' thin' : ''}`, 'aria-pressed': lf.area === a.id,
+        return h('button', { type: 'button', class: `cov-row${parentOf(a.id) ? ' sub' : ''}${lf.area === a.id ? ' on' : ''}${cov[a.id] < 3 ? ' thin' : ''}`, 'aria-pressed': lf.area === a.id,
           onclick: () => { lf.area = lf.area === a.id ? '' : a.id; document.getElementById('lib-area').value = lf.area; renderCoverage(); renderList(); } },
         h('span', { class: 'c-label' }, a.label), bar, h('span', { class: 'c-n' }, cov[a.id]));
       })));
@@ -143,7 +147,7 @@ export function mountLibrary(root) {
     } });
   const controls = h('div', { class: 'controls' },
     h('label', { class: 'field grow' }, h('span', null, 'Search'), search, suggestList),
-    sel('lib-area', 'Muscle', [['', 'Any'], ...AREAS.map((a) => [a.id, a.label])], 'area'),
+    sel('lib-area', 'Muscle', [['', 'Any'], ...AREAS.map((a) => [a.id, areaPath(a.id)])], 'area'),
     sel('lib-len', 'Length', [['', 'Any'], ['short', 'Under 10'], ['mid', '10–20'], ['long', '20–30'], ['xl', '30+']], 'len'),
     sel('lib-status', 'Show', [['', 'Available'], ['new', 'Not done yet'], ['done', 'Done before'], ['blocked', 'Hidden by me'], ['broken', 'Unavailable']], 'status'),
     sel('lib-sort', 'Sort', [['auto', 'Best match'], ['quality', 'Best quality'], ['fit', 'Best for muscle'], ['helpful', 'Most helpful to me'], ['new', 'Newest added'], ['short', 'Shortest'], ['long', 'Longest']], 'sort'));
@@ -225,7 +229,7 @@ export function mountLibrary(root) {
       tags.map((t) => h('button', { type: 'button', class: `chip${lf.tag === t ? ' on' : ''}`, 'aria-pressed': lf.tag === t, onclick: () => { lf.tag = lf.tag === t ? '' : t; lf.show = 30; renderList(); } }, t))) : '');
 
     let list = buckets()[lf.tab].filter((v) => {
-      const isBlocked = blocked.includes(v.id);
+      const isBlocked = !!hiddenReason(ctx.state, v);
       if (lf.status === 'blocked') return isBlocked;
       if (lf.status === 'broken') return v.broken || v.embeddable === false;
       if (isBlocked || v.broken || v.embeddable === false) return false;
@@ -265,7 +269,7 @@ export function mountLibrary(root) {
     const done = model.doneCount.get(v.id) ?? 0;
     const lib = ctx.state.library[v.id];
     const topAreas = Object.entries(v.profile?.areas ?? {}).filter(([a, s]) => s >= 0.5 && a !== 'full_body').sort((a, b) => b[1] - a[1]).slice(0, 3).map(([a]) => a);
-    const isBlocked = ctx.state.blocked.includes(v.id);
+    const reason = hiddenReason(ctx.state, v);
     return h('article', { class: 'row-card', 'data-video': v.id },
       h('button', { class: 'thumb', type: 'button', onclick: () => play(v.id), 'aria-label': `Play ${v.title}` },
         h('img', { src: thumb(v.id), alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }),
@@ -277,6 +281,8 @@ export function mountLibrary(root) {
         h('div', { class: 'badges' },
           topAreas.map((a) => h('span', { class: 'badge' }, areaLabel(a))),
           (lib?.tags ?? []).map((t) => h('span', { class: 'badge tag' }, `#${t}`)),
+          reason === 'channel' && h('span', { class: 'badge warn', title: 'You blocked this channel' }, 'channel blocked'),
+          reason === 'video' && h('span', { class: 'badge warn', title: 'You hid this video' }, 'hidden'),
           !v.verified && h('span', { class: 'badge warn', title: 'Not yet checked against YouTube' }, 'unverified'),
           v.evidence?.n >= 5 && h('span', { class: 'badge' }, `${v.evidence.n} comments read`),
           lf.tab === 'suggestions' && lib && h('span', { class: 'badge new' }, '✓ in your library')),
@@ -286,17 +292,36 @@ export function mountLibrary(root) {
         h('button', { class: 'btn small primary', type: 'button', onclick: () => play(v.id) }, 'Play'),
         h('button', { class: 'btn small', type: 'button', 'data-action': 'toggle-library', onclick: () => { toggleLibrary(ctx.state, v.id); ctx.store.save(); rerender(); } }, lib ? 'Remove' : '＋ Library'),
         lib ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'edit', onclick: () => { editing = editing === v.id ? null : v.id; renderList(); } }, 'Tags & note') : null,
-        h('button', { class: 'btn small ghost', type: 'button', onclick: () => { (isBlocked ? unblockVideo : blockVideo)(ctx.state, v.id); ctx.store.save(); rerender(); } }, isBlocked ? 'Unhide' : 'Hide')));
+        reason === 'channel'
+          ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'unblock-channel', onclick: () => { const e = ctx.state.blockedChannels.find((c) => (c.channelId && c.channelId === v.channelId) || c.key === (v.channelId || v.channel || '').toLowerCase() || (v.channel && c.name?.toLowerCase() === v.channel.toLowerCase())); if (e) unblockChannel(ctx.state, e.key); ctx.store.save(); rerender(); } }, 'Unblock channel')
+          : reason === 'video'
+            ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'unhide', onclick: () => { unblockVideo(ctx.state, v.id); ctx.store.save(); rerender(); } }, 'Unhide')
+            : blockMenu(v, { label: 'Hide', cls: 'btn small ghost', onChange: rerender })));
   }
 
   function editor(v, lib) {
     const tags = h('input', { type: 'text', 'aria-label': 'Tags, comma separated', value: (lib.tags ?? []).join(', '), placeholder: 'tags, e.g. morning, after running' });
     const note = h('textarea', { rows: 2, maxlength: 500, 'aria-label': 'Note', placeholder: 'A note to yourself…' });
     note.value = lib.note ?? '';
+    const transcript = h('textarea', { rows: 5, 'aria-label': 'Transcript', 'data-field': 'transcript', placeholder: 'Paste the transcript (YouTube: “…more” → “Show transcript” → copy). Timestamps are fine.', spellcheck: 'false' });
+    const had = v.profile?.transcript?.words;
     return h('div', { class: 'editor' }, tags, note,
+      h('details', { class: 'transcript-box' },
+        h('summary', null, had ? `Transcript (${had.toLocaleString()} words read) · replace` : 'Add the transcript (optional)'),
+        h('p', { class: 'hint' }, 'The teacher’s own words are the best evidence of what each exercise is good for. Leave empty to keep what is saved; use “Remove transcript” to clear it.'),
+        transcript,
+        had ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'remove-transcript', onclick: () => { ctx.state.videos[v.id] = attachTranscript(ctx.state.videos[v.id], ''); ctx.store.save(); toast('Transcript removed.'); rerender(); } }, 'Remove transcript') : null),
       h('div', { class: 'actions' },
         h('button', { class: 'btn small primary', type: 'button', 'data-action': 'save-edit', onclick: () => {
-          updateLibraryItem(ctx.state, v.id, { tags: tags.value.split(','), note: note.value }); ctx.store.save(); editing = null; rerender();
+          updateLibraryItem(ctx.state, v.id, { tags: tags.value.split(','), note: note.value });
+          if (transcript.value.trim()) {
+            if (!cleanTranscript(transcript.value).lines) toast('I couldn’t read any text in that transcript, so the one you had is unchanged.', 'error');
+            else {
+              ctx.state.videos[v.id] = attachTranscript(ctx.state.videos[v.id], transcript.value);
+              toast(`Transcript saved (${ctx.state.videos[v.id].profile.transcript.words.toLocaleString()} words read).`, 'success');
+            }
+          }
+          ctx.store.save(); editing = null; rerender();
         } }, 'Save'),
         h('button', { class: 'btn small ghost', type: 'button', onclick: () => { editing = null; renderList(); } }, 'Cancel')));
   }

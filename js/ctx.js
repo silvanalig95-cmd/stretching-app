@@ -9,7 +9,7 @@ import {
 } from './youtube.js';
 import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
 import { applyDiscovery, addManualVideo, addAnalyzedVideo, importRecords, followChannel } from './state.js';
-import { attachComments, analyzeVideoText } from './analyze.js';
+import { attachComments, analyzeVideoText, attachTranscript, cleanTranscript } from './analyze.js';
 import { buildReport } from './report.js';
 import { SearchIndex } from './index.js';
 import { areaLabel } from './lexicon.js';
@@ -126,7 +126,7 @@ export function rankNow() {
   }
   ui.ranked = rankCandidates({
     videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(),
-    trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, adventure: state.prefs.adventure,
   });
   return ui.ranked;
 }
@@ -317,6 +317,16 @@ export async function analyzeLink(text, { progress = () => {} } = {}) {
   return { video, report: buildReport(video, { state: ctx.state, subscribers }), notes };
 }
 
+/** Re-do the analysis currently on screen with a pasted transcript (empty text removes it). Nothing is stored. */
+export function addTranscriptToAnalysis(raw) {
+  const a = ctx.ui.analysis;
+  if (!a) return null;
+  if (String(raw ?? '').trim() && !cleanTranscript(raw).lines) return null;   // nothing readable: leave what is there alone
+  a.video = attachTranscript(a.video, raw);
+  a.report = buildReport(a.video, { state: ctx.state, subscribers: a.video.subscribers ?? null });
+  return a;
+}
+
 /** Keep an analysed video (see analyzeLink): into the index, and into the library unless told otherwise. */
 export function commitAnalysis(video, { toLibrary = true } = {}) {
   const rec = addAnalyzedVideo(ctx.state, video, { toLibrary });
@@ -433,7 +443,7 @@ export function buildCombos() {
   // rank with a loose minimum length: the parts are SHORTER than the whole session
   const cands = rankCandidates({
     videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(),
-    trusted: state.prefs.trusted, blocked: state.blocked, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, adventure: state.prefs.adventure,
   });
   ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };
   return ui.combos;

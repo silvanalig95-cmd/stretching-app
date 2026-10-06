@@ -6,16 +6,19 @@ import { h, fill } from '../dom.js';
 import { openModal, toast } from '../modal.js';
 import { ctx, rankNow } from '../ctx.js';
 import { logSession } from '../state.js';
-import { AREAS, AREA_BY_ID, POSE_BY_ID, areaLabel } from '../lexicon.js';
+import { AREAS, AREA_BY_ID, POSE_BY_ID, areaLabel, areaPath } from '../lexicon.js';
 
 const RATINGS = [['much', '😀', 'Much better'], ['some', '🙂', 'A little'], ['none', '😐', 'Not really']];
 const INTENSITY = [['easy', 'Too easy'], ['right', 'Just right'], ['hard', 'Too hard']];
 
 /** Areas worth asking about when none were targeted: the video's strongest. */
 function fallbackAreas(video) {
-  return Object.entries(video.profile?.areas ?? {})
+  const ranked = Object.entries(video.profile?.areas ?? {})
     .filter(([a, s]) => s >= 0.5 && a !== 'full_body' && AREA_BY_ID[a])
-    .sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => ({ id, mode: 'tight' }));
+    .sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  // "Lower abdomen" and "Core" would be the same question twice: keep the specific one when the video has it.
+  const picked = ranked.filter((id) => !ranked.some((other) => other !== id && AREA_BY_ID[other]?.parent === id));
+  return picked.slice(0, 3).map((id) => ({ id, mode: 'tight' }));
 }
 
 /** @param {{onDone?: (how:'saved'|'dismissed')=>void}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo. */
@@ -56,7 +59,7 @@ export function openFeedback(videoId, { onDone = null } = {}) {
         : h('p', { class: 'hint' }, 'No muscle areas picked. Add one below so the app can learn what works for it.'),
       unused.length ? h('label', { class: 'add-area' }, 'Also rate: ',
         h('select', { onchange: (e) => { if (e.target.value) { areas.push({ id: e.target.value, mode: 'tight' }); render(); } } },
-          h('option', { value: '' }, 'add a muscle area…'), unused.map((a) => h('option', { value: a.id }, a.label)))) : null,
+          h('option', { value: '' }, 'add a muscle area…'), unused.map((a) => h('option', { value: a.id }, areaPath(a.id))))) : null,
       h('h3', null, 'How was the intensity?'),
       group('Intensity', INTENSITY, () => intensity, (v) => { intensity = v; }),
       h('h3', null, 'Show it to me again?'),

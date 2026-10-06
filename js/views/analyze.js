@@ -2,7 +2,7 @@
 // whether to keep it. Nothing is stored until you press Add.
 
 import { h, fill, thumb, fmtViews } from '../dom.js';
-import { ctx, play, analyzeLink, commitAnalysis } from '../ctx.js';
+import { ctx, play, analyzeLink, commitAnalysis, addTranscriptToAnalysis } from '../ctx.js';
 import { toast } from '../modal.js';
 import { areaLabel } from '../lexicon.js';
 import { youtubeWatchUrl } from '../query.js';
@@ -93,6 +93,8 @@ function reportCard({ video, report: r, notes }, { onChange }) {
           h('div', { class: 'quotes' }, r.viewers.quotes.map((qt) => h('blockquote', null, `“${qt.text}”`, h('footer', null, qt.areas.slice(0, 3).map(areaLabel).join(', '))))))
         : h('p', { class: 'hint' }, 'Comments weren’t read for this video.')),
 
+    transcriptSection(r, onChange),
+
     section('How it fits you', h('ul', { class: 'a-fit' }, fitLines.map((l) => h('li', null, l)))),
 
     h('p', { class: 'a-limits' }, [...notes, ...r.limits].join(' ')),
@@ -100,4 +102,31 @@ function reportCard({ video, report: r, notes }, { onChange }) {
       h('button', { class: 'btn', type: 'button', id: 'analysis-add-play', onclick: () => { if (!inLib) commitAnalysis(video); onChange(); play(video.id); } }, inLib ? 'Do it now' : 'Add and do it now'),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(video.id), target: '_blank', rel: 'noopener noreferrer' }, 'Watch on YouTube ↗'),
       h('button', { class: 'btn ghost', type: 'button', id: 'analysis-discard', onclick: () => { ctx.ui.analysis = null; onChange(); } }, 'Close')));
+}
+
+const HOW_TO_COPY = 'On YouTube, open the video, click “…more” under the player, then “Show transcript”. Select the text, copy it, and paste it here. (YouTube doesn’t let other programs fetch transcripts of other people’s videos, so this is the way.)';
+
+function transcriptSection(r, onChange) {
+  const box = h('textarea', { id: 'analysis-transcript', rows: 6, 'aria-label': 'Transcript', placeholder: 'Paste the transcript here (timestamps are fine)…', spellcheck: 'false' });
+  const status = h('p', { class: 'hint', id: 'transcript-status', 'aria-live': 'polite' });
+  const apply = () => {
+    const a = addTranscriptToAnalysis(box.value);
+    if (!a) { status.textContent = 'I couldn’t read any text there, so nothing was changed. Paste the transcript as copied from YouTube.'; return; }
+    onChange();
+  };
+  const t = r.transcript;
+  return h('div', { class: 'a-section', id: 'analysis-transcript-section' },
+    h('h4', null, 'What the teacher says'),
+    t ? h('div', null,
+      h('p', null, `Read ${t.words.toLocaleString()} spoken words.`),
+      t.heard.length ? h('p', null, 'Talks most about: ', t.heard.map((x) => x.label).join(', '), '.') : h('p', { class: 'hint' }, 'The teacher doesn’t name muscles much; the exercises are what counts.'),
+      t.timeline.length ? h('details', null, h('summary', null, `Exercises by time (${t.timeline.length})`),
+        h('ol', { class: 'a-chapters' }, t.timeline.map((x) => h('li', null, h('span', { class: 'at' }, x.at), ' ', x.label)))) : null)
+      : h('p', { class: 'hint' }, 'No transcript yet. A transcript is the richest source there is for what each exercise is good for.'),
+    h('details', { class: 'transcript-box' },
+      h('summary', null, t ? 'Replace the transcript' : 'Add the transcript (optional)'),
+      h('p', { class: 'hint' }, HOW_TO_COPY), box,
+      h('div', { class: 'actions' }, h('button', { class: 'btn small', type: 'button', id: 'transcript-apply', onclick: apply }, 'Update the analysis'),
+        t ? h('button', { class: 'btn small ghost', type: 'button', onclick: () => { box.value = ''; apply(); } }, 'Remove it') : null),
+      status));
 }
