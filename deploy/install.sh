@@ -6,7 +6,7 @@
 #
 # Options (all optional if this folder is a git clone with an 'origin'):
 #   --repo URL      where updates come from            (default: this clone's origin)
-#   --branch NAME   the branch the server follows       (default: main)
+#   --branch NAME   the branch the server follows       (default: the branch this clone is on)
 #   --host NAME     name(s) people type in the browser  (comma-separated; goes into UNFURL_ALLOWED_HOSTS)
 #   --port N        (default 8765)
 #   --home DIR      app + releases                       (default /opt/unfurl)
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="" BRANCH=main HOSTS="" PORT=8765 HOME_DIR=/opt/unfurl DATA=/var/lib/unfurl SVC_USER=unfurl SERVICE=1
+REPO="" BRANCH="" HOSTS="" PORT=8765 HOME_DIR=/opt/unfurl DATA=/var/lib/unfurl SVC_USER=unfurl SERVICE=1
 ENVFILE=/etc/unfurl/unfurl.env
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +30,9 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$REPO" ]; then REPO="$(git -C "$HERE/.." remote get-url origin 2>/dev/null || true)"; fi
+# The branch to follow: the one this clone is on (the repository may have no "main"), unless told otherwise.
+if [ -z "$BRANCH" ]; then BRANCH="$(git -C "$HERE/.." rev-parse --abbrev-ref HEAD 2>/dev/null || true)"; fi
+[ -n "$BRANCH" ] && [ "$BRANCH" != HEAD ] || BRANCH=main
 [ -n "$REPO" ] || { echo "Tell me where the app lives: --repo <git url>" >&2; exit 2; }
 command -v git >/dev/null || { echo "git is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "python3 is required" >&2; exit 2; }

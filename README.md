@@ -12,7 +12,7 @@ You need Python 3 (already on macOS and most Linux; [python.org](https://www.pyt
 python3 serve.py
 ```
 
-It opens <http://localhost:8765>. (macOS: double-click `start.command`. Windows: double-click `start.bat`.)
+It opens <http://localhost:8765>. (macOS: double-click `start.command`. Windows: double-click `start.bat`; to use it from your other devices at home too, see [deploy/WINDOWS.md](deploy/WINDOWS.md).)
 
 It works immediately from a small built-in starter shelf. To let it **search the whole of YouTube on its own**, add a free YouTube key (below).
 
@@ -114,7 +114,7 @@ sudo deploy/install.sh --branch main --host unfurl.internal      # Linux + syste
 docker compose -f deploy/docker-compose.yml up -d --build        # or Docker
 ```
 
-Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**.
+Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**. On Windows: **[deploy/WINDOWS.md](deploy/WINDOWS.md)**.
 
 ## Honest limitations
 

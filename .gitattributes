@@ -1,0 +1,9 @@
+# Line endings that matter: Windows batch files need CRLF, and scripts that run inside Linux (Docker, servers)
+# must stay LF even when a Windows checkout would otherwise convert them (a stray CR breaks "#!/usr/bin/env bash").
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.sh    text eol=lf
+*.py    text eol=lf
+*.service text eol=lf
+Dockerfile text eol=lf
+*.example text eol=lf

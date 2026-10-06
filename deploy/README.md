@@ -1,5 +1,7 @@
 # Hosting Unfurl on a server (with automatic updates)
 
+> **On Windows?** See [WINDOWS.md](WINDOWS.md) for step-by-step instructions, from "just this PC" to "always on and updating itself".
+
 The idea: the server **follows a git branch**. Whenever a new version is pushed to that branch, the server notices within a minute, tests it, switches to it, and checks it came up healthy. If anything is wrong it keeps (or goes back to) the version that was working. People with the page open see *“A new version of Unfurl is ready — Reload”*.
 
 ```
@@ -20,14 +22,14 @@ Your server only makes **outgoing** connections (to GitHub). Nothing from the in
 - A Linux machine you control (a small VM or Raspberry Pi is plenty) with `python3` and `git`. **systemd** for the simple setup, or **Docker** if you prefer containers.
 - Outgoing access to `github.com` (HTTPS or SSH).
 - The repository: `silvanalig95-cmd/stretching-app` (or wherever you keep it).
-- **Decide the branch the server follows** (`UNFURL_BRANCH`). Whoever can push to that branch can change the code that runs on your server, so make it a branch only you (and Claude, on your request) push to, and turn on GitHub *branch protection* for it if you like.
+- **Decide the branch the server follows** (`UNFURL_BRANCH`). Right now the repository has a single branch, `claude/sharp-cray-hko5xu` (also its default, so a plain `git clone` is on it); there is no `main` yet. Whoever can push to that branch can change the code that runs on your server, so make it a branch only you (and Claude, on your request) push to, and turn on GitHub *branch protection* for it if you like.
 
 ## Option A: Linux with systemd (recommended)
 
 ```bash
 git clone https://github.com/silvanalig95-cmd/stretching-app.git
 cd stretching-app
-sudo deploy/install.sh --branch main --host unfurl.internal
+sudo deploy/install.sh --host unfurl.internal            # follows the branch you cloned; add --branch NAME to pick another
 ```
 
 That creates a `unfurl` service account, downloads the first version into `/opt/unfurl`, writes the settings file `/etc/unfurl/unfurl.env` (with a **generated login**, printed once), and starts the service so it also starts on boot. Data goes to `/var/lib/unfurl`.
