@@ -209,6 +209,24 @@ def build_config(args, env) -> Config:
     return c
 
 
+LOCAL_SUFFIXES = (".local", ".lan", ".home.arpa", ".internal", ".localdomain")
+
+
+def is_local_name(hostname: str) -> bool:
+    """Names that can only point inside a private network: IP addresses, bare computer names ("mypc"), and the
+    suffixes reserved for home/office networks. Nobody on the internet can make such a name point at your machine,
+    which is what DNS-rebinding protection is about, so once a login is required they need no listing."""
+    h = hostname.strip("[]").lower()
+    if not h:
+        return False
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    return "." not in h or h.endswith(LOCAL_SUFFIXES)
+
+
 def parse_nets(text: str):
     nets = []
     for part in (text or "").split(","):
@@ -425,6 +443,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def __init__(self, *args, **kwargs):
         self.user = None
+        self.bad_host = ""
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     quiet = False
@@ -537,18 +556,29 @@ class Handler(SimpleHTTPRequestHandler):
         self._challenge()
         return False
 
+    def _name_allowed(self, hostname: str) -> bool:
+        c = self.cfg
+        if hostname in {"localhost", "127.0.0.1", "[::1]"} or hostname in c.allowed_hosts:
+            return True
+        for a in c.allowed_hosts:  # "*.example.com" or ".example.com": any name ending that way
+            if (a.startswith("*.") or a.startswith(".")) and hostname.endswith(a.lstrip("*")):
+                return True
+        # With a login in front, names that can only exist on a private network are fine without being listed.
+        return bool((c.users or c.trust_proxy_user) and is_local_name(hostname))
+
     def _host_ok(self) -> bool:
         """DNS-rebinding protection: only the names we expect may be used to reach the API."""
-        names = {"localhost", "127.0.0.1", "[::1]"} | self.cfg.allowed_hosts
         host = (self.headers.get("Host") or "").lower()
         hostname = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
-        if hostname not in names:
+        self.bad_host = host
+        if not self._name_allowed(hostname):
             return False
         origin = self.headers.get("Origin")
         if origin:
             o = urlsplit(origin)
             oh = f"[{o.hostname}]" if o.hostname and ":" in o.hostname else (o.hostname or "")
-            if oh.lower() not in names:
+            if not self._name_allowed(oh.lower()):
+                self.bad_host = oh.lower()
                 return False
         return True
 
@@ -645,7 +675,9 @@ class Handler(SimpleHTTPRequestHandler):
     # ---- API
     def _api(self, method, path):
         if not self._api_allowed():
-            return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+            if not self._host_ok():   # say WHICH name was refused and which are accepted, so the page can tell the person
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden", "reason": "host", "host": self.bad_host, "allowed": sorted(self.cfg.allowed_hosts)})
+            return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden", "reason": "header"})
         c, d = self.cfg, self.data_dir
         if path == "/api/ping" and method == "GET":
             info = {
@@ -916,7 +948,11 @@ def main(argv=None, env=None):
     try:
         httpd = Server((c.host, c.port), Handler)
     except OSError as e:
-        hint = f"\nIs Unfurl already running? Try --port {c.port + 1}." if e.errno == errno.EADDRINUSE else ""
+        hint = ""
+        if c.port < 1024:
+            hint = "\nPort 80 and other low ports are often used by another program (IIS, Skype, VPN or web-server software) or need extra permission. Use 8765 instead (UNFURL_PORT=8765 or --port 8765)."
+        elif e.errno == errno.EADDRINUSE:
+            hint = f"\nIs Unfurl already running? Try --port {c.port + 1}."
         sys.exit(f"Couldn't listen on {c.host}:{c.port}: {e}{hint}")
 
     shown = "localhost" if c.loopback_only else (sorted(c.allowed_hosts)[0] if c.allowed_hosts else c.host)

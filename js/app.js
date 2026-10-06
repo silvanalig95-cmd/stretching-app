@@ -70,7 +70,13 @@ async function main() {
   show(tabFromHash());
   const where = store.mode === 'server' ? `Unfurl ${store.server.version}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
   document.getElementById('storage-note').textContent = where;
-  if (store.readOnly) {
+  if (store.hostProblem) {
+    const { host, allowed } = store.hostProblem;
+    document.getElementById('banner').replaceChildren(h('p', { class: 'banner', role: 'alert', id: 'host-banner' },
+      `You opened Unfurl as “${host || 'this address'}”, which the server doesn’t accept, so nothing you do here can be saved on the server. `,
+      allowed.length ? `Open it with one of these instead: ${allowed.join(', ')}. ` : '',
+      'Or add that name to UNFURL_ALLOWED_HOSTS in the server’s settings (network-settings.bat or unfurl.env), then restart it.'));
+  } else if (store.readOnly) {
     document.getElementById('banner').replaceChildren(h('p', { class: 'banner', role: 'alert' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Your data is read-only.'));
   } else {
     for (const note of store.notes) toast(note, 'success', 9000);   // upgrades and recoveries are said out loud, once

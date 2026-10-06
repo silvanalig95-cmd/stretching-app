@@ -207,7 +207,8 @@ console.log('\nWorld 1: first run, no YouTube key');
     await page.waitForFunction(() => !window.__unfurl.ui.busy);
     await waitFeatured(page);
     const areas = await U(page, () => window.__unfurl.state.videos[window.__unfurl.ui.featuredId].profile.areas);
-    ok(['neck', 'upper_back', 'shoulders', 'chest'].some((a) => (areas[a] ?? 0) >= 0.5), `profile ${JSON.stringify(areas)}`);
+    // (the "Desk posture" chip is neck, upper back, chest, shoulders AND hip flexors; today's seeded pick may be any good match for any of them)
+    ok(['neck', 'upper_back', 'shoulders', 'chest', 'hip_flexors'].some((a) => (areas[a] ?? 0) >= 0.5), `profile ${JSON.stringify(areas)}`);
     ok(await page.locator('.why li').count() > 0, 'explains why it was chosen');
     await shot(page, '01-today-desktop');
   });
@@ -754,8 +755,9 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
 
   await step('Look at a video first: paste a link, read the full analysis, and nothing is kept until you say so', async () => {
     await goto(page, 'library');
-    const id = await U(page, (ids) => ids.find((i) => !(i in window.__unfurl.state.videos)), VIDEOS.map((v) => v.id));
-    ok(id, 'a video the app has not seen yet');
+    // Prefer a video the app has never seen; if earlier searches have already found them all, any that isn't in the library yet will do.
+    const id = await U(page, (ids) => ids.find((i) => !(i in window.__unfurl.state.videos)) ?? ids.find((i) => !(i in window.__unfurl.state.library)), VIDEOS.map((v) => v.id));
+    ok(id, 'a video that is not in the library yet');
     page.analyzeId = id;
     const before = await U(page, () => ({ lib: Object.keys(window.__unfurl.state.library).length, vids: Object.keys(window.__unfurl.state.videos).length }));
     await page.fill('#analyze-input', `https://youtu.be/${id}`);
@@ -1023,6 +1025,23 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
     ok(used > 0, `used ${used}`);
     ok(fs.existsSync(path.join(dataDir, 'usage.json')), 'and remembered on the server across restarts');
     eq(JSON.parse(fs.readFileSync(path.join(dataDir, 'usage.json'), 'utf8')).used.me > 0, true);
+  });
+
+  await step('opening the app through a name the server refuses shows a clear banner and saves nothing', async () => {
+    const before = fs.readFileSync(path.join(dataDir, 'profile.json'), 'utf8');
+    const other = await chromium.launch({ args: ['--host-resolver-rules=MAP sneaky.example.test 127.0.0.1'] });
+    try {
+      const odd = await newPage(other, { url: `http://sneaky.example.test:${port}/` }, { httpCredentials: { username: 'me', password: 'pw-1234-pw' } });
+      await odd.waitForSelector('#host-banner', { timeout: 10000 });
+      const text = await odd.locator('#host-banner').innerText();
+      ok(text.includes('sneaky.example.test'), text);
+      ok(text.includes('UNFURL_ALLOWED_HOSTS'), 'it says what to do');
+      await odd.evaluate(() => { window.__unfurl.state.library.ZZZZZZZZZZZ = { addedAt: 1, tags: [], note: '' }; window.__unfurl.store.save(); });
+      await odd.waitForTimeout(800);
+      eq(fs.readFileSync(path.join(dataDir, 'profile.json'), 'utf8'), before, 'nothing reached the server');
+      eq(await odd.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('unfurl.'))), [], 'and nothing was quietly stored in the browser');
+      await odd.context_.close();
+    } finally { await other.close(); }
   });
 
   await step('two tabs on one account: the stale tab\'s save is merged with the other tab\'s work instead of erasing it', async () => {

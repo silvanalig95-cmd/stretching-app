@@ -82,7 +82,8 @@ test('the example network settings start a server that demands a login and answe
     assert.equal(await get('/', { Host: `MYPC:${port}` }), 401, 'a login is required from the network');
     assert.equal(await get('/api/ping', { ...auth, Host: `MYPC:${port}` }), 200, 'the PC name works (upper case, as Windows writes it)');
     assert.equal(await get('/api/ping', { ...auth, Host: `192.168.1.50:${port}` }), 200, 'so does its address');
-    assert.equal(await get('/api/ping', { ...auth, Host: `192.168.1.77:${port}` }), 403, 'any other name is refused');
+    assert.equal(await get('/api/ping', { ...auth, Host: `192.168.1.77:${port}` }), 200, 'with a login on, any home-network number is fine without listing it');
+    assert.equal(await get('/api/ping', { ...auth, Host: `evil.example:${port}` }), 403, 'but a public-looking name is refused');
   } finally { proc.kill(); }
 });
 
@@ -95,4 +96,15 @@ test('the Windows guide mentions every helper file and no file that does not exi
     assert.ok(fs.existsSync(path.join(ROOT, rel)), `${rel} exists`);
   }
   assert.ok(fs.existsSync(path.join(ROOT, 'deploy/docker-compose.yml')));
+});
+
+test('the home-network setup defaults to port 80 (no ":8765" to type), and Docker publishes both 80 and 8765', () => {
+  const settings = parseSettings('network-settings.example.bat', { COMPUTERNAME: 'MYPC' });
+  assert.equal(settings.UNFURL_PORT, '80');
+  const bat = read('start-network.bat').toString();
+  assert.match(bat, /if "%UNFURL_PORT%"=="80" set "PORTSUFFIX="/);
+  const compose = read('deploy/docker-compose.yml').toString();
+  assert.match(compose, /- "80:8765"/);
+  assert.match(compose, /- "8765:8765"/);
+  assert.match(read('deploy/unfurl.service').toString(), /AmbientCapabilities=CAP_NET_BIND_SERVICE/);
 });

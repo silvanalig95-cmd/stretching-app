@@ -89,3 +89,25 @@ test('currentBuild() sees a deployment, and a restarting server is not an error'
   const local = await new Store({ fetchFn: async () => { throw new Error('no server'); }, storage: null }).init();
   assert.equal(await local.currentBuild(), null);
 });
+
+test('when the server refuses the address the page was opened with, the page says so and does not quietly save into the browser', async () => {
+  const fetchFn = async (url) => {
+    if (url === '/api/ping') return { ok: false, status: 403, json: async () => ({ error: 'forbidden', reason: 'host', host: 'sneaky.example', allowed: ['mypc', '192.168.1.50'] }) };
+    return { ok: false, status: 403, json: async () => ({}) };
+  };
+  const storage = { m: new Map(), getItem(k) { return this.m.get(k) ?? null; }, setItem(k, v) { this.m.set(k, v); } };
+  const store = await new Store({ fetchFn, storage }).init();
+  assert.deepEqual(store.hostProblem, { host: 'sneaky.example', allowed: ['mypc', '192.168.1.50'] });
+  assert.equal(store.mode, 'local');
+  assert.equal(store.readOnly, true, 'nothing is written');
+  store.save(); await store.flush();
+  assert.equal(storage.m.size, 0, 'and nothing lands in the browser either');
+});
+
+test('an ordinary 403 (or an unreachable server) is not mistaken for a refused address', async () => {
+  const a = await new Store({ fetchFn: async () => ({ ok: false, status: 403, json: async () => ({ error: 'forbidden', reason: 'header' }) }), storage: null }).init();
+  assert.equal(a.hostProblem, null);
+  const b = await new Store({ fetchFn: async () => { throw new Error('offline'); }, storage: null }).init();
+  assert.equal(b.hostProblem, null);
+  assert.equal(b.readOnly, false);
+});

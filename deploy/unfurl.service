@@ -19,6 +19,9 @@ TimeoutStopSec=20
 
 # Containment: the app can write only to its own folders.
 NoNewPrivileges=true
+# lets the service listen on port 80 (UNFURL_PORT=80) without being root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only

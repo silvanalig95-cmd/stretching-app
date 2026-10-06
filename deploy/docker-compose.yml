@@ -14,7 +14,9 @@ services:
       UNFURL_HOST: 0.0.0.0
       UNFURL_PORT: "8765"
     ports:
-      - "8765:8765"        # use "127.0.0.1:8765:8765" if a reverse proxy on this machine fronts it
+      - "80:8765"          # http://yourpc/ : the web's default port, so no ":8765" has to be typed
+      - "8765:8765"        # http://yourpc:8765/ keeps working too. If port 80 is already used on this machine, delete the line above.
+      # use "127.0.0.1:8765:8765" instead of both if a reverse proxy on this machine fronts it
     volumes:
       - unfurl-app:/srv/unfurl     # downloaded versions (safe to delete: it re-downloads)
       - unfurl-data:/data          # YOUR DATA — back this up

@@ -348,7 +348,10 @@ export function explainMatch(video, areaIds) {
   const p = video.profile;
   if (!p) return [];
   const reasons = [];
-  for (const a of areaIds.slice(0, 4)) {
+  // Explain the areas this video actually works first: with five areas picked, a video that only fits the fifth
+  // used to get no explanation at all.
+  const byFit = [...areaIds].sort((x, y) => (p.areas?.[y] ?? 0) - (p.areas?.[x] ?? 0));
+  for (const a of byFit.slice(0, 4)) {
     const label = AREA_BY_ID[a]?.label ?? a;
     const src = p.sources ?? {};
     const bits = [];

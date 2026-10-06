@@ -11,7 +11,9 @@ rem address too (find it with:  ipconfig  ->  "IPv4 Address", something like 192
 set "UNFURL_ALLOWED_HOSTS=%COMPUTERNAME%,192.168.1.50"
 
 set "UNFURL_HOST=0.0.0.0"
-set "UNFURL_PORT=8765"
+rem 80 is the web's default port, so addresses need no ":8765" at the end. If something else on this PC already uses port 80
+rem (the server then says so), change it to 8765 and type http://yourpc:8765 instead.
+set "UNFURL_PORT=80"
 
 rem Set to 1 to fetch the newest version from GitHub each time the server starts (needs Git for Windows and a folder made with "git clone").
 set "UNFURL_AUTO_PULL=0"

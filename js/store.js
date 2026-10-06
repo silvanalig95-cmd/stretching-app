@@ -16,6 +16,7 @@ export class Store {
     this.onSaveState = () => {};   // called with (ok:boolean, message) when saving to the server starts failing or recovers
     this.saveOk = true;
     this.rev = null;               // the saved profile's revision as of our last read/write (server mode)
+    this.hostProblem = null;       // {host, allowed}: the server refused the address this page was opened with
     this.onMerged = () => {};      // called when changes made elsewhere (another tab/device) were merged in
     this.mode = 'local';
     this.server = { version: null, dataDir: null, build: '', pollSeconds: 0, ytProxy: false, ytDailyUnits: 0, user: null, multiUser: false };
@@ -33,7 +34,14 @@ export class Store {
   async init() {
     try {
       const res = await this.fetchFn('/api/ping', { headers: HEADERS });
-      const j = res.ok ? await res.json() : null;
+      let j = null;
+      if (res.ok) j = await res.json();
+      else if (res.status === 403) {
+        // The server is there but refuses the name this page was opened with. Don't pretend to be a server-less app:
+        // anything saved here would end up stranded in this browser.
+        const why = await res.json().catch(() => null);
+        if (why?.reason === 'host') this.hostProblem = { host: why.host ?? '', allowed: why.allowed ?? [] };
+      }
       if (j?.app === 'unfurl') {
         this.mode = 'server';
         this.server = { version: j.version, dataDir: j.dataDir ?? null, build: j.build ?? '', pollSeconds: j.pollSeconds ?? 0, ytProxy: !!j.ytProxy, ytDailyUnits: j.ytDailyUnits ?? 0, user: j.user ?? null, multiUser: !!j.multiUser };
@@ -59,7 +67,7 @@ export class Store {
     }
     const loaded = loadState({ profile, index, legacy });
     this.state = loaded.state;
-    this.readOnly = loaded.readOnly || unreadable;
+    this.readOnly = loaded.readOnly || unreadable || !!this.hostProblem;
     this.notes = [...this.notes, ...loaded.notes];
     if (unreadable) this.notes.push('Couldn’t read your saved data from the Unfurl server just now. To be safe nothing will be saved this session, so your real data can’t be overwritten. Reload the page (or restart serve.py) and try again.');
     if (this.recoveredFrom) this.notes.push(`Your data file was damaged, so it was restored from the backup “${this.recoveredFrom}”. The damaged file was kept.`);

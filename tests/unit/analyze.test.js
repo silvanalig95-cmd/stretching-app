@@ -120,3 +120,13 @@ test('identical copy-pasted comments are quoted once', () => {
   assert.equal(ev.quotes.filter((q) => /hip flexors/i.test(q.text)).length, 1);
   assert.ok(ev.quotes.length >= 2);
 });
+
+test('explainMatch explains the areas the video really works, even when they are not among the first four picked', () => {
+  const video = {
+    profile: { areas: { hip_flexors: 0.85 }, poses: [{ id: 'low_lunge', count: 2 }], sources: { title: { hip_flexors: 0.9 }, chapters: {} } },
+    evidence: { mentions: {}, benefits: {} },
+  };
+  const picked = ['neck', 'upper_back', 'chest', 'shoulders', 'hip_flexors'];   // the fifth is the only one it fits
+  const lines = A.explainMatch(video, picked);
+  assert.ok(lines.some((l) => /^Hip flexors/i.test(l)), `got ${JSON.stringify(lines)}`);
+});

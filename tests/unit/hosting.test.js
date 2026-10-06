@@ -421,3 +421,50 @@ test('with several users, existing single-user data is flagged at startup instea
     assert.match(s.err(), /holds data from a single-user setup/);
   } finally { s.stop(); }
 });
+
+test('behind a login, names that can only exist on a private network work without being listed; public-looking names still must be', async () => {
+  const s = await start({ env: { UNFURL_AUTH: 'me:pw-pw-pw', UNFURL_ALLOWED_HOSTS: 'unfurl.example.org,*.fritz.box', __host: 'x' } });
+  const auth = { Authorization: basic('me', 'pw-pw-pw') };
+  const status = async (host, extra = {}) => (await raw(s.port, { path: '/api/ping', headers: { Host: host, 'X-Unfurl': '1', ...auth, ...extra } })).status;
+  try {
+    for (const ok of ['192.168.1.50', '192.168.1.50:80', '10.0.0.7:8765', '[fe80::1]:8765', 'MYPC', 'mypc:8765', 'MyPc.local', 'nas.lan:8765', 'printer.home.arpa', 'unfurl.example.org', 'pc.fritz.box:80', 'localhost']) {
+      assert.equal(await status(ok), 200, `${ok} should be accepted`);
+    }
+    for (const bad of ['evil.example', 'evil.example:8765', 'unfurl.example.org.evil.example', 'notfritz.box', 'fritz.box.evil.example', '']) {
+      assert.equal(await status(bad), 403, `${JSON.stringify(bad)} should be refused`);
+    }
+    assert.equal(await status('MYPC', { Origin: 'https://evil.example' }), 403, 'a page from a public site still cannot use it, even via a good name');
+    assert.equal(await status('MYPC', { Origin: 'http://mypc' }), 200);
+  } finally { s.stop(); }
+});
+
+test('without a login the strict list still applies (private names are NOT automatically trusted on an open server)', async () => {
+  const s = await start({ env: { __host: '127.0.0.1' } });
+  try {
+    assert.equal((await raw(s.port, { path: '/api/ping', headers: { Host: `127.0.0.1:${s.port}`, 'X-Unfurl': '1' } })).status, 200);
+    assert.equal((await raw(s.port, { path: '/api/ping', headers: { Host: `mypc:${s.port}`, 'X-Unfurl': '1' } })).status, 403);
+    assert.equal((await raw(s.port, { path: '/api/ping', headers: { Host: `192.168.1.50:${s.port}`, 'X-Unfurl': '1' } })).status, 403);
+  } finally { s.stop(); }
+});
+
+test('a refused name is explained in the answer, so the page can tell the person what to do', async () => {
+  const s = await start({ env: { UNFURL_AUTH: 'me:pw-pw-pw', UNFURL_ALLOWED_HOSTS: 'unfurl.example.org' } });
+  try {
+    const auth = { Authorization: basic('me', 'pw-pw-pw'), 'X-Unfurl': '1' };
+    const r = await raw(s.port, { path: '/api/ping', headers: { Host: 'sneaky.example:80', ...auth } });
+    assert.equal(r.status, 403);
+    assert.deepEqual(r.json, { error: 'forbidden', reason: 'host', host: 'sneaky.example:80', allowed: ['unfurl.example.org'] });
+    const noHeader = await raw(s.port, { path: '/api/ping', headers: { Host: '192.168.1.5', Authorization: auth.Authorization } });
+    assert.equal(noHeader.json.reason, 'header');
+  } finally { s.stop(); }
+});
+
+test('a server can listen on port 80 and be reached without typing a port', async () => {
+  // (port 80 itself may not be allowed in a test sandbox; the Host header without a port is what matters)
+  const s = await start({ env: { UNFURL_AUTH: 'me:pw-pw-pw', UNFURL_ALLOWED_HOSTS: 'mypc' } });
+  try {
+    const r = await raw(s.port, { path: '/api/ping', headers: { Host: 'mypc', 'X-Unfurl': '1', Authorization: basic('me', 'pw-pw-pw') } });
+    assert.equal(r.status, 200);
+    assert.equal((await raw(s.port, { path: '/', headers: { Host: '192.168.1.50', Authorization: basic('me', 'pw-pw-pw') } })).status, 200);
+  } finally { s.stop(); }
+});

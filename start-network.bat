@@ -46,9 +46,11 @@ if "%UNFURL_AUTO_PULL%"=="1" if exist ".git" (
 )
 
 echo.
+set "PORTSUFFIX=:%UNFURL_PORT%"
+if "%UNFURL_PORT%"=="80" set "PORTSUFFIX="
 echo Unfurl will be reachable at:
-echo     http://%COMPUTERNAME%:%UNFURL_PORT%/
-echo   or, using this PC's address ^(look for "IPv4"^):
+echo     http://%COMPUTERNAME%%PORTSUFFIX%/
+echo   or, using this PC's address ^(look for "IPv4"^), for example http://192.168.1.50%PORTSUFFIX%/
 ipconfig | findstr /c:"IPv4"
 echo   Log in with the name and password from network-settings.bat.
 echo.
