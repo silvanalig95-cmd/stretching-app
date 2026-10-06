@@ -1,8 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Olympus: the gods' mountain, its summit in front of the sun, wrapped in layers of cloud. -->
   <symbol id="mark" viewBox="0 0 32 32">
     <rect width="32" height="32" rx="8" fill="#3f7a5a"/>
-    <path d="M16 25c-5.5 0-9-3.4-9-8 0-3.6 2.7-6 6-6 2.6 0 4.6 1.6 4.6 3.9 0 1.9-1.4 3.2-3.1 3.2-1.4 0-2.5-.9-2.5-2.2" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>
-    <circle cx="22.5" cy="9.5" r="2.3" fill="#f2c879"/>
+    <circle cx="19.2" cy="11.4" r="6.7" fill="#f2c879"/>
+    <path d="M2.4 27 L10.2 15.6 L13 18.6 L15 14 L16.7 15.2 L19.2 6 L22.7 12.5 L24.7 11.1 L29.6 27Z" fill="#fff"/>
+    <path d="M19.2 6 L22.7 12.5 L24.7 11.1 L29.6 27 L20.5 27 L19.8 18.6Z" fill="#c7dccf"/>
+    <path d="M2.2 20.3 C5.4 18.4 8.2 20.7 12 19.7 C16 18.7 18.5 20.5 22 19.5 C25.4 18.5 27.6 19.4 29.8 18.8" fill="none" stroke="#3f7a5a" stroke-width="1.7" stroke-linecap="round"/>
+    <path d="M2.2 25 C5.4 23.3 8.2 25.4 12 24.4 C16 23.4 18.5 25.2 22 24.2 C25.4 23.2 27.6 24.1 29.8 23.5" fill="none" stroke="#3f7a5a" stroke-width="1.7" stroke-linecap="round"/>
   </symbol>
   <use href="#mark"/>
 </svg>

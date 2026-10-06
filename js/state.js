@@ -28,6 +28,7 @@ export const DEFAULT_PREFS = {
   weeklyGoal: 3,       // routines per week you aim for in the training log (0 = no goal)
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
   showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
+  bestQuality: true,   // ask YouTube for the highest picture quality when a video plays (it may not obey; see js/player.js)
 };
 
 export function emptyState() {

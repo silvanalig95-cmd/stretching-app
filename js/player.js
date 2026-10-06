@@ -20,6 +20,20 @@ export function loadYouTubeApi(timeoutMs = 10000) {
   return apiPromise;
 }
 
+// Picture quality. YouTube chooses it itself (from the size of the player, the connection and the viewer's own choice in the
+// player's gear menu), and its embedded player no longer promises to obey "play this in 1080p". So the app only asks politely,
+// once the video is playing, and then reads back what it really got so the page can say so honestly.
+const QUALITY_ORDER = ['highres', 'hd2880', 'hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium', 'small', 'tiny'];
+const QUALITY_LABEL = { highres: '4320p', hd2880: '2880p', hd2160: '2160p (4K)', hd1440: '1440p', hd1080: '1080p', hd720: '720p', large: '480p', medium: '360p', small: '240p', tiny: '144p' };
+const rank = (q) => { const i = QUALITY_ORDER.indexOf(q); return i < 0 ? Infinity : i; };
+
+/** The best of the quality levels YouTube lists for this video ('auto' and unknown names do not count), or null. */
+export const bestQuality = (levels) => (Array.isArray(levels) ? levels : []).filter((q) => rank(q) !== Infinity).sort((a, b) => rank(a) - rank(b))[0] ?? null;
+/** "1080p" for a level name, or '' when it is not a real level (auto, unknown). */
+export const qualityLabel = (q) => QUALITY_LABEL[q] ?? '';
+/** True when `current` is a lower picture than `best` (both level names). */
+export const belowBest = (current, best) => rank(current) !== Infinity && rank(best) !== Infinity && rank(current) > rank(best);
+
 export const PLAYER_ERRORS = {
   2: 'YouTube says this video link is invalid.',
   5: 'The video player hit an error.',
@@ -31,10 +45,11 @@ export const PLAYER_ERRORS = {
 
 /**
  * Mount a player into `container`. Handlers: onInfo({duration,title,author}), onEnded, onPlaying, onError(code, message), onUnavailable().
- * Returns the player's remote control: destroy(), time(), duration(), playing(), seekTo(sec), play(), pause(), rate(), rates(), setRate(r).
+ * Options: bestQuality (default true) asks YouTube for the highest picture it has once the video plays.
+ * Returns the player's remote control: destroy(), time(), duration(), playing(), seekTo(sec), play(), pause(), rate(), rates(), setRate(r), quality().
  */
-export function mountPlayer(container, videoId, handlers = {}) {
-  let dead = false, player = null, gotDuration = false;
+export function mountPlayer(container, videoId, handlers = {}, { bestQuality: wantBest = true } = {}) {
+  let dead = false, player = null, gotDuration = false, asked = false;
 
   const info = () => {
     if (dead || !player) return;
@@ -43,6 +58,19 @@ export function mountPlayer(container, videoId, handlers = {}) {
       const data = player.getVideoData?.() ?? {};
       if (duration > 0 && !gotDuration) { gotDuration = true; handlers.onInfo?.({ duration, title: data.title, author: data.author }); }
     } catch { /* player not ready yet */ }
+  };
+
+  // Ask for the best picture, once the video has started (before that YouTube lists no levels). Both calls are the ones
+  // the YouTube site's own player understands; the embedded one may ignore them, and nothing here relies on it obeying.
+  const askForBest = () => {
+    if (asked || dead || !player || !wantBest) return;
+    try {
+      const best = bestQuality(player.getAvailableQualityLevels?.());
+      if (!best) return;
+      asked = true;
+      player.setPlaybackQualityRange?.(best, best);
+      player.setPlaybackQuality?.(best);
+    } catch { /* the player did not take it */ }
   };
 
   loadYouTubeApi().then((YT) => {
@@ -57,7 +85,7 @@ export function mountPlayer(container, videoId, handlers = {}) {
         onStateChange: (e) => {
           info();
           if (e.data === YT.PlayerState.ENDED) handlers.onEnded?.();
-          if (e.data === YT.PlayerState.PLAYING) handlers.onPlaying?.();
+          if (e.data === YT.PlayerState.PLAYING) { askForBest(); handlers.onPlaying?.(); }
         },
         onError: (e) => handlers.onError?.(e.data, PLAYER_ERRORS[e.data] ?? `The player reported error ${e.data}.`),
       },
@@ -78,5 +106,10 @@ export function mountPlayer(container, videoId, handlers = {}) {
     rate: () => Number(call('getPlaybackRate', 1)) || 1,
     rates: () => call('getAvailablePlaybackRates', []) ?? [],
     setRate(r) { try { player?.setPlaybackRate?.(r); } catch { /* not ready */ } },
+    /** What YouTube is really showing: {current, best} as level names ('hd720' ...), or nulls while it does not know. */
+    quality() {
+      const current = call('getPlaybackQuality', null);
+      return { current: rank(current) === Infinity ? null : current, best: bestQuality(call('getAvailableQualityLevels', [])) };
+    },
   };
 }

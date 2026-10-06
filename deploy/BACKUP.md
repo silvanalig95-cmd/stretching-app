@@ -1,4 +1,4 @@
-# Backing up Atlas, and getting it back if the server dies
+# Backing up Olympus, and getting it back if the server dies
 
 ## The short answer: what to include
 
@@ -11,11 +11,11 @@ Only **two things** are worth keeping. Everything else is downloaded or rebuilt 
 
 Not needed: the app folder itself (re-download it), the `unfurl-app` volume (it re-downloads), Docker's images.
 
-Atlas already keeps daily backups **inside** the data folder (Settings → Your data). Those protect you from mistakes, not from losing the machine, which is what the rest of this page is for.
+Olympus already keeps daily backups **inside** the data folder (Settings → Your data). Those protect you from mistakes, not from losing the machine, which is what the rest of this page is for.
 
 ## Why you can't simply point Proton Drive at the data
 
-With Docker Desktop the data volume lives inside Docker's own hidden virtual disk, so Windows (and Proton Drive) can't see it as a folder. And even where a data folder *is* visible, syncing files while the server is writing them can upload half-finished states or create "conflicted copy" files. So Atlas makes a **snapshot** instead: one `.zip` per day, written in one go into an ordinary folder, which Proton Drive then uploads like any other file.
+With Docker Desktop the data volume lives inside Docker's own hidden virtual disk, so Windows (and Proton Drive) can't see it as a folder. And even where a data folder *is* visible, syncing files while the server is writing them can upload half-finished states or create "conflicted copy" files. So Olympus makes a **snapshot** instead: one `.zip` per day, written in one go into an ordinary folder, which Proton Drive then uploads like any other file.
 
 ## Set it up once (Windows + Docker)
 
@@ -31,7 +31,7 @@ Options, if you want them: in `backup-docker.bat`, at the end of the line that r
 
 ### Privacy
 
-The zip contains **everyone's** libraries and YouTube keys, and `unfurl.env` contains the logins. Proton Drive is end-to-end encrypted, so that is fine there. If you ever use a cloud that is not, don't copy it there as it is: encrypt the folder, or delete the `copy … unfurl.env` lines from `backup-docker.bat`. If you share Atlas with friends, tell them their data is part of your backup.
+The zip contains **everyone's** libraries and YouTube keys, and `unfurl.env` contains the logins. Proton Drive is end-to-end encrypted, so that is fine there. If you ever use a cloud that is not, don't copy it there as it is: encrypt the folder, or delete the `copy … unfurl.env` lines from `backup-docker.bat`. If you share Olympus with friends, tell them their data is part of your backup.
 
 ## Getting it back (the server broke, or you have a new PC)
 
@@ -53,7 +53,7 @@ The zip contains **everyone's** libraries and YouTube keys, and `unfurl.env` con
 docker compose -f deploy/docker-compose.yml run --rm -T -v "C:\Users\you\Proton Drive\Unfurl backup:/backup" --entrypoint python3 unfurl /srv/unfurl/current/serve.py --restore /backup/unfurl-backup-2026-10-06.zip --data-dir /tmp/restore-test
 ```
 
-**Just one person's data**, without touching the server: in the app, *Settings → Your data → Export backup* saves a single `.json` file, and *Import backup* on any Atlas reads it back. Each friend can do this for their own library, and you can drop the file into Proton Drive too.
+**Just one person's data**, without touching the server: in the app, *Settings → Your data → Export backup* saves a single `.json` file, and *Import backup* on any Olympus reads it back. Each friend can do this for their own library, and you can drop the file into Proton Drive too.
 
 ## Without Docker
 

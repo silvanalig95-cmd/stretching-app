@@ -1,4 +1,4 @@
-# Atlas on Windows: from "this PC" to "my whole home network"
+# Olympus on Windows: from "this PC" to "my whole home network"
 
 Pick how far you want to go. Each step builds on the one before, so start at **1** and stop wherever it's enough.
 
@@ -14,7 +14,7 @@ Nothing here is exposed to the internet. Don't set up port forwarding on your ro
 
 ## What is Docker, and why use it here?
 
-Think of **Docker Desktop** as a program that runs small, sealed boxes ("containers") on your PC. The Atlas box holds a tiny Linux system with Atlas already installed inside it, started from a recipe (the `Dockerfile` and `docker-compose.yml` in `C:\Unfurl`). Docker connects a "window" on the box (port 8765, and 80) to a window on your PC, which is how your browser reaches it.
+Think of **Docker Desktop** as a program that runs small, sealed boxes ("containers") on your PC. The Olympus box holds a tiny Linux system with Olympus already installed inside it, started from a recipe (the `Dockerfile` and `docker-compose.yml` in `C:\Unfurl`). Docker connects a "window" on the box (port 8765, and 80) to a window on your PC, which is how your browser reaches it.
 
 What that gets you: the box doesn't need Python, `start.bat` or any of the other `.bat` files, because everything it needs is inside; it **restarts by itself** when Windows starts; and the app inside **checks GitHub every minute and updates itself**, with testing and rollback, which the plain `.bat` route can't do.
 
@@ -42,7 +42,7 @@ Jump to: [how updates arrive](#how-updates-reach-you-and-how-to-check) · [what 
 
 1. **Install Python.** Go to <https://www.python.org/downloads/>, press the big yellow *Download Python* button, run the installer, and **tick "Add python.exe to PATH"** on the first screen before pressing *Install Now*.
 2. **Get the app.** Pick one of these two ways:
-   * **A. ZIP file (no extra software, simplest to start).** Download <https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip>, right-click the file → *Extract All…* → extract into `C:\`. You get a folder called `stretching-app-claude-sharp-cray-hko5xu` (Windows sometimes nests it one level deeper; the right folder is the one that contains `start.bat`). Rename it to `Atlas` if you like. Updates are manual: download the ZIP again and replace the folder (your data isn't in that folder, so it's safe).
+   * **A. ZIP file (no extra software, simplest to start).** Download <https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip>, right-click the file → *Extract All…* → extract into `C:\`. You get a folder called `stretching-app-claude-sharp-cray-hko5xu` (Windows sometimes nests it one level deeper; the right folder is the one that contains `start.bat`). Rename it to `Olympus` if you like. Updates are manual: download the ZIP again and replace the folder (your data isn't in that folder, so it's safe).
    * **B. Git (needed for easy updates in step 2).** In PowerShell run `winget install --id Git.Git -e` (or install **Git for Windows** from <https://git-scm.com/download/win> with all the defaults). **Then close PowerShell and open a new window**: an already-open window doesn't know about newly installed programs, and still says *"git is not recognized"*. Then:
      ```powershell
      cd C:\
@@ -114,7 +114,7 @@ This runs the same tested auto-updating setup used for Linux servers, inside Doc
    * In Docker Desktop → *Containers*, the **unfurl** entry has a green dot. Click its **›** arrow to see the container inside: it should say *Running* and show its ports.
    * In PowerShell: `docker compose -f deploy/docker-compose.yml ps` should say `Up ... (healthy)` (the *healthy* appears after about a minute).
    * Open <http://localhost/healthz>. It shows something like `{"ok": true, "app": "unfurl", "version": "0.3.0", "build": "1114e3c9a0b2"}`. The **build** is the start of the GitHub version it is running: compare it with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu> (the first 7 characters match). If it says `"build": "docker"`, it is still on the copy built into the image and has not reached GitHub yet; look at the logs below for a line mentioning "couldn't fetch".
-   * Logs: `docker compose -f deploy/docker-compose.yml logs --tail 30`. You should see `a login is required`. After I push a change you will see a line like `update to 1a2b3c4d5e6f is live and healthy`, and pages you have open show **"A new version of Atlas is ready — Reload"**.
+   * Logs: `docker compose -f deploy/docker-compose.yml logs --tail 30`. You should see `a login is required`. After I push a change you will see a line like `update to 1a2b3c4d5e6f is live and healthy`, and pages you have open show **"A new version of Olympus is ready — Reload"**.
 7. **Bringing your data across from steps 1 or 2.** The Docker version keeps its own, separate data (inside Docker), so it **starts with an empty library**. If you had already built a library in the earlier setup and want it here:
    1. Run the old app next to Docker, on a different port. In PowerShell: `cd C:\Unfurl` then `python serve.py --port 8766`. Your browser opens <http://localhost:8766>, showing your old library (it reads `%APPDATA%\Unfurl`).
    2. There: **Settings → Your data → Export backup**. A file named `unfurl-backup-<date>.json` lands in your Downloads folder.
@@ -155,7 +155,7 @@ How the pieces connect when you use Docker (step 3):
 I change something in chat  →  it is pushed to GitHub (branch claude/sharp-cray-hko5xu)
 every minute, inside the Docker box:  fetch → test the new version → switch → check it is healthy
         └ not healthy? it goes back to the version that worked, and says so in the logs
-open pages show "A new version of Atlas is ready — Reload"
+open pages show "A new version of Olympus is ready — Reload"
 ```
 
 **Automatic** (nothing for you to do, usually live within a minute of my push): everything the app is made of: the pages, the search and analysis, the muscle lists, the server code, and, once you have done the one rebuild below, the updater itself.
@@ -173,7 +173,7 @@ The ZIP contains no `unfurl.env`, so yours is never overwritten.)
 
 **Checking that an update arrived** (any one of these):
 
-1. **The footer of the app** shows `Atlas 0.7.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
+1. **The footer of the app** shows `Olympus 0.8.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
 2. **Settings → Your data → Versions** shows the same build.
 3. <http://localhost/healthz> shows `"build": "…"` (12 characters, starting with the same 7).
 4. **The log:** `docker compose -f deploy/docker-compose.yml logs --tail 20` shows a line like `update to 1a2b3c4d5e6f is live and healthy`. A refused update says `NOT updating to …`, and one that didn't start says `putting … back`.
@@ -203,7 +203,7 @@ Without Docker (step 2), `install-autostart.bat` does the equivalent: it starts 
 
 ## Addresses without a port number
 
-Web addresses assume port **80**, so if Atlas listens there you never type `:8765`:
+Web addresses assume port **80**, so if Olympus listens there you never type `:8765`:
 
 * **Docker:** the compose file now publishes both: `80` (so `http://192.168.1.50/` works) and `8765` (old bookmarks keep working). **If you set up Docker before this change**, open `C:\Unfurl\deploy\docker-compose.yml` in Notepad and make the `ports:` section read:
   ```yaml
@@ -225,14 +225,14 @@ Web addresses assume port **80**, so if Atlas listens there you never type `:876
 
 ## Using the PC's name instead of its number
 
-Try `http://THEPCNAME/` (run `hostname` in PowerShell to see the name). Two separate things can get in the way:
+Try `http://THEPCNAME/` (run `hostname` in PowerShell to see the name; if your PC happens to be called `olympus`, that is simply `http://olympus/`). Two separate things can get in the way:
 
-1. **The other device doesn't know the PC's name.** The browser says something like *"This site can't be reached"*, *ERR_NAME_NOT_RESOLVED* or *DNS_PROBE_FINISHED_NXDOMAIN*. That's the network, not Atlas.
+1. **The other device doesn't know the PC's name.** The browser says something like *"This site can't be reached"*, *ERR_NAME_NOT_RESOLVED* or *DNS_PROBE_FINISHED_NXDOMAIN*. That's the network, not Olympus.
    * **Windows PCs** find each other by name when both are on a **Private** network with *network discovery* on (*Settings → Network & internet → Advanced network settings → Advanced sharing settings → Private networks → Network discovery*).
    * **iPhones and Macs** usually need `http://THEPCNAME.local/`.
    * **Android phones** often can't look up Windows PC names at all.
    * The reliable fix for every device: log in to your **router** and (a) give this PC a **fixed ("reserved") address** so the number never changes, and (b) if the router offers local names (a FRITZ!Box does: `THEPCNAME.fritz.box`), use those. Otherwise just bookmark the number.
-2. **The server refuses the name.** The page loads but shows a red banner: *"You opened Atlas as … which the server doesn't accept…"*. With a login set up, the server accepts, without any listing, these kinds of names: numbers (`192.168.1.50`), bare computer names (`mypc`), and names ending in `.local`, `.lan`, `.home.arpa` or `.internal`. Anything else, like `mypc.fritz.box`, goes into `UNFURL_ALLOWED_HOSTS` (for Docker in `deploy\unfurl.env`, then `docker compose -f deploy/docker-compose.yml up -d`; wildcards are fine: `*.fritz.box`). Older versions of the app only accepted names you listed; Docker picks up the newer rule on its own within a minute of me pushing it.
+2. **The server refuses the name.** The page loads but shows a red banner: *"You opened Olympus as … which the server doesn't accept…"*. With a login set up, the server accepts, without any listing, these kinds of names: numbers (`192.168.1.50`), bare computer names (`mypc`), and names ending in `.local`, `.lan`, `.home.arpa` or `.internal`. Anything else, like `mypc.fritz.box`, goes into `UNFURL_ALLOWED_HOSTS` (for Docker in `deploy\unfurl.env`, then `docker compose -f deploy/docker-compose.yml up -d`; wildcards are fine: `*.fritz.box`). Older versions of the app only accepted names you listed; Docker picks up the newer rule on its own within a minute of me pushing it.
 
 ---
 

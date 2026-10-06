@@ -84,7 +84,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode, unquote, quote
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.8.0"
 ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
@@ -103,6 +103,7 @@ mimetypes.add_type("text/javascript", ".js")
 mimetypes.add_type("text/javascript", ".mjs")
 mimetypes.add_type("text/css", ".css")
 mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("font/woff2", ".woff2")
 
 write_lock = threading.Lock()
 

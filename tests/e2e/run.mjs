@@ -70,6 +70,9 @@ window.YT = { PlayerState: { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED
     getPlaybackRate() { return this.__rate || 1; }
     setPlaybackRate(r) { this.__rate = r; }
     getAvailablePlaybackRates() { return [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]; }
+    getAvailableQualityLevels() { return this.__state === 1 || this.__levels ? (this.__levels || ['hd1080', 'hd720', 'large', 'medium', 'small', 'tiny', 'auto']) : []; }
+    getPlaybackQuality() { return this.__quality || 'hd720'; }
+    setPlaybackQuality(q) { this.__asked = (this.__asked || []).concat(q); }
     __at(t, playing = true) { this.__t = t; this.__state = playing ? 1 : 2; }
     getVideoData() { const r = window.__unfurl && window.__unfurl.state.videos[this.id]; return { title: r ? r.title : '', author: 'Stub Channel' }; }
     destroy() { this.f.remove(); }
@@ -189,6 +192,11 @@ if (want(1)) {
     await page.click('#pr-loop');
     await page.selectOption('#pr-speed', '1.25');
     eq(await U(page, () => window.__players.at(-1).__rate), 1.25, 'speed');
+    // picture quality: asked for once when playing starts, and what YouTube really shows is told plainly
+    await U(page, () => { const p = window.__players.at(-1); p.playVideo(); p.pauseVideo(); p.playVideo(); document.getElementById('practice').__poll(); });
+    eq(await U(page, () => window.__players.at(-1).__asked), ['hd1080'], 'asked YouTube for the best picture, once');
+    eq((await page.locator('#pr-quality').innerText()).trim(), '720p · up to 1080p', 'says what picture it really got');
+    ok(await page.locator('#pr-quality.short').count() === 1, 'and marks it when that is lower than the best');
     await page.click('#pr-focus');
     ok(await page.locator('.top').isHidden() && await page.locator('#filters').isHidden(), 'focus view hides everything but the video');
     ok(await page.locator('#pr-done').isVisible(), 'and keeps "I did it"');
@@ -1092,6 +1100,17 @@ if (want(2)) {
     await page.click('#find'); await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 15000 });
     ok((await libCount(page)) > lib0, `library ${lib0} -> ${await libCount(page)}`);
     await goto(page, 'settings'); await page.uncheck('#auto-library');
+  });
+
+  await step('picture quality: asked for by default, can be turned off, and the page says honestly what it can and cannot do', async () => {
+    await goto(page, 'settings');
+    ok(await page.locator('#best-quality').isChecked(), 'on by default');
+    const text = await page.locator('#video-panel').innerText();
+    ok(text.includes('YouTube decides') && text.includes('⚙'), 'it says YouTube decides and how to fix it for good');
+    await page.uncheck('#best-quality');
+    eq(await U(page, () => window.__unfurl.state.prefs.bestQuality), false);
+    await page.check('#best-quality');
+    eq(await U(page, () => window.__unfurl.state.prefs.bestQuality), true);
   });
 
   await step('rating a video teaches the app: related videos show "📈" evidence from your history', async () => {

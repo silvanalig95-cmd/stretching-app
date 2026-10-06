@@ -1,6 +1,6 @@
-# Atlas
+# Olympus
 
-> The app used to be called Unfurl. Its settings names (`UNFURL_…`), the data folder and the Docker volumes keep the old spelling so nothing that exists has to move. The name itself lives in one constant, `js/brand.js`, and a few lines of `index.html`.
+> The app used to be called Unfurl, then Atlas. Its settings names (`UNFURL_…`), the data folder and the Docker volumes keep the old spelling so nothing that exists has to move. The name itself lives in one constant, `js/brand.js`, and a few lines of `index.html`.
 
 Find yoga and stretching routines that fit **the muscles you want to work on and the time you have**, play them right in the app, and let the app **learn what actually helps your body**.
 
@@ -40,6 +40,7 @@ The key is stored only on your computer (in your data folder, below) and only ev
   - **Pick from**: everything the app knows, only your library, or just one of your **collections**.
   - **Style**: Stretching, Yoga, Flow, Yin, Gentle, Pilates, Mobility, Strength, and under “More styles” Hatha, Power yoga, Ashtanga, Yoga nidra, Chair yoga, Wall Pilates, Reformer, foam rolling, tai chi, barre, meditation … (see *What kind of routine is it?* below).
   - **Follow along** (under the player): the routine's **sections** from its chapter list (or, without one, what the teacher says, or the times viewers wrote in comments), with **Now / Next**, jump to a section, back and forward 10 s, **repeat this section**, slow down or speed up, **keep the screen on**, and a **focus view** that hides everything but the video. When you press “I did it”, the dialog tells you how much you actually played and which sections you skipped, and that is noted in your training log.
+  - **Picture quality.** When a video starts, the app asks YouTube for the highest picture quality it has and shows under the player what you really get (e.g. “720p · up to 1080p”). YouTube decides in the end (player size, connection and your own ⚙ → Quality choice, which it remembers), so the request may be ignored; Settings → Video explains it and can switch the request off.
   - **Body map** (closed by default, under the muscle chips and in Settings → My body): tap a front or back figure instead of a chip. It does exactly what the chips do, and the two always agree.
 - **Library**: yours to build, in three shelves:
   - **My library**: videos you chose. Starts empty. Add by pasting links, pressing "＋ Library" anywhere, or just doing a routine. Add tags and notes; search covers them.

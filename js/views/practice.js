@@ -8,6 +8,7 @@
 import { h, fill } from '../dom.js';
 import { WatchTracker, speedChoices, clock } from '../practice.js';
 import { sections, sectionIndexAt, timelineOf } from '../timeline.js';
+import { qualityLabel, belowBest } from '../player.js';
 
 const SOURCE_TEXT = { chapters: 'The sections come from the video’s chapter list.', transcript: 'The sections come from what the teacher says (the transcript you added).', comments: 'The video has no chapter list, so these times come from viewers’ comments. They are approximate.' };
 
@@ -22,6 +23,7 @@ export function practicePanel(video, { getVideo, remote, onFinish }) {
 
   const nowEl = h('p', { class: 'pr-now', id: 'pr-now', 'aria-live': 'polite' });
   const clockEl = h('span', { class: 'pr-clock', id: 'pr-clock' }, '0:00');
+  const qualityEl = h('span', { class: 'pr-quality', id: 'pr-quality', hidden: true });
   const listEl = h('ol', { class: 'pr-list', id: 'pr-list' });
   const hint = h('p', { class: 'hint', id: 'pr-hint' });
   const btn = (label, id, onclick, extra = {}) => h('button', { class: 'btn small', type: 'button', id, onclick, ...extra }, label);
@@ -54,19 +56,21 @@ export function practicePanel(video, { getVideo, remote, onFinish }) {
     : h('button', { class: 'btn small', type: 'button', id: 'pr-awake', disabled: true, title: 'Your browser only allows this on https:// pages or on this computer (localhost).' }, 'Keep screen on');
 
   const controls = h('div', { class: 'pr-controls' },
-    btn('⏮ Section', 'pr-prev', () => jump(-1), { title: 'Back to the start of this section, or the one before' }),
-    btn('−10 s', 'pr-back10', () => go(Math.max(0, remote.time() - 10))),
-    btn('⏯ Play / pause', 'pr-toggle', () => (remote.playing() ? remote.pause() : remote.play())),
-    btn('+10 s', 'pr-fwd10', () => go(remote.time() + 10)),
-    btn('Section ⏭', 'pr-next', () => jump(1), { title: 'Skip to the next section' }),
-    h('label', { class: 'inline-field pr-speed' }, h('span', null, 'Speed'), speeds),
-    toggle('Repeat this section', 'pr-loop', () => loop, (v) => { loop = v; loopIdx = null; }),
-    awakeBtn,
-    toggle('Focus view', 'pr-focus', () => focus, setFocus),
-    h('button', { class: 'btn small primary', type: 'button', id: 'pr-done', onclick: () => onFinish() }, 'I did it ✓'));
+    h('div', { class: 'pr-group pr-transport', role: 'group', 'aria-label': 'Move around the video' },
+      btn('⏮ Section', 'pr-prev', () => jump(-1), { title: 'Back to the start of this section, or the one before' }),
+      btn('−10 s', 'pr-back10', () => go(Math.max(0, remote.time() - 10))),
+      btn('⏯ Play / pause', 'pr-toggle', () => (remote.playing() ? remote.pause() : remote.play())),
+      btn('+10 s', 'pr-fwd10', () => go(remote.time() + 10)),
+      btn('Section ⏭', 'pr-next', () => jump(1), { title: 'Skip to the next section' })),
+    h('div', { class: 'pr-group pr-options', role: 'group', 'aria-label': 'Options' },
+      h('label', { class: 'inline-field pr-speed' }, h('span', null, 'Speed'), speeds),
+      toggle('Repeat this section', 'pr-loop', () => loop, (v) => { loop = v; loopIdx = null; }),
+      awakeBtn,
+      toggle('Focus view', 'pr-focus', () => focus, setFocus)));
+  const doneBtn = h('button', { class: 'btn small primary', type: 'button', id: 'pr-done', onclick: () => onFinish() }, 'I did it ✓');
 
   const el = h('section', { class: 'practice', id: 'practice', 'aria-label': 'Follow along' },
-    h('div', { class: 'pr-top' }, nowEl, clockEl), controls, hint,
+    h('div', { class: 'pr-top' }, nowEl, h('span', { class: 'pr-right' }, qualityEl, clockEl, doneBtn)), controls, hint,
     h('details', { class: 'pr-sections', id: 'pr-sections', open: true }, h('summary', null, 'Sections'), listEl));
 
   /** (Re)build the section list when the video's sections or length change. */
@@ -84,12 +88,27 @@ export function practicePanel(video, { getVideo, remote, onFinish }) {
     el.querySelector('#pr-sections').hidden = !secs.length;
   }
 
+  /** What picture YouTube is really showing, so a quality that was asked for but not given is not a secret. */
+  function showQuality() {
+    const q = remote.quality?.() ?? {};
+    const label = qualityLabel(q.current);
+    qualityEl.hidden = !label;
+    if (!label) return;
+    const short = belowBest(q.current, q.best);
+    qualityEl.textContent = short ? `${label} · up to ${qualityLabel(q.best)}` : label;
+    qualityEl.classList.toggle('short', short);
+    qualityEl.title = short
+      ? 'YouTube is showing a lower picture than this video has. Open the ⚙ in the player → Quality to pick a higher one (YouTube remembers it), or use Focus view for a bigger player.'
+      : 'The picture quality YouTube is showing.';
+  }
+
   function poll() {
     if (!remote.ready) return;
     refresh();
     const t = remote.time(), playing = remote.playing();
     tracker.tick(t, playing);
     clockEl.textContent = `${clock(t)}${remote.duration() ? ` / ${clock(remote.duration())}` : ''}`;
+    showQuality();
     if (!speeds.options.length) {
       const rates = speedChoices(remote.rates());
       fill(speeds, rates.map((r) => h('option', { value: r, selected: r === 1 }, r === 1 ? 'Normal' : `${r}×`)));

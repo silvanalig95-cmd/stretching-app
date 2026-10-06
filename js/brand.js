@@ -2,4 +2,4 @@
 // Technical names (the UNFURL_* settings, the data folder, Docker volumes, the X-Unfurl header, the unfurl.* keys the
 // browser saves under) deliberately keep their old spelling so nothing that already exists has to be moved.
 
-export const APP_NAME = 'Atlas';
+export const APP_NAME = 'Olympus';

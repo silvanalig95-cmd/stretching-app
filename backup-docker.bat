@@ -1,5 +1,5 @@
 @echo off
-rem Saves a dated .zip of ALL your Atlas data (every login's library, history, ratings and key) into an ordinary folder,
+rem Saves a dated .zip of ALL your Olympus data (every login's library, history, ratings and key) into an ordinary folder,
 rem plus a copy of your settings file, so Proton Drive (or any other backup tool) can take it from there.
 rem   backup-docker.bat          double-click: asks ONCE which folder to use, then makes a backup
 rem   backup-docker.bat auto     the scheduled daily run: never asks, never waits for a key (result in deploy\backup-last.txt)
@@ -56,12 +56,12 @@ if not exist "!DEST!\" (
 )
 >"%CFG%" echo(!DEST!
 
-echo Saving your Atlas data to "!DEST!" ...
+echo Saving your Olympus data to "!DEST!" ...
 docker compose -f deploy\docker-compose.yml run --rm -T --no-deps -v "!DEST!:/backup" --entrypoint python3 unfurl /srv/unfurl/current/serve.py --backup /backup
 if errorlevel 1 (
   echo.
   echo The backup did not work. If the message above says it cannot open serve.py or does not know --backup,
-  echo this copy of Atlas has not fetched the newest version yet: run rebuild-docker.bat once, then try again.
+  echo this copy of Olympus has not fetched the newest version yet: run rebuild-docker.bat once, then try again.
   exit /b 1
 )
 if exist deploy\unfurl.env (

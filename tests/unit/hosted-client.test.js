@@ -39,7 +39,7 @@ test('the server\'s own "your share is used up" message reaches the person; a br
   const own = new YouTubeClient({ key: 'MINE', fetchFn: async () => json(bad, 400) });
   await assert.rejects(() => own.videos(['a']), (e) => e instanceof KeyError && /isn’t valid\. Check it in Settings/.test(e.message));
   const offline = new YouTubeClient({ key: '', base: PROXY_BASE, fetchFn: async () => { throw new Error('down'); } });
-  await assert.rejects(() => offline.videos(['a']), /reach the Atlas server/);
+  await assert.rejects(() => offline.videos(['a']), /reach the Olympus server/);
 });
 
 function serverStore(ping, fetchExtra = async () => null) {

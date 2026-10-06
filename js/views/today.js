@@ -237,7 +237,7 @@ function renderFeatured() {
         playerProblem(v, msg);
       },
       onUnavailable: () => playerProblem(v, 'The YouTube player couldn’t load (you may be offline, or it’s blocked). You can still open it on YouTube.'),
-    });
+    }, { bestQuality: ctx.state.prefs.bestQuality !== false });
     // Follow along: sections, repeat, speed ... It lives next to the player (not in the info below, which is redrawn often).
     practice = practicePanel(v, { getVideo: () => ctx.state.videos[v.id], remote: playerCtl, onFinish: () => finishVideo(v.id) });
     article.insertBefore(practice.el, infoHost);

@@ -100,6 +100,7 @@ export function mountSettings(root) {
   const effortHint = h('small', { class: 'hint' }, hintFor(prefs.thoroughness));
   const trusted = h('textarea', { id: 'trusted', rows: 6, 'aria-label': 'Trusted teachers, one per line',
     onchange: (e) => { prefs.trusted = e.target.value.split('\n').map((s) => s.trim()).filter(Boolean); store.save(); toast('Trusted teachers updated.'); } }, prefs.trusted.join('\n'));
+  const quality = h('input', { type: 'checkbox', id: 'best-quality', checked: prefs.bestQuality !== false, onchange: (e) => { prefs.bestQuality = e.target.checked; store.save(); } });
   const auto = h('input', { type: 'checkbox', id: 'auto-library', checked: prefs.autoLibrary, onchange: (e) => { prefs.autoLibrary = e.target.checked; store.save(); } });
 
   // ---------------------------------------------------------------- body profile
@@ -206,6 +207,11 @@ export function mountSettings(root) {
         h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.')),
       state.following.length ? h('div', null, h('h3', null, 'Teachers you follow'),
         h('ul', { class: 'backups' }, state.following.map((f) => h('li', null, f.name, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { unfollowChannel(state, f.channelId); store.save(); mountSettings(root); } }, 'Unfollow'))))) : null),
+    h('section', { class: 'panel', id: 'video-panel' },
+      h('h2', null, 'Video'),
+      h('label', { class: 'check block' }, quality, ' Ask YouTube for the highest picture quality',
+        h('small', { class: 'hint' }, 'Sent once, when a video starts playing. YouTube decides in the end: it looks at how big the player is, your connection and your own choice, and its embedded player may ignore the request. Under the player you can see what you actually get.')),
+      h('p', { class: 'hint' }, 'To fix the quality for good: start a video, open the ⚙ in the player, choose Quality and pick the highest number (1080p or more). YouTube remembers that for this page. A bigger player helps too: “Focus view” makes it as large as the screen allows. Videos that were only uploaded in 720p can’t go higher.')),
     favoritesPanel(),
     hiddenPanel(),
     dataPanel);
