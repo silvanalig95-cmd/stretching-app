@@ -91,12 +91,18 @@ This runs the same tested auto-updating setup used for Linux servers, inside Doc
    ```
    The first build takes a few minutes. Docker Desktop restarts it whenever Windows starts. If Windows Firewall asks about *Docker Desktop Backend*, allow **Private networks**.
 5. Open <http://localhost:8765> (or the addresses from step 2.4) and log in.
-6. **Check updates are flowing:**
-   ```powershell
-   docker compose -f deploy/docker-compose.yml logs --tail 20
-   ```
-   After I push a change you'll see a line like `update to 1a2b3c4d5e6f is live and healthy`. Pages you have open show **"A new version of Unfurl is ready — Reload"**.
-7. **Bringing your data across from step 2:** in the old setup open *Settings → Export backup* (saves a file), then in the new one *Settings → Import backup*.
+6. **Check that it is running correctly:**
+   * In Docker Desktop → *Containers*, the **unfurl** entry has a green dot. Click its **›** arrow to see the container inside: it should say *Running* and show port `8765:8765`.
+   * In PowerShell: `docker compose -f deploy/docker-compose.yml ps` should say `Up ... (healthy)` (the *healthy* appears after about a minute).
+   * Open <http://localhost:8765/healthz>. It shows something like `{"ok": true, "app": "unfurl", "version": "0.3.0", "build": "1114e3c9a0b2"}`. The **build** is the start of the GitHub version it is running: compare it with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu> (the first 7 characters match). If it says `"build": "docker"`, it is still on the copy built into the image and has not reached GitHub yet; look at the logs below for a line mentioning "couldn't fetch".
+   * Open <http://localhost:8765/> (your browser asks for the name and password from `unfurl.env`).
+   * Logs: `docker compose -f deploy/docker-compose.yml logs --tail 30`. You should see `a login is required`. After I push a change you will see a line like `update to 1a2b3c4d5e6f is live and healthy`, and pages you have open show **"A new version of Unfurl is ready — Reload"**.
+7. **Bringing your data across from steps 1 or 2.** The Docker version keeps its own, separate data (inside Docker), so it **starts with an empty library**. If you had already built a library in the earlier setup and want it here:
+   1. Run the old app next to Docker, on a different port. In PowerShell: `cd C:\Unfurl` then `python serve.py --port 8766`. Your browser opens <http://localhost:8766>, showing your old library (it reads `%APPDATA%\Unfurl`).
+   2. There: **Settings → Your data → Export backup**. A file named `unfurl-backup-<date>.json` lands in your Downloads folder.
+   3. Stop the old app (click the PowerShell window, press `Ctrl+C`).
+   4. In the Docker version (<http://localhost:8765>): **Settings → Your data → Import backup** and pick that file.
+   Backup files never contain your YouTube key, so paste it again under Settings. If you hadn't added anything worth keeping, skip all this.
 8. **Back up your data.** Use *Settings → Export backup* now and then (it saves a file on your PC). The server also keeps daily backups, but they live inside Docker's storage, so an exported file is your safety net.
 9. Handy commands (from `C:\Unfurl`):
    | | |
