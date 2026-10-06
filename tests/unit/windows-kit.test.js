@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (f) => fs.readFileSync(path.join(ROOT, f));
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
-const BATS = ['start.bat', 'start-network.bat', 'network-settings.example.bat', 'install-autostart.bat'];
+const BATS = ['start.bat', 'start-network.bat', 'network-settings.example.bat', 'install-autostart.bat', 'rebuild-docker.bat'];
 
 test('batch files use Windows line endings throughout and plain ASCII', () => {
   for (const f of BATS) {
@@ -107,4 +107,29 @@ test('the home-network setup defaults to port 80 (no ":8765" to type), and Docke
   assert.match(compose, /- "80:8765"/);
   assert.match(compose, /- "8765:8765"/);
   assert.match(read('deploy/unfurl.service').toString(), /AmbientCapabilities=CAP_NET_BIND_SERVICE/);
+});
+
+test('rebuild-docker.bat only touches the recipe: it never reads or writes the settings file or the data, and honours the branch you set', () => {
+  const bat = read('rebuild-docker.bat').toString();
+  assert.match(bat, /findstr \/b "UNFURL_BRANCH=" deploy\\unfurl\.env/, 'reads only the branch from the settings');
+  assert.ok(!/\b(del|erase|rmdir|rd)\b|compose[^\n]*\bdown\b|volume (rm|prune)|prune/i.test(bat), 'nothing destructive on the app folder or the volumes');
+  assert.deepEqual([...bat.matchAll(/Remove-Item (\S+)/g)].map((m) => m[1]), ['$env:OUT'], 'the only thing it deletes is its own temporary download');
+  assert.match(bat, /docker compose -f deploy\/docker-compose\.yml up -d --build/);
+  assert.match(bat, /archive\/refs\/heads\/%BRANCH%\.zip/);
+  const zipHasNoEnv = !fs.existsSync(path.join(ROOT, 'deploy', 'unfurl.env'));
+  assert.ok(zipHasNoEnv, 'the repository never contains a real settings file, so copying its files over a folder cannot overwrite yours');
+});
+
+test('the guide for friends only mentions settings that exist, and the hash command it gives really works', async () => {
+  const guide = read('deploy/EXTERNAL.md').toString();
+  const code = ['serve.py', 'deploy/run.sh', 'deploy/update.sh'].map((f) => read(f).toString()).join('\n');
+  for (const name of new Set(guide.match(/UNFURL_[A-Z_]+/g))) assert.ok(code.includes(name), `${name} is a real setting`);
+  assert.match(guide, /--entrypoint python3 unfurl \/opt\/unfurl-seed\/serve\.py --hash-password/);
+  assert.match(read('deploy/Dockerfile').toString(), /\/opt\/unfurl-seed/, 'the path in that command is where the image keeps the app');
+  assert.match(read('deploy/Dockerfile').toString(), /COPY[^\n]*serve\.py[^\n]*\/opt\/unfurl-seed\//);
+  const { spawnSync } = await import('node:child_process');
+  const r = spawnSync('python3', [path.join(ROOT, 'serve.py'), '--hash-password'], { input: 'a long test passphrase\na long test passphrase\n', encoding: 'utf8' });
+  // getpass reads the terminal when there is one; with piped input it falls back to stdin
+  assert.match(r.stdout + r.stderr, /pbkdf2-sha256:\d+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+/, r.stderr);
+  for (const f of ['WINDOWS.md', 'EXTERNAL.md']) assert.ok(read(`deploy/${f}`).toString().includes('rebuild') || f === 'EXTERNAL.md');
 });

@@ -114,7 +114,7 @@ sudo deploy/install.sh --branch main --host unfurl.internal      # Linux + syste
 docker compose -f deploy/docker-compose.yml up -d --build        # or Docker
 ```
 
-Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**. On Windows: **[deploy/WINDOWS.md](deploy/WINDOWS.md)**.
+Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**. On Windows: **[deploy/WINDOWS.md](deploy/WINDOWS.md)**. Letting friends use it from outside your network: **[deploy/EXTERNAL.md](deploy/EXTERNAL.md)**.
 
 ## Honest limitations
 

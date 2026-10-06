@@ -146,7 +146,7 @@ export function mountSettings(root) {
     store.readOnly ? h('p', { class: 'banner' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Read-only.') : null,
     h('dl', { class: 'facts' },
       h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? (store.server.dataDir ? `In files on this computer: ${store.server.dataDir}` : `In files on the Unfurl server${store.server.user ? `, in ${store.server.user}’s own folder` : ''}`) : 'In this browser only (run serve.py to keep it in files).'),
-      h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `Unfurl ${store.server.version ?? '(browser mode)'} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
+      h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `Unfurl ${store.server.version ?? '(browser mode)'}${store.server.build ? ` (build ${store.server.build.slice(0, 7)})` : ''} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
       h('dt', null, 'Kept apart'), h('dd', null, 'Your library, history and ratings (“profile”) are saved separately from the videos the app has discovered (“index”). The index can always be rebuilt; the profile is what\'s backed up. Your API key is in a third, private file.')),
     h('p', { class: 'hint' }, 'Updating or replacing the app never touches this folder. When a new version changes how data is stored, it upgrades yours automatically and keeps a backup of the old format.'),
     backupsSlot = h('div', { id: 'backups-slot' }),

@@ -3,7 +3,7 @@
 // you put it there (or you did the routine, or you turned on auto-add).
 
 import { h, fill, thumb, fmtViews } from '../dom.js';
-import { ctx, play, growLibrary, importInputs, refreshFollowedNow } from '../ctx.js';
+import { ctx, play, growLibrary, importInputs, refreshFollowedNow, readMissingComments, missingCommentsCount } from '../ctx.js';
 import { AREAS, areaLabel, areaPath, parentOf } from '../lexicon.js';
 import { formatDuration, qualityScore } from '../analyze.js';
 import { toggleLibrary, unblockVideo, unblockChannel, hiddenReason, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
@@ -53,6 +53,7 @@ export function mountLibrary(root) {
       const bits = [];
       if (r.videos) bits.push(`${r.videos} video${r.videos > 1 ? 's' : ''} added to your library`);
       if (r.imported) bits.push(`${r.imported} video${r.imported > 1 ? 's' : ''} imported from ${r.names.join(', ')} (${toLib.checked ? 'into your library' : 'into Discovered'})`);
+      if (r.commentsRead) bits.push(`read the viewer comments on ${r.commentsRead} video${r.commentsRead > 1 ? 's' : ''}`);
       if (r.followed.length) bits.push(`following ${r.followed.join(', ')}`);
       addStatus.textContent = [...bits, ...r.problems].join(' · ') || 'Nothing was added.';
       if (bits.length) { addText.value = ''; toast(bits.join('; ') + '.', 'success', 6000); }
@@ -88,12 +89,24 @@ export function mountLibrary(root) {
       } }, 'Check for new uploads')) : '');
   }
 
+  // ---------------------------------------------------------------- read missing comments
+  const missLabel = () => `Read missing comments (${missingCommentsCount().toLocaleString()})`;
+  const missBtn = h('button', { class: 'btn', type: 'button', id: 'read-missing', disabled: !ctx.hasKey || !missingCommentsCount(), onclick: async () => {
+    missBtn.disabled = true;
+    try {
+      const res = await readMissingComments({ progress: (m) => { missBtn.textContent = m; } });
+      toast(res.read ? `Read the comments on ${res.read} videos${res.remaining ? `; ${res.remaining} more are waiting` : ''}.` : 'Nothing to read.', 'success', 6000);
+    } catch (err) { toast(err.message, 'error'); }
+    rerender();
+    missBtn.textContent = missLabel(); missBtn.disabled = !ctx.hasKey || !missingCommentsCount();
+  } }, missLabel());
+
   // ---------------------------------------------------------------- grow
   const growBtn = h('button', { class: 'btn', type: 'button', id: 'grow', disabled: !ctx.hasKey, onclick: async () => {
     const cov = coverage(buckets().mine, ctx.state.blocked);
     const known = coverage(Object.values(ctx.state.videos), ctx.state.blocked);
     // aim where YOUR library is thinnest, but prefer areas the whole index is also thin on
-    const thin = Object.keys(cov).filter((a) => a !== 'full_body').sort((a, b) => cov[a] - cov[b] || known[a] - known[b] || Math.random() - 0.5).slice(0, 2);
+    const thin = Object.keys(cov).filter((a) => a !== 'full_body' && !parentOf(a)).sort((a, b) => cov[a] - cov[b] || known[a] - known[b] || Math.random() - 0.5).slice(0, 2);
     growBtn.disabled = true; growBtn.textContent = 'Searching…';
     try {
       const { added, report } = await growLibrary(thin);
@@ -332,7 +345,9 @@ export function mountLibrary(root) {
       h('div', { class: 'two' },
         h('div', null, h('h3', null, 'Add to your library'), addForm, followSlot),
         h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
-          h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).')))),
+          h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).'),
+          missBtn,
+          h('p', { class: 'hint' }, 'What viewers say in the comments is where most of the muscle evidence comes from. Imports read them automatically; this catches up on anything that has none yet (1 quota unit per video, up to 300 a press, your library first).')))),
     analyzePanel({ onChange: () => rerender() }),
     tabsSlot, covSlot, h('section', { class: 'panel' }, controls, tips, interpSlot, savedSlot, tagSlot), listSlot);
   rerender();

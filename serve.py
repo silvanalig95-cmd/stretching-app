@@ -117,6 +117,7 @@ class Config:
         self.trust_proxy_user = None    # header carrying the user's name from a login proxy
         self.proxy_nets = []            # who may act as that proxy (and tell us a visitor's real address)
         self.proxy_secret = ""          # optional: a value the proxy must also send in X-Unfurl-Proxy-Secret
+        self.adopt_root_for = ""        # with several users: who inherits the data that was saved before there were several
         self.dummy_spec = ""            # compared against for unknown names, so they cost as much time as real ones
         self.yt_key = ""
         self.yt_upstream = YT_UPSTREAM
@@ -191,6 +192,17 @@ def build_config(args, env) -> Config:
     uf = pick(args.users_file, "UNFURL_USERS_FILE")
     if uf:
         c.users.update(read_users_file(uf))
+    # Several people in one setting: UNFURL_USERS=anna:secret;ben:pbkdf2-sha256:200000:...  (';' or new lines between people)
+    for entry in re.split(r"[;\n]+", env.get("UNFURL_USERS", "")):
+        entry = entry.strip()
+        if not entry:
+            continue
+        uname, _, uspec = entry.partition(":")
+        uspec = uspec.strip()   # stray spaces around a password in a settings file are never meant
+        if not uname.strip() or not uspec:
+            sys.exit(f"UNFURL_USERS has an entry that doesn't look like  name:password  ({uname.strip() or entry[:20]!r}). "
+                     "Separate people with ';' and give each a non-empty password (or hash).")
+        c.users[uname.strip()] = uspec
     auth = env.get("UNFURL_AUTH", "")
     if auth:
         name, _, spec = auth.partition(":")
@@ -198,6 +210,7 @@ def build_config(args, env) -> Config:
             sys.exit("UNFURL_AUTH must look like  name:password  (neither part may be empty). "
                      "If it comes from an environment file, check that the variable it reads is set.")
         c.users[name] = spec
+    c.adopt_root_for = env.get("UNFURL_ADOPT_ROOT_DATA_FOR", "").strip()
     c.proxy_secret = env.get("UNFURL_PROXY_SECRET", "")
     c.dummy_spec = next((sp for sp in c.users.values() if sp.startswith(PBKDF2_PREFIXES)), "x" * 16)
     c.trust_proxy_user = pick(args.trust_proxy_user, "UNFURL_TRUST_PROXY_USER") or None
@@ -381,6 +394,27 @@ def read_profile_with_recovery(data_dir: Path):
             atomic_write(target, json.dumps(doc).encode())
             return doc, b["name"]
         return None, None
+
+
+def adopt_root_data(c: Config) -> str:
+    """Moving from one shared login to several: give the data saved so far to one named person (copied, never moved,
+    and never over something they already have)."""
+    name = c.adopt_root_for
+    if not name or not c.per_user:
+        return ""
+    if name not in c.users and not c.trust_proxy_user:
+        sys.exit(f"UNFURL_ADOPT_ROOT_DATA_FOR={name!r} is not one of the logins ({', '.join(sorted(c.users)) or 'none'}).")
+    dest = c.data_dir / "users" / safe_user_dir(name)
+    if (dest / "profile.json").exists() or not (c.data_dir / "profile.json").exists():
+        return ""
+    dest.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for f in ("profile.json", "index.json", "config.json"):
+        src = c.data_dir / f
+        if src.exists() and not (dest / f).exists():
+            atomic_write(dest / f, src.read_bytes(), private=(f == "config.json"))
+            copied.append(f)
+    return f"Gave the existing data ({', '.join(copied)}) to {name} (copied into {dest}; the originals were left in place)." if copied else ""
 
 
 def adopt_legacy_data(data_dir: Path, legacy_dir: Path) -> str:
@@ -954,10 +988,12 @@ def main(argv=None, env=None):
     except OSError as e:
         sys.exit(f"Couldn't create the data folder {c.data_dir}: {e}\nPick another with: python3 serve.py --data-dir /some/folder")
     note = "" if c.per_user else adopt_legacy_data(c.data_dir, c.legacy_dir)
-    if c.per_user and (c.data_dir / "profile.json").exists():
-        print(f"NOTE: {c.data_dir / 'profile.json'} holds data from a single-user setup. With several users, each person gets their own "
-              f"folder under {c.data_dir / 'users'} and that file is no longer used. To keep it, copy profile.json, index.json and config.json "
-              f"into {c.data_dir / 'users' / '<login name>'} (see deploy/README.md).", file=sys.stderr)
+    if c.per_user:
+        note = note or adopt_root_data(c)
+        if not c.adopt_root_for and (c.data_dir / "profile.json").exists():
+            print(f"NOTE: {c.data_dir / 'profile.json'} holds data from a single-user setup. With several users, each person gets their own "
+                  f"folder under {c.data_dir / 'users'} and that file is no longer used. To keep it, copy profile.json, index.json and config.json "
+                  f"into {c.data_dir / 'users' / '<login name>'}, or just set UNFURL_ADOPT_ROOT_DATA_FOR=<login name> and restart (see deploy/README.md).", file=sys.stderr)
 
     if port_in_use(c.host, c.port):
         sys.exit(f"Port {c.port} is already being used by another program on this computer, so Unfurl can't start here.\n"

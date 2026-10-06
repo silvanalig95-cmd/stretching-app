@@ -68,7 +68,7 @@ async function main() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
 
   show(tabFromHash());
-  const where = store.mode === 'server' ? `Unfurl ${store.server.version}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
+  const where = store.mode === 'server' ? `Unfurl ${store.server.version}${store.server.build ? ` · build ${store.server.build.slice(0, 7)}` : ''}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
   document.getElementById('storage-note').textContent = where;
   if (store.hostProblem) {
     const { host, allowed } = store.hostProblem;

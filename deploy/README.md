@@ -1,6 +1,7 @@
 # Hosting Unfurl on a server (with automatic updates)
 
 > **On Windows?** See [WINDOWS.md](WINDOWS.md) for step-by-step instructions, from "just this PC" to "always on and updating itself".
+> **Sharing with friends outside your home network?** See [EXTERNAL.md](EXTERNAL.md).
 
 The idea: the server **follows a git branch**. Whenever a new version is pushed to that branch, the server notices within a minute, tests it, switches to it, and checks it came up healthy. If anything is wrong it keeps (or goes back to) the version that was working. People with the page open see *“A new version of Unfurl is ready — Reload”*.
 
@@ -56,6 +57,10 @@ docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
 The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates itself from git exactly as above, with no rebuilds. Without a repository it just runs what is baked in; after `docker compose up --build` the newer copy replaces the old one automatically. Two volumes: `unfurl-data` is **your data**, back it up; `unfurl-app` holds downloaded versions and can be deleted. `docker compose logs -f` shows what the updater did.
+
+## How to tell which version is running
+
+The footer of the app shows the build (`Unfurl 0.3.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 

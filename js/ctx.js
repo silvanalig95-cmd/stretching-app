@@ -4,7 +4,7 @@
 // functions, toast) on `ctx.hooks`.
 
 import {
-  YouTubeClient, discover, verifyVideos, spendQuota, quotaUsed, estimateRunCost, effortFor, parseSourceInput, importSource, refreshFollowed,
+  YouTubeClient, discover, verifyVideos, readCommentsFor, needsComments, spendQuota, quotaUsed, estimateRunCost, effortFor, parseSourceInput, importSource, refreshFollowed,
   fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA, PROXY_BASE,
 } from './youtube.js';
 import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
@@ -350,10 +350,25 @@ export function splitInputs(text) {
  * Import whatever was pasted: video links, playlists, teachers (channel link, @handle or name).
  * Single videos go to the library; teachers' catalogues and playlists go to "Discovered" unless toLibrary.
  */
+const IMPORT_COMMENTS_MAX = 300;   // comments read per import (1 unit each); the Library's "Read missing comments" does more
+
+/** How many known videos still have no comments read, and could. */
+export const missingCommentsCount = () => Object.values(ctx.state.videos).filter(needsComments).length;
+
+/** Read comments for videos that never had them (your library first). Returns what happened. */
+export async function readMissingComments({ max = 300, progress = () => {} } = {}) {
+  const api = client();
+  if (!api) throw new Error('Reading comments needs a YouTube key (Settings), or the server’s shared one.');
+  const { state } = ctx;
+  const res = await readCommentsFor({ client: api, state, ids: Object.keys(state.videos), max, budget: quotaInfo().left - 20, priority: new Set(Object.keys(state.library)), progress });
+  if (res.read) { ctx.store.save(); ctx.hooks.renderResults?.(); }
+  return res;
+}
+
 export async function importInputs(text, { toLibrary = false, follow = false, progress = () => {} } = {}) {
   const { state } = ctx;
   const items = splitInputs(text);
-  const out = { videos: 0, imported: 0, followed: [], names: [], problems: [] };
+  const out = { videos: 0, imported: 0, followed: [], names: [], problems: [], commentsRead: 0 };
   if (!items.length) { out.problems.push('Nothing to add yet. Paste a YouTube link, playlist, or teacher.'); return out; }
   const api = client();
   const classified = items.map((i) => ({ raw: i, ...parseSourceInput(i) }));
@@ -367,7 +382,7 @@ export async function importInputs(text, { toLibrary = false, follow = false, pr
       const found = new Set(records.map((r) => r.id));
       for (const r of records) {
         const rec = addManualVideo(state, { ...r, source: 'manual' });
-        if (!rec.comments) { try { state.videos[r.id] = attachComments(rec, await api.comments(r.id)); } catch { /* comments are a bonus */ } }
+        if (!rec.comments) { try { state.videos[r.id] = attachComments(rec, await api.comments(r.id)); out.commentsRead++; } catch { /* comments are a bonus */ } }
       }
       out.videos += records.length;
       for (const v of vids) if (!found.has(v.value)) out.problems.push(`No public video found for ${v.value}.`);
@@ -390,6 +405,11 @@ export async function importInputs(text, { toLibrary = false, follow = false, pr
       importRecords(state, res.records, { toLibrary });
       Object.assign(state.channels, res.channels);
       out.imported += res.records.length; out.names.push(res.title);
+      // Always read what viewers say about what was just imported: that is where the muscle evidence comes from.
+      const cr = await readCommentsFor({ client: api, state, ids: res.records.map((r) => r.id), max: IMPORT_COMMENTS_MAX, budget: quotaInfo().left - 20, priority: libraryIds(), progress });
+      out.commentsRead += cr.read;
+      if (cr.stopped === 'quota' || cr.stopped === 'budget') out.problems.push(`Today’s YouTube allowance ran out after reading comments on ${cr.read} videos; “Read missing comments” in the Library finishes the rest tomorrow (${cr.remaining} left).`);
+      else if (cr.stopped === 'cap') out.problems.push(`Read comments on ${cr.read} videos; ${cr.remaining} more are waiting (“Read missing comments” in the Library).`);
       if (!res.records.length) out.problems.push(`“${res.title || c.raw}” had no usable videos (too short, live, or not embeddable).`);
       if (follow && res.channel) { followChannel(state, { channelId: res.channel.id, name: res.channel.name }); out.followed.push(res.channel.name); }
     } catch (e) { out.problems.push(e.message); }

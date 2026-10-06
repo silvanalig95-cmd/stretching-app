@@ -178,6 +178,40 @@ export function toRecord(item) {
   };
 }
 
+/** Has nobody read this video's comments yet, and could they be read? (Videos with fewer than 3 comments aren't worth a call.) */
+export const needsComments = (v) => !!v && !v.comments && !(v.evidence?.n > 0) && !v.broken && v.embeddable !== false && (v.commentCount == null || v.commentCount >= 3);
+
+/**
+ * Read the viewer comments of many videos (1 quota unit each), a few at a time, and fold them into each video's
+ * stored analysis. Skips what already has comments; stops at once when the day's allowance runs out.
+ * @param {{client:YouTubeClient, state:object, ids:string[], max?:number, budget?:number, concurrency?:number, priority?:Set<string>, progress?:(m:string)=>void}} o
+ * @returns {Promise<{read:number, withEvidence:number, remaining:number, stopped:null|'quota'|'key'|'budget'|'cap'}>}
+ */
+export async function readCommentsFor({ client, state, ids, max = 300, budget = Infinity, concurrency = 4, priority = new Set(), progress = () => {} }) {
+  const todo = [...new Set(ids)].map((id) => state.videos[id]).filter(needsComments)
+    .sort((a, b) => (priority.has(b.id) - priority.has(a.id)) || ((b.commentCount ?? 0) - (a.commentCount ?? 0)));
+  const allowed = Math.max(0, Math.min(max, Number.isFinite(budget) ? Math.floor(budget) : max));
+  const batch = todo.slice(0, allowed);
+  let next = 0, read = 0, withEvidence = 0, stopped = null;
+  const worker = async () => {
+    while (!stopped) {
+      const v = batch[next++];
+      if (!v) return;
+      try {
+        const updated = attachComments(state.videos[v.id] ?? v, await client.comments(v.id));
+        state.videos[v.id] = updated;
+        read++; if (updated.evidence?.n > 0) withEvidence++;
+        progress(`Reading viewer comments ${read}/${batch.length}…`);
+      } catch (e) {
+        if (e instanceof QuotaError) stopped = 'quota'; else if (e instanceof KeyError) stopped = 'key';   // anything else: skip just this video
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, worker));
+  if (!stopped && todo.length > batch.length) stopped = allowed < max ? 'budget' : 'cap';
+  return { read, withEvidence, remaining: Math.max(0, todo.length - read), stopped };
+}
+
 /** Keep user-side facts when a fresher copy of a video arrives. */
 export function mergeVideo(old, fresh) {
   if (!old) return fresh;

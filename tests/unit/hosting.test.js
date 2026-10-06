@@ -419,6 +419,7 @@ test('with several users, existing single-user data is flagged at startup instea
   try {
     await new Promise((r) => setTimeout(r, 300));
     assert.match(s.err(), /holds data from a single-user setup/);
+    assert.match(s.err(), /UNFURL_ADOPT_ROOT_DATA_FOR/, 'and says how to keep it');
   } finally { s.stop(); }
 });
 
@@ -495,3 +496,73 @@ test('the "no login" message also warns that the last assignment in a settings f
   const s = await start({ args: ['--host', '0.0.0.0'], expectExit: true });
   assert.match(s.err(), /LAST one wins/);
 });
+
+test('UNFURL_USERS gives several people logins in one setting, plain or hashed, each with their own library', async () => {
+  const hashed = spawnSync('python3', ['-c', `import sys; sys.path.insert(0, ${JSON.stringify(ROOT)}); import serve; print(serve.hash_password("ben-long-passphrase", iterations=2000))`], { encoding: 'utf8' }).stdout.trim();
+  const dataDir = tmp('multi-env');
+  const s = await start({ dataDir, env: { UNFURL_USERS: `anna:anna-long-passphrase;ben:${hashed}\n  cara : cara-long-passphrase `.replace('cara :', 'cara:') } });
+  try {
+    const login = (u, p) => ({ Authorization: basic(u, p) });
+    assert.equal((await s.call({ path: '/api/ping', headers: login('anna', 'anna-long-passphrase') })).json.user, 'anna');
+    assert.equal((await s.call({ path: '/api/ping', headers: login('ben', 'ben-long-passphrase') })).json.user, 'ben');
+    assert.equal((await s.call({ path: '/api/ping', headers: login('cara', 'cara-long-passphrase') })).json.user, 'cara');
+    assert.equal((await s.call({ path: '/api/ping', headers: login('ben', hashed) })).status, 401, 'the hash is not a password');
+    assert.equal((await s.call({ path: '/api/ping', headers: login('anna', 'ben-long-passphrase') })).status, 401);
+    for (const [u, p] of [['anna', 'anna-long-passphrase'], ['ben', 'ben-long-passphrase']]) {
+      await s.call({ method: 'PUT', path: '/api/profile', headers: { ...login(u, p), 'Content-Type': 'application/json' }, body: { schema: 2, owner: u } });
+    }
+    assert.equal((await s.call({ path: '/api/profile', headers: login('anna', 'anna-long-passphrase') })).json.data.owner, 'anna');
+    assert.equal((await s.call({ path: '/api/profile', headers: login('ben', 'ben-long-passphrase') })).json.data.owner, 'ben');
+    assert.equal((await s.call({ path: '/api/ping', headers: login('anna', 'anna-long-passphrase') })).json.multiUser, true);
+  } finally { s.stop(); }
+});
+
+test('UNFURL_USERS and UNFURL_AUTH work together (you plus your friends)', async () => {
+  const s = await start({ env: { UNFURL_AUTH: 'me:my-long-passphrase', UNFURL_USERS: 'friend:friend-long-passphrase' } });
+  try {
+    assert.equal((await s.call({ path: '/api/ping', headers: { Authorization: basic('me', 'my-long-passphrase') } })).json.user, 'me');
+    assert.equal((await s.call({ path: '/api/ping', headers: { Authorization: basic('friend', 'friend-long-passphrase') } })).json.user, 'friend');
+  } finally { s.stop(); }
+});
+
+test('a malformed UNFURL_USERS entry stops the server with a clear message instead of leaving someone without a password', async () => {
+  for (const bad of ['anna:ok-passphrase;ben', 'anna:ok-passphrase;ben:', ':nobody']) {
+    const s = await start({ env: { UNFURL_USERS: bad }, expectExit: true });
+    assert.notEqual(s.code, 0, bad);
+    assert.match(s.err(), /UNFURL_USERS has an entry that doesn't look like/, bad);
+  }
+});
+
+test('moving from one shared login to several: UNFURL_ADOPT_ROOT_DATA_FOR gives the existing library to one person, once, by copying', async () => {
+  const dataDir = tmp('adopt');
+  fs.writeFileSync(path.join(dataDir, 'profile.json'), JSON.stringify({ schema: 2, owner: 'old-me', library: {} }));
+  fs.writeFileSync(path.join(dataDir, 'index.json'), JSON.stringify({ videos: { a: 1 } }));
+  fs.writeFileSync(path.join(dataDir, 'config.json'), JSON.stringify({ apiKey: 'MY-KEY' }));
+  const env = { UNFURL_AUTH: 'me:my-long-passphrase', UNFURL_USERS: 'friend:friend-long-passphrase', UNFURL_ADOPT_ROOT_DATA_FOR: 'me' };
+  const first = await start({ dataDir, env });
+  try {
+    const mine = await s_get(first, 'me', 'my-long-passphrase');
+    assert.equal(mine.profile.data.owner, 'old-me', 'my library came along');
+    assert.equal(mine.config.apiKey, 'MY-KEY', 'and my YouTube key');
+    const friend = await s_get(first, 'friend', 'friend-long-passphrase');
+    assert.equal(friend.profile.data, null, 'the friend starts empty and sees none of it');
+    assert.ok(fs.existsSync(path.join(dataDir, 'profile.json')), 'the originals are still where they were');
+    assert.match(first.out(), /Gave the existing data/);
+    if (process.platform !== 'win32') assert.equal((fs.statSync(path.join(dataDir, 'users', 'me', 'config.json')).mode & 0o777).toString(8), '600');
+    await first.call({ method: 'PUT', path: '/api/profile', headers: { Authorization: basic('me', 'my-long-passphrase'), 'Content-Type': 'application/json' }, body: { schema: 2, owner: 'new-me' } });
+  } finally { first.stop(); }
+  await new Promise((r) => setTimeout(r, 300));
+  const again = await start({ dataDir, env });
+  try {
+    assert.equal((await s_get(again, 'me', 'my-long-passphrase')).profile.data.owner, 'new-me', 'a restart never overwrites what they have done since');
+  } finally { again.stop(); }
+
+  const wrong = await start({ dataDir: tmp('adopt2'), env: { ...env, UNFURL_ADOPT_ROOT_DATA_FOR: 'nobody' }, expectExit: true });
+  assert.notEqual(wrong.code, 0);
+  assert.match(wrong.err(), /not one of the logins/);
+});
+
+async function s_get(server, user, pass) {
+  const h = { Authorization: basic(user, pass) };
+  return { profile: (await server.call({ path: '/api/profile', headers: h })).json, config: (await server.call({ path: '/api/config', headers: h })).json ?? {} };
+}

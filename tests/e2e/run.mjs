@@ -688,7 +688,7 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     ok(await page.locator('.combo').count() === 0, 'stale combos are not shown for different muscles');
   });
 
-  await step('import a whole teacher by @handle: cheap (a few units), lands in Discovered, followed', async () => {
+  await step('import a whole teacher by @handle: lands in Discovered, followed, and the comments of every video are read for the analysis', async () => {
     await goto(page, 'library');
     const q0 = await U(page, () => window.__unfurl.state.quota.used);
     const lib0 = await libCount(page);
@@ -698,10 +698,12 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     await page.waitForFunction(() => document.getElementById('add-status').textContent.includes('imported from Tiny Yoga Room'), null, { timeout: 15000 });
     await page.waitForTimeout(300);
     const spent = (await U(page, () => window.__unfurl.state.quota.used)) - q0;
-    ok(spent > 0 && spent <= 12, `a whole catalogue cost ${spent} units`);
+    ok(spent > 0 && spent <= 40, `a whole catalogue cost ${spent} units (1 per video for the comments, plus a few for the listing)`);
+    ok((await page.locator('#add-status').innerText()).includes('read the viewer comments on'), await page.locator('#add-status').innerText());
     eq(await libCount(page), lib0, 'imported catalogues go to Discovered, not the library');
     ok(await U(page, () => Object.values(window.__unfurl.state.videos).filter((v) => v.source === 'channel').length) >= 5, 'channel videos stored');
-    ok(await U(page, () => Object.values(window.__unfurl.state.videos).some((v) => v.source === 'channel' && !v.comments)), 'comments not read in bulk (cost control)');
+    ok(await U(page, () => Object.values(window.__unfurl.state.videos).filter((v) => v.source === 'channel').every((v) => Array.isArray(v.comments) || v.commentCount < 3)), 'comments were read for the imported videos');
+    ok(await U(page, () => Object.values(window.__unfurl.state.videos).filter((v) => v.source === 'channel' && v.evidence?.n > 0).length) >= 3, 'and they became evidence');
     eq(await U(page, () => window.__unfurl.state.following.map((f) => f.name)), ['Tiny Yoga Room']);
     ok(await page.locator('#follow-slot .chip', { hasText: 'Tiny Yoga Room' }).count() === 1, 'followed teacher shown');
   });
@@ -713,6 +715,7 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
     await page.click('#add-btn');
     await page.waitForFunction(() => document.getElementById('add-status').textContent.includes('My favourite hip routines'), null, { timeout: 15000 });
     ok((await libCount(page)) - lib0 >= 10, `playlist added ${(await libCount(page)) - lib0}`);
+    ok(await U(page, () => Object.values(window.__unfurl.state.videos).filter((v) => v.source === 'playlist').every((v) => Array.isArray(v.comments) || v.commentCount < 3)), 'playlist videos had their comments read too');
     await page.uncheck('#import-to-library');
     await page.fill('#add-text', `https://youtu.be/${VIDEOS[40].id}\n${VIDEOS[41].id}`);
     await page.click('#add-btn');

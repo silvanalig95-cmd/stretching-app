@@ -32,7 +32,9 @@ So there are **two alternative ways to run the same app: the `.bat` files (steps
 
 ---
 
-Jump to: [what to keep](#what-to-keep-and-what-you-can-delete) · [start automatically](#start-automatically-when-the-pc-turns-on) · [no `:8765` in the address](#addresses-without-a-port-number) · [using the PC's name instead of its number](#using-the-pcs-name-instead-of-its-number) · [troubleshooting](#when-something-doesnt-work)
+Friends outside your home network? See **[EXTERNAL.md](EXTERNAL.md)**.
+
+Jump to: [how updates arrive](#how-updates-reach-you-and-how-to-check) · [what to keep](#what-to-keep-and-what-you-can-delete) · [start automatically](#start-automatically-when-the-pc-turns-on) · [no `:8765` in the address](#addresses-without-a-port-number) · [using the PC's name instead of its number](#using-the-pcs-name-instead-of-its-number) · [troubleshooting](#when-something-doesnt-work)
 
 ---
 
@@ -144,6 +146,40 @@ How the pieces connect when you use Docker (step 3):
 * **The downloaded ZIP file can be deleted.** It was only a way to get `C:\Unfurl`.
 * **Keep `C:\Unfurl`.** The running app doesn't read it, and updates don't come from it, so the app keeps working even if the folder vanishes. But you need it to **change a setting** (password, port, name), to **recreate** the container, to **rebuild** after I change the container recipe itself (rare; the app's own updates don't need this), and after reinstalling Docker. It's about 1 MB. The files `start.bat`, `start-network.bat` etc. in it are the non-Docker alternative; leave them alone, just don't run them while Docker is running.
 * If you insist on tidying up: keep the `deploy` folder (especially `deploy\unfurl.env`) and delete the rest. Don't delete anything inside Docker Desktop's *Volumes* tab: that is your data.
+
+---
+
+## How updates reach you, and how to check
+
+```
+I change something in chat  →  it is pushed to GitHub (branch claude/sharp-cray-hko5xu)
+every minute, inside the Docker box:  fetch → test the new version → switch → check it is healthy
+        └ not healthy? it goes back to the version that worked, and says so in the logs
+open pages show "A new version of Unfurl is ready — Reload"
+```
+
+**Automatic** (nothing for you to do, usually live within a minute of my push): everything the app is made of: the pages, the search and analysis, the muscle lists, the server code, and, once you have done the one rebuild below, the updater itself.
+
+**Not automatic: a rebuild is needed** only when the *container recipe* changes: `Dockerfile`, `docker-compose.yml`, the supervisor script `deploy\run.sh`, or the settings template. I'll say so whenever that happens ("needs a rebuild"). To do it, double-click **`rebuild-docker.bat`** with Docker Desktop running. It downloads the newest recipe into `C:\Unfurl`, rebuilds the box and restarts it; your settings (`deploy\unfurl.env`) and your data are not touched. (If you set up before that file existed, do the same by hand once, in PowerShell:
+```powershell
+cd C:\
+Invoke-WebRequest https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip -OutFile unfurl-new.zip
+Expand-Archive unfurl-new.zip -DestinationPath unfurl-new -Force
+Copy-Item unfurl-new\stretching-app-claude-sharp-cray-hko5xu\* C:\Unfurl -Recurse -Force
+cd C:\Unfurl
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+The ZIP contains no `unfurl.env`, so yours is never overwritten.)
+
+**Checking that an update arrived** (any one of these):
+
+1. **The footer of the app** shows `Unfurl 0.3.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
+2. **Settings → Your data → Versions** shows the same build.
+3. <http://localhost/healthz> shows `"build": "…"` (12 characters, starting with the same 7).
+4. **The log:** `docker compose -f deploy/docker-compose.yml logs --tail 20` shows a line like `update to 1a2b3c4d5e6f is live and healthy`. A refused update says `NOT updating to …`, and one that didn't start says `putting … back`.
+5. Pages you have open show the **Reload** banner.
+
+If the build doesn't change within a few minutes: look at the log (4). `couldn't fetch` means the box can't reach GitHub; `NOT updating … failed its self-test` means that version was refused and the old one keeps running (I'd have to fix it).
 
 ---
 

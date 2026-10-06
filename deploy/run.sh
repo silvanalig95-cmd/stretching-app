@@ -16,6 +16,13 @@ export UNFURL_HOME="$HOME_DIR" UNFURL_PIDFILE="$PIDFILE"
 unset UNFURL_BUILD   # the build id must be the release's own (BUILD file), or the updater's health check could never see an update arrive
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPDATER="${UNFURL_UPDATER:-$here/update.sh}"
+# The updater that ships INSIDE the live release is the newest one that has already passed its checks, so the update
+# machinery improves itself too (in a Docker image the copy next to this script is frozen at build time). If that one
+# is missing or broken, fall back to the one beside this script. A deliberately set UNFURL_UPDATER always wins.
+updater() {
+  local live="$HOME_DIR/current/deploy/update.sh"
+  if [ -z "${UNFURL_UPDATER:-}" ] && [ -x "$live" ] && bash -n "$live" 2>/dev/null; then echo "$live"; else echo "$UPDATER"; fi
+}
 
 say() { echo "$(date '+%Y-%m-%d %H:%M:%S') unfurl: $*" >&2; }
 mkdir -p "$HOME_DIR/releases" || { say "cannot create $HOME_DIR"; exit 2; }
@@ -53,7 +60,7 @@ if [ "$INTERVAL" -gt 0 ] 2>/dev/null; then
     trap 'exit 0' TERM INT
     while true; do
       sleep "$INTERVAL" & wait $!
-      "$UPDATER" >/dev/null          # update.sh reports what matters on stderr and in update.log
+      "$(updater)" >/dev/null        # update.sh reports what matters on stderr and in update.log
     done
   ) &
   UPDATER_PID=$!
@@ -84,7 +91,7 @@ while [ "$stopping" = 0 ]; do
     if [ "$live_build" != "$(cat "$HOME_DIR/healthy" 2>/dev/null || true)" ]; then
       if [ -e "$HOME_DIR/previous" ] && [ "$(readlink -f "$HOME_DIR/previous")" != "$(readlink -f "$HOME_DIR/current")" ]; then
         say "this version has never run properly and keeps failing right after starting; trying the previous one"
-        "$UPDATER" --rollback --no-restart >/dev/null || say "the earlier version could not be restored either"
+        "$(updater)" --rollback --no-restart >/dev/null || say "the earlier version could not be restored either"
       else
         say "the server keeps failing right after starting and there is no earlier version to fall back to, so the cause is almost certainly the settings: read the message printed just above this line. It will keep retrying every 30 seconds."
       fi

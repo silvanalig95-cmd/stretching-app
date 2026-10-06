@@ -473,3 +473,15 @@ test('running: a first version that cannot start, with nothing to fall back to, 
     assert.ok(!/nothing to roll back to/.test(log), 'no confusing rollback chatter');
   } finally { proc.kill('SIGTERM'); await sleep(500); try { process.kill(Number(fs.readFileSync(path.join(home, 'server.pid'), 'utf8')), 'SIGKILL'); } catch { /* gone */ } }
 });
+
+test('running: the update machinery updates itself too (the updater inside the live release is the one that runs)', async () => {
+  const s = await bring();
+  try {
+    const first = s.remote.head();
+    await s.until(async () => (await s.build()) === first, 40000, 'first start');
+    assert.ok(!fs.existsSync(path.join(s.home, 'self-update-marker')), 'not yet');
+    const second = s.remote.push('new updater', editFile('deploy/update.sh', (t) => t.replace('LOG="$HOME_DIR/update.log"\n', 'LOG="$HOME_DIR/update.log"\necho tick >>"$HOME_DIR/self-update-marker"\n')));
+    await s.until(async () => (await s.build()) === second, 40000, 'the update to arrive');
+    await s.until(() => fs.existsSync(path.join(s.home, 'self-update-marker')), 20000, 'the NEW updater (from the live release) to run on a later tick');
+  } finally { await s.stop(); }
+});
