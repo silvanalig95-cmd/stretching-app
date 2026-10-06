@@ -1,6 +1,8 @@
-# Unfurl
+# Palaestra
 
-Find yoga and stretching routines that fit **the muscles you want to work on and the time you have**, play them right in the app, and let the app **learn what actually helps your body**.
+> *Palaestra* (παλαίστρα) was the wrestling school of ancient Greece, where athletes trained, stretched and exercised. The app used to be called Palaestra; the settings names (`UNFURL_…`), the data folder and the Docker volumes keep their old spelling so nothing that exists has to move. The name lives in one file, `js/brand.js`.
+
+Two halves that share one journal. **Stretch**: find yoga and stretching routines that fit **the muscles you want to work on and the time you have**, play them right in the app, and let the app **learn what actually helps your body**.
 
 You tell it what you need ("*15–20 min, tight hips and weak glutes, desk posture*"). It searches YouTube, reads each candidate's details, chapters and **viewer comments** to work out which muscles the routine really works and what people say it did for them, ranks the results, and plays the best one. Afterwards you tell it whether it helped; that feeds back into the next suggestion.
 
@@ -24,7 +26,7 @@ It works immediately from a small built-in starter shelf. To let it **search the
 2. **APIs & Services → Library** → search **YouTube Data API v3** → **Enable**.
 3. **APIs & Services → Credentials → Create credentials → API key**. Copy it.
 4. Under **API restrictions** choose **Restrict key → YouTube Data API v3**. Leave *Application restrictions* on **None** (the app calls YouTube from your own browser).
-5. In Unfurl: **Settings → paste → Save & test**.
+5. In the app: **Settings → paste → Save & test**.
 
 The free allowance is 10,000 units a day. A web search costs about 100–400 units depending on how much digging it does (the app shows a running total in Settings), so a few dozen searches a day.
 
@@ -45,7 +47,14 @@ The key is stored only on your computer (in your data folder, below) and only ev
   - **How hard to look**: *Quick / Balanced / Thorough / Exhaustive*. A search is a **wide net**: it runs several differently-worded YouTube searches, reads further pages when results are mostly familiar, learns new wording from the best hits, and keeps going in rounds until enough *strong fits* turn up (or the unit budget for that run is spent). Balanced typically weighs a few hundred videos for ~300 units; the setting caps what one search may cost.
   - **Build a combo** (offered when you pick two or more muscle areas): no single video usually covers them all, so it chains 2–3 short, well-fitting ones into one session that fits your time, shows how much of your list it covers versus the best single video, and plays them back to back.
 - **Searching your library** (Library tab): plain words find titles, teachers, chapters, poses, muscles, what viewers wrote, and your own tags and notes, with typo tolerance, synonyms ("glutes" ≈ "buttocks"), and suggestions as you type. Extra syntax: `"exact phrase"`, `-word` to exclude, `teacher:kassandra`, `pose:pigeon`, `tag:morning`, `for:hips`, `len:10-20` / `len:<15`. The line under the box shows how it understood you. Save a search you use often and it appears as a chip.
-- **Journal**: your **training log** (this week against a goal, streaks, a 12-week chart, a calendar, achievements, per-muscle progress, a one-click “✓ Did today” on any video, log things without a video or for an earlier day, CSV export), what's working for you per muscle, a 4-week map of which muscles you've been working, and your history.
+- **Strength** (the second half; the stretching tabs are untouched): a **catalogue of over 120 exercises** built around dumbbells, a cable/weight station, a pull-up bar, loop bands, an inversion trainer and bodyweight, which you can extend with your own.
+  - **Setup**: tick the equipment you have (a one-click home-gym preset), the dumbbell weights you own, your goal (strength, muscle, running, endurance), movements to avoid (sore shoulder, knee…).
+  - **Describe a workout** (“*40 minutes upper body with dumbbells only, no overhead work, for running*”) and it builds one from what you can do, saying what it understood. Or **pick three exercises yourself and press ✨ Suggest more**: it names what is missing (pulling from above, rear shoulders, core…) with a reason for every idea, or **Fill the rest** to a time. Swap, reorder, move along a progression (touch-down squat → box pistol → assisted → slow lowering → pistol; scapular pull-up → negative → jumping → pull-up), and mark ★ main lifts to keep for 6–8 weeks.
+  - **Templates + builder**: runner’s strength in three days (upper + core, legs + stability, full body), a pistol-squat path, full body ×2 or ×3, upper/lower, push/pull/legs, a 20-minute core and hip session. They are filled in with your equipment; save one as a **plan** and “next up” tells you what to do today.
+  - **Training**: tick sets off; reps, weight and time are all **optional**, with suggestions from your last time (more reps first, then the next weight you actually own, then a harder variation). Personal bests are called out, an unfinished session survives a reload, and “**Stretch what you trained →**” hands the muscles to the stretching side.
+  - **Guide videos**: attach YouTube links to any exercise (paste a link, pick from your library, or search); watch them in the exercise, in the builder and during a session.
+  - Your own workouts, exercises, plans and guide videos are saved in your profile, so they are in your backups.
+- **Journal**: your **training log** (this week against **separate stretching and strength goals**, streaks, a 12-week chart, a calendar, achievements, per-muscle progress, a one-click “✓ Did today” on any video, log things without a video or for an earlier day, CSV export), what's working for you per muscle, a 4-week map of which muscles you've been working, and your history.
 - **Settings**: the key, your standing tight/weak spots, how adventurous the app is, auto-add, backups.
 
 ## How it works

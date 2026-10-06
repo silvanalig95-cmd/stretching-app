@@ -9,7 +9,7 @@ import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
 import { notesBlock } from './notes.js';
 import { didTodayButton } from './quicklog.js';
-import { streaks, goalProgress, DEFAULT_WEEKLY_GOAL } from '../progress.js';
+import { streaks, goalProgress, DEFAULT_WEEKLY_GOAL, byCategory } from '../progress.js';
 import { channelBlocker } from '../model.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
 import { mountPlayer } from '../player.js';
@@ -54,9 +54,11 @@ function weekLine() {
   const { state } = ctx;
   const el = document.getElementById('week-line') ?? h('p', { class: 'week-line', id: 'week-line' });
   if (!state.history.length) { el.replaceChildren(); return el; }
-  const goal = state.prefs.weeklyGoal ?? DEFAULT_WEEKLY_GOAL;
-  const g = goalProgress(state.history, goal), s = streaks(state.history);
-  const bits = [goal ? `This week: ${g.done} of ${goal}${g.met ? ' ✓' : ''}` : `This week: ${g.done}`];
+  const goal = state.prefs.weeklyGoal ?? DEFAULT_WEEKLY_GOAL, sGoal = state.prefs.strengthGoal ?? 0;
+  const g = goalProgress(byCategory(state.history, 'stretch'), goal), gS = goalProgress(byCategory(state.history, 'strength'), sGoal), s = streaks(state.history);
+  const showStrength = sGoal > 0 || state.history.some((x) => x.kind === 'strength');
+  const part = (label, gp, goal_) => `${label}${gp.done}${goal_ ? ` of ${goal_}${gp.met ? ' ✓' : ''}` : ''}`;
+  const bits = [showStrength ? `This week: ${part('stretching ', g, goal)} · ${part('strength ', gS, sGoal)}` : `This week: ${g.done}${goal ? ` of ${goal}${g.met ? ' ✓' : ''}` : ''}`];
   if (s.current >= 2) bits.push(`${s.current} days in a row`);
   fill(el, bits.join(' · '), ' ', h('button', { class: 'link', type: 'button', onclick: () => ctx.hooks.navigate('journal') }, 'Training log'));
   return el;

@@ -9,9 +9,10 @@ import { buildModel, rankCandidates, channelKey } from './model.js';
 import { buildQueries, expandQueries } from './query.js';
 import { SearchIndex } from './index.js';
 import { normalize } from './lexicon.js';
+import { APP_NAME } from './brand.js';
 
 export const API_BASE = 'https://www.googleapis.com/youtube/v3';
-export const PROXY_BASE = '/api/yt';   // the Unfurl server, when it keeps the YouTube key itself (see serve.py)
+export const PROXY_BASE = '/api/yt';   // the app's own server, when it keeps the YouTube key itself (see serve.py)
 export const COST = { search: 100, videos: 1, commentThreads: 1, channels: 1, playlistItems: 1, playlists: 1 };
 export const DAILY_QUOTA = 10000;
 
@@ -60,7 +61,7 @@ export class YouTubeClient {
     const url = new URL(`${this.base}/${endpoint}`, globalThis.location?.href);   // a relative base (the server's proxy) needs the page address
     for (const [k, v] of Object.entries({ ...params, key: this.key })) if (v != null && v !== '') url.searchParams.set(k, v);
     let res;
-    try { res = await this.fetchFn(url.toString()); } catch (e) { throw new YouTubeError(`Couldn’t reach ${this.proxied ? 'the Unfurl server' : 'YouTube'} (${e.message}). Check your connection.`); }
+    try { res = await this.fetchFn(url.toString()); } catch (e) { throw new YouTubeError(`Couldn’t reach ${this.proxied ? `the ${APP_NAME} server` : 'YouTube'} (${e.message}). Check your connection.`); }
     const body = await res.json().catch(() => null);
     if (!res.ok) throw toApiError(res.status, body, this.proxied);
     const units = COST[endpoint] ?? 1;

@@ -21,7 +21,7 @@ test('the profile (precious) and the index (rebuildable) are separate documents'
   const s = freshState();
   addToLibrary(s, 'zPzSkLHp9ws', { tags: ['a'] });
   const { profile, index } = splitState(s);
-  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'blockedChannels', 'favoriteChannels', 'following', 'history', 'library', 'prefs', 'savedSearches', 'schema']);
+  assert.deepEqual(Object.keys(profile).sort(), ['app', 'blocked', 'blockedChannels', 'favoriteChannels', 'following', 'history', 'library', 'prefs', 'savedSearches', 'schema', 'strength']);
   assert.ok(!('videos' in profile) && 'videos' in index);
   assert.ok(profile.library.zPzSkLHp9ws.snapshot.title, 'library keeps a snapshot so it survives losing the index');
   assert.ok(!JSON.stringify(profile).includes('apiKey'));

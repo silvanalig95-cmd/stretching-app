@@ -10,6 +10,16 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.4.0
+
+**Palaestra.** The app has a new name, logo and look, drawn from ancient Greece: the *palaestra* was where athletes trained. A pillar-shaped Π logo, a Greek-key (meander) border, terracotta, olive and gold in light mode and black-figure umber in dark mode, serif headings, and the Greek word for each page above it (Έκτασις for stretching, Δύναμις for strength, Υπομνήματα for the journal). The name lives in `js/brand.js`. Settings names (`UNFURL_…`), the data folder and Docker volumes are unchanged, so nothing has to be moved.
+
+**Strength.** A new tab, kept apart from the stretching side. A catalogue of over 120 exercises (dumbbells, cable/weight station, pull-up bar, loop bands, inversion trainer, bodyweight) with muscles, difficulty, how-to cues and progression ladders, extendable with your own. Describe a workout in words, or start with a few exercises and let it suggest what is missing (every idea says why), fill to a time, swap, reorder, save and reuse. Templates (runner’s strength ×3, pistol path, full body, upper/lower, push/pull/legs, core and hips) fill in with your equipment and can be saved as a plan with “next up”. A set logger where reps, weight and time are optional and suggested from your last time (next weight you own, next rung of a progression), personal bests, an unfinished session that survives a reload, and “Stretch what you trained →”. YouTube guide videos can be attached to any exercise.
+
+**One journal for both.** Separate weekly goals for stretching and strength; one calendar and 12-week chart in two colours with an All / Stretching / Strength filter; strength sessions listed with their sets in the day view and editable afterwards; sets per muscle, push against pull, personal bests and a per-exercise history; the muscle map shows stretching and strength side by side; the CSV has a type and an exercises column. Today’s reminder line shows both goals.
+
+**Library: videos first.** Adding, importing a playlist or teacher, looking at a video first and “let the app go looking” now sit in one collapsed menu under the heading, so your videos come first. It opens by itself only while you have nothing yet.
+
 ## 0.3.0
 
 **Searches look much further.**

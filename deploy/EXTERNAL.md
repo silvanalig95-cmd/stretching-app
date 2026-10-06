@@ -1,4 +1,4 @@
-# Letting friends use your Unfurl from outside your home network
+# Letting friends use your Palaestra from outside your home network
 
 Short version: **don't open a port on your router to your PC.** Use a private tunnel instead, give each friend their own login (and so their own library), and only ever let them reach it over **HTTPS**.
 
@@ -38,10 +38,10 @@ Only people you invite can even see your PC. Friends install the free Tailscale 
    tailscale serve status
    ```
    `status` prints your address, like `https://olympus.tail1234.ts.net`. (Tailscale's commands change now and then; if that one is refused, follow their "Tailscale Serve" page.)
-4. Tell Unfurl that name is fine: in `deploy\unfurl.env` set `UNFURL_ALLOWED_HOSTS=*.ts.net`, then `docker compose -f deploy/docker-compose.yml up -d --force-recreate`.
-5. **Invite each friend**: in the admin console open your PC under *Machines* → ⋯ → **Share**, and send the link. They create their own free Tailscale account, install the app, accept, and then open your `https://…ts.net` address and log in to Unfurl with the login you made them. (Check Tailscale's current free-plan limits for how many people and devices that allows.)
+4. Tell Palaestra that name is fine: in `deploy\unfurl.env` set `UNFURL_ALLOWED_HOSTS=*.ts.net`, then `docker compose -f deploy/docker-compose.yml up -d --force-recreate`.
+5. **Invite each friend**: in the admin console open your PC under *Machines* → ⋯ → **Share**, and send the link. They create their own free Tailscale account, install the app, accept, and then open your `https://…ts.net` address and log in to Palaestra with the login you made them. (Check Tailscale's current free-plan limits for how many people and devices that allows.)
 
-*Tailscale Funnel* (`tailscale funnel`) can make that address reachable by anyone on the internet without installing anything, but then your Unfurl login page is public; only do that with strong passwords.
+*Tailscale Funnel* (`tailscale funnel`) can make that address reachable by anyone on the internet without installing anything, but then your Palaestra login page is public; only do that with strong passwords.
 
 ### Option B: Cloudflare Tunnel — a normal `https://unfurl.yourdomain.com` link, still no open ports
 
@@ -50,7 +50,7 @@ Friends need to install nothing. You need a domain name (about 10 € a year) ma
 1. Add your domain to Cloudflare (free plan), then *Zero Trust → Networks → Tunnels → Create a tunnel*, and install the **cloudflared** connector it shows for Windows (it runs as a service).
 2. Add a *public hostname*: `unfurl.yourdomain.com` → service `http://localhost:80` (or `http://localhost:8765`).
 3. In `deploy\unfurl.env` set `UNFURL_ALLOWED_HOSTS=unfurl.yourdomain.com`, then recreate the container.
-4. Optional but good: put *Cloudflare Access* in front (e.g. only your friends' email addresses, one-time PIN) so strangers never even see the Unfurl login page.
+4. Optional but good: put *Cloudflare Access* in front (e.g. only your friends' email addresses, one-time PIN) so strangers never even see the Palaestra login page.
 
 ### Option C: a small rented server (about 4–6 € a month)
 
@@ -58,7 +58,7 @@ Always on, no dependence on your PC, no home network involved. Rent a small Linu
 
 ### Not recommended: opening ports on your router
 
-It means your home PC answers to the whole internet. If you ever do it, you need a dynamic-DNS name, HTTPS (Caddy), and strong per-person passwords, and you accept that anything wrong with Unfurl or Docker is reachable from everywhere. Plain `http://` over the internet is never acceptable: passwords would travel in the clear.
+It means your home PC answers to the whole internet. If you ever do it, you need a dynamic-DNS name, HTTPS (Caddy), and strong per-person passwords, and you accept that anything wrong with Palaestra or Docker is reachable from everywhere. Plain `http://` over the internet is never acceptable: passwords would travel in the clear.
 
 ## 3. Keeping it safe and fair
 
@@ -74,7 +74,7 @@ It means your home PC answers to the whole internet. If you ever do it, you need
 | What you see | Do this |
 |---|---|
 | The link doesn't open at all | Your PC is off/asleep, Docker isn't running, or (Tailscale) the friend hasn't accepted the share / isn't connected in the Tailscale app. |
-| A red banner "You opened Unfurl as … which the server doesn't accept" | That name isn't in `UNFURL_ALLOWED_HOSTS`: `*.ts.net` for Tailscale, the exact name for Cloudflare. Recreate the container after editing. |
+| A red banner "You opened Palaestra as … which the server doesn't accept" | That name isn't in `UNFURL_ALLOWED_HOSTS`: `*.ts.net` for Tailscale, the exact name for Cloudflare. Recreate the container after editing. |
 | A friend sees *your* library | They logged in as you. Each friend needs their own login in `UNFURL_USERS`. |
 | Your library is empty after adding `UNFURL_USERS` | Add `UNFURL_ADOPT_ROOT_DATA_FOR=me` (your login name) and recreate; your old data is still in the data folder. |
 | "Refusing to start: UNFURL_USERS has an entry that doesn't look like name:password" | An entry has no password, or two people aren't separated by `;`. |

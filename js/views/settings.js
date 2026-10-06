@@ -9,6 +9,7 @@ import { ANALYSIS_VERSION } from '../analyze.js';
 import { parentOf, areaPath } from '../lexicon.js';
 import { areaPicker } from './areapicker.js';
 import { toast } from '../modal.js';
+import { APP_NAME } from '../brand.js';
 import { localDate, channelBlocker, channelMatcher, FAVORITE_BOOST } from '../model.js';
 
 const HIDDEN_SHOWN = 40;
@@ -38,7 +39,7 @@ function hiddenPanel() {
   const expanded = hiddenPanel.expanded === true;
   return h('section', { class: 'panel', id: 'hidden-panel' },
     h('h2', null, 'Hidden videos & channels'),
-    h('p', { class: 'hint' }, 'Things you told Unfurl never to suggest again (“Not for me” on a video, or Hide in the Library). They stay in your library if you added them, but are never offered as a routine.'),
+    h('p', { class: 'hint' }, `Things you told ${APP_NAME} never to suggest again (“Not for me” on a video, or Hide in the Library). They stay in your library if you added them, but are never offered as a routine.`),
     !channels.length && !videos.length ? h('p', { class: 'empty-note', id: 'hidden-empty' }, 'Nothing is hidden. Use “Not for me ▾” on a suggestion to stop a video, or a whole channel, from coming back.') : null,
     channels.length ? h('div', null, h('h3', null, `Blocked channels (${channels.length})`),
       h('ul', { class: 'backups', id: 'blocked-channels' }, channels.map((c) => h('li', { 'data-channel': c.key },
@@ -120,7 +121,7 @@ export function mountSettings(root) {
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
-      if (data.app !== 'unfurl') throw new Error('This file isn’t an Unfurl backup.');
+      if (data.app !== 'unfurl') throw new Error(`This file isn’t a ${APP_NAME} backup.`);
       await store.snapshot('before-import');
       const before = state.history.length;
       mergeImport(state, data);
@@ -160,8 +161,8 @@ export function mountSettings(root) {
     h('h2', null, 'Your data'),
     store.readOnly ? h('p', { class: 'banner' }, store.notes.find((n) => /newer version/.test(n)) ?? 'Read-only.') : null,
     h('dl', { class: 'facts' },
-      h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? (store.server.dataDir ? `In files on this computer: ${store.server.dataDir}` : `In files on the Unfurl server${store.server.user ? `, in ${store.server.user}’s own folder` : ''}`) : 'In this browser only (run serve.py to keep it in files).'),
-      h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `Unfurl ${store.server.version ?? '(browser mode)'}${store.server.build ? ` (build ${store.server.build.slice(0, 7)})` : ''} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
+      h('dt', null, 'Saved'), h('dd', { id: 'data-where' }, store.mode === 'server' ? (store.server.dataDir ? `In files on this computer: ${store.server.dataDir}` : `In files on the ${APP_NAME} server${store.server.user ? `, in ${store.server.user}’s own folder` : ''}`) : 'In this browser only (run serve.py to keep it in files).'),
+      h('dt', null, 'Versions'), h('dd', { id: 'versions' }, `${APP_NAME} ${store.server.version ?? '(browser mode)'}${store.server.build ? ` (build ${store.server.build.slice(0, 7)})` : ''} · data format ${SCHEMA} · analysis v${ANALYSIS_VERSION}`),
       h('dt', null, 'Kept apart'), h('dd', null, 'Your library, history and ratings (“profile”) are saved separately from the videos the app has discovered (“index”). The index can always be rebuilt; the profile is what\'s backed up. Your API key is in a third, private file.')),
     h('p', { class: 'hint' }, 'Updating or replacing the app never touches this folder. When a new version changes how data is stored, it upgrades yours automatically and keeps a backup of the old format.'),
     backupsSlot = h('div', { id: 'backups-slot' }),

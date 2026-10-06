@@ -12,6 +12,8 @@ import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
 import { mergeVideo } from './youtube.js';
 import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
+import { defaultStrength, normalizeStrength, mergeStrength } from './strength/store.js';
+import { APP_NAME } from './brand.js';
 
 export const SCHEMA = 2;
 export const MAX_VIDEOS = 2000;
@@ -23,7 +25,8 @@ export const DEFAULT_PREFS = {
   thoroughness: 'balanced',   // how wide a web search goes: quick | balanced | thorough | exhaustive (see THOROUGHNESS)
   autoLibrary: false,  // true: everything a search finds is added to your library automatically
   focus: [],           // your standing tight / weak spots: [{id, mode}]
-  weeklyGoal: 3,       // routines per week you aim for in the training log (0 = no goal)
+  weeklyGoal: 3,       // stretching routines per week you aim for in the training log (0 = no goal)
+  strengthGoal: 0,     // strength sessions per week you aim for (0 = no goal; switched on when you set up Strength)
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
   showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
 };
@@ -38,6 +41,7 @@ export function emptyState() {
     history: [],     // every routine you've done, with your "did it help?" answers
     blocked: [],     // video ids you never want to see again
     blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
+    strength: defaultStrength(), // equipment, own exercises, saved workouts, plans, guide videos (see strength/store.js)
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
@@ -53,7 +57,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, strength: state.strength, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -127,7 +131,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
   }
   if (p && (p.schema ?? 1) > SCHEMA) {
     readOnly = true;
-    notes.push(`Your data was saved by a newer version of Unfurl (data format ${p.schema}; this version understands ${SCHEMA}). It is shown read-only so nothing gets damaged. Please update the app.`);
+    notes.push(`Your data was saved by a newer version of ${APP_NAME} (data format ${p.schema}; this version understands ${SCHEMA}). It is shown read-only so nothing gets damaged. Please update the app.`);
   } else if (p && (p.schema ?? 1) < SCHEMA) {
     p = migrateProfile(p);
     notes.push('Upgraded your data to the current format (a backup of the old one was kept).');
@@ -141,6 +145,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
+    s.strength = normalizeStrength(p.strength);
     if (Array.isArray(p.following)) s.following = p.following;
     if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
@@ -372,7 +377,7 @@ export function logSession(state, entry, { library = true } = {}) {
     videoId: entry.videoId ?? '',
     title: v?.title ?? (manual ? String(entry.title ?? '').trim().slice(0, 120) || 'Something I did' : undefined), channel: v?.channel,
     durationSec: v?.durationSec ?? (minutes ? minutes * 60 : null),   // kept so the minutes in your training log don't change if the video does
-    ...(manual ? { kind: 'manual' } : {}),
+    ...(manual ? { kind: 'manual', ...(['stretch', 'strength', 'other'].includes(entry.category) ? { category: entry.category } : {}) } : {}),
     areas: entry.areas ?? [],
     ratings: entry.ratings ?? {},
     intensity: entry.intensity ?? null,
@@ -400,7 +405,7 @@ export function updateSession(state, id, patch, { library = true } = {}) {
   if ('note' in patch) rec.note = String(patch.note ?? '').slice(0, 500);
   if ('title' in patch && rec.kind === 'manual') rec.title = String(patch.title ?? '').trim().slice(0, 120) || rec.title;
   if ('minutes' in patch && rec.kind === 'manual') rec.durationSec = Math.max(0, Math.min(600, Math.round(Number(patch.minutes) || 0))) * 60 || null;
-  if (rec.kind !== 'manual') {
+  if (rec.videoId) {
     refreshMine(state, rec.videoId);
     if (rec.repeat === 'no') { if (!wasNo) { blockVideo(state, rec.videoId); removeFromLibrary(state, rec.videoId); } }
     else if (library) addToLibrary(state, rec.videoId);
@@ -501,6 +506,7 @@ export function mergeImport(state, incoming) {
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);
   state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));
+  mergeStrength(state, inc.strength);
   for (const f of inc.following) followChannel(state, f);
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;

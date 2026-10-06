@@ -1,5 +1,5 @@
 @echo off
-rem Makes Unfurl start by itself (minimised) whenever you sign in to Windows, so other devices can reach it
+rem Makes Palaestra start by itself (minimised) whenever you sign in to Windows, so other devices can reach it
 rem without you doing anything. Double-click once. No administrator rights needed.
 rem To undo: delete the file  %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Unfurl.bat
 setlocal
@@ -16,7 +16,7 @@ if errorlevel 1 (
   echo Could not write to the Startup folder: %STARTUP%
 ) else (
   echo.
-  echo Done. Unfurl will start minimised each time you sign in.
+  echo Done. Palaestra will start minimised each time you sign in.
   echo To undo, delete: %STARTUP%\Unfurl.bat
 )
 pause

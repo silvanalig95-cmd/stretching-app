@@ -7,9 +7,11 @@ import { toast } from './modal.js';
 import { mountToday, unmountToday } from './views/today.js';
 import { mountLibrary } from './views/library.js';
 import { mountJournal } from './views/journal.js';
+import { mountStrength } from './views/strength.js';
+import { APP_NAME, SECTION_GREEK } from './brand.js';
 import { mountSettings } from './views/settings.js';
 
-const TABS = [['today', 'Today', mountToday], ['library', 'Library', mountLibrary], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
+const TABS = [['today', 'Stretch', mountToday], ['strength', 'Strength', mountStrength], ['library', 'Library', mountLibrary], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
 let mounted = null;
 
 function show(tab) {
@@ -21,7 +23,9 @@ function show(tab) {
   const main = document.getElementById('main');
   main.replaceChildren();
   TABS.find(([t]) => t === tab)[2](main);
-  document.title = `${TABS.find(([t]) => t === tab)[1]} · Unfurl`;
+  document.title = `${TABS.find(([t]) => t === tab)[1]} · ${APP_NAME}`;
+  const kicker = document.getElementById('kicker');
+  if (kicker) kicker.replaceChildren(h('span', { class: 'greek' }, SECTION_GREEK[tab] ?? ''), h('span', { class: 'latin' }, ` · ${TABS.find(([t]) => t === tab)[1]}`));
 }
 
 const tabFromHash = () => (TABS.some(([t]) => t === location.hash.slice(1)) ? location.hash.slice(1) : 'today');
@@ -42,7 +46,7 @@ function watchForUpdates(store) {
     if (!now?.build || now.build === store.server.build) return;
     shown.value = true;
     document.getElementById('banner').append(h('p', { class: 'banner update', role: 'status', id: 'update-banner' },
-      `A new version of Unfurl is ready (${now.version}). `,
+      `A new version of ${APP_NAME} is ready (${now.version}). `,
       h('button', { class: 'link', type: 'button', id: 'update-reload', onclick: async () => {
         if (!(await store.flushReliably())) { toast('The latest changes aren’t saved on the server yet, so I haven’t reloaded. Try again in a moment.', 'error'); return; }
         location.reload();
@@ -68,12 +72,12 @@ async function main() {
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
 
   show(tabFromHash());
-  const where = store.mode === 'server' ? `Unfurl ${store.server.version}${store.server.build ? ` · build ${store.server.build.slice(0, 7)}` : ''}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
+  const where = store.mode === 'server' ? `${APP_NAME} ${store.server.version}${store.server.build ? ` · build ${store.server.build.slice(0, 7)}` : ''}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
   document.getElementById('storage-note').textContent = where;
   if (store.hostProblem) {
     const { host, allowed } = store.hostProblem;
     document.getElementById('banner').replaceChildren(h('p', { class: 'banner', role: 'alert', id: 'host-banner' },
-      `You opened Unfurl as “${host || 'this address'}”, which the server doesn’t accept, so nothing you do here can be saved on the server. `,
+      `You opened ${APP_NAME} as “${host || 'this address'}”, which the server doesn’t accept, so nothing you do here can be saved on the server. `,
       allowed.length ? `Open it with one of these instead: ${allowed.join(', ')}. ` : '',
       'Or add that name to UNFURL_ALLOWED_HOSTS in the server’s settings (network-settings.bat or unfurl.env), then restart it.'));
   } else if (store.readOnly) {

@@ -26,7 +26,7 @@ export const PLAYER_ERRORS = {
   100: 'This video was removed or made private.',
   101: 'The uploader doesn’t allow this video to be embedded.',
   150: 'The uploader doesn’t allow this video to be embedded.',
-  153: 'YouTube refused to embed the video. Open Unfurl at http://localhost:8765 (not as a file), or watch it on YouTube.',
+  153: 'YouTube refused to embed the video. Open the app at http://localhost:8765 (not as a file), or watch it on YouTube.',
 };
 
 /**

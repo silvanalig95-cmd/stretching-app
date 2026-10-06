@@ -6,6 +6,7 @@
 // your history never includes it.
 
 import { loadState, splitState, emptyState, mergeImport, SCHEMA } from './state.js';
+import { APP_NAME } from './brand.js';
 
 const HEADERS = { 'X-Unfurl': '1' }; // custom header => other websites can't talk to the local server
 
@@ -69,7 +70,7 @@ export class Store {
     this.state = loaded.state;
     this.readOnly = loaded.readOnly || unreadable || !!this.hostProblem;
     this.notes = [...this.notes, ...loaded.notes];
-    if (unreadable) this.notes.push('Couldn’t read your saved data from the Unfurl server just now. To be safe nothing will be saved this session, so your real data can’t be overwritten. Reload the page (or restart serve.py) and try again.');
+    if (unreadable) this.notes.push(`Couldn’t read your saved data from the ${APP_NAME} server just now. To be safe nothing will be saved this session, so your real data can’t be overwritten. Reload the page (or restart serve.py) and try again.`);
     if (this.recoveredFrom) this.notes.push(`Your data file was damaged, so it was restored from the backup “${this.recoveredFrom}”. The damaged file was kept.`);
     this.config = { apiKey: '', ...(config ?? {}) };
     if (loaded.changed && !this.readOnly) await this.#flushNow(true);
@@ -167,7 +168,7 @@ export class Store {
         this.rev = theirs?.rev ?? null;
         if (theirs?.data && theirs.data.schema > SCHEMA) {   // written by a newer app: don't touch it
           this.readOnly = true;
-          this.notes.push('Your data was changed by a newer version of Unfurl, so this page can no longer save. Reload it.');
+          this.notes.push(`Your data was changed by a newer version of ${APP_NAME}, so this page can no longer save. Reload it.`);
           return this.#failed('the data was changed by a newer version');
         }
         if (theirs?.data) { mergeImport(this.state, { profile: theirs.data, index: null }); this.#merged(); }

@@ -1,5 +1,5 @@
 @echo off
-rem Brings this folder's Docker recipe up to date from GitHub and rebuilds the Unfurl container.
+rem Brings this folder's Docker recipe up to date from GitHub and rebuilds the Palaestra container.
 rem Needed only now and then, when the container recipe itself changed (I will say so). The app's own updates arrive by themselves.
 rem Your settings (deploy\unfurl.env) and your data are NOT touched. Double-click it with Docker Desktop running.
 setlocal
@@ -29,7 +29,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo Rebuilding the Unfurl container. This takes a few minutes the first time...
+echo Rebuilding the Palaestra container. This takes a few minutes the first time...
 docker compose -f deploy/docker-compose.yml up -d --build
 if errorlevel 1 (
   echo.

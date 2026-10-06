@@ -11,6 +11,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { handle as fakeApi, fault, VIDEOS, GONE, chId, PLAYLIST_ID } from '../helpers/fake-youtube.js';
+import { BUILT_IN } from '../../js/strength/catalog.js';
+import { APP_NAME } from '../../js/brand.js';
 
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
@@ -101,7 +103,10 @@ const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.p
 const browser = await chromium.launch();
 const libCount = (page) => U(page, () => Object.keys(window.__unfurl.state.library).length);
 const readJson = (dir, name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-const goto = async (page, tab) => { await page.click(`nav a[data-tab=${tab}]`); };
+const goto = async (page, tab) => {
+  await page.click(`nav a[data-tab=${tab}]`);
+  if (tab === 'library') await page.evaluate(() => { const d = document.getElementById('add-menu'); if (d) d.open = true; });   // the add menu is collapsed by default
+};
 
 // ================================================================== World 1: first run, no key
 console.log('\nWorld 1: first run, no YouTube key');
@@ -638,6 +643,21 @@ console.log('\nWorld 1: first run, no YouTube key');
     eq(await libCount(page), n - 1);
     await page.click('#tab-discovered');
     ok(await page.locator('.row-card[data-video="ABCDEFGHIJK"]').count() === 1, 'removed videos remain in the index (Discovered)');
+  });
+
+  await step('Library: your videos come first; adding and importing sit in one collapsed menu under the heading', async () => {
+    await goto(page, 'today');
+    await page.click('nav a[data-tab=library]');   // not the helper, which opens the menu
+    eq(await page.locator('#add-menu').getAttribute('open'), null, 'collapsed');
+    ok(await page.locator('#lib-list').isVisible(), 'the list is right there');
+    ok(!(await page.locator('#add-text').isVisible()), 'the add box is tucked away');
+    const menu = await page.locator('#add-menu').boundingBox();
+    ok(menu.height < 70, `the menu is a single line (${Math.round(menu.height)}px)`);
+    await page.click('#add-menu > summary');
+    ok(await page.locator('#add-text').isVisible(), 'one click opens it');
+    await page.click('#add-menu > summary');
+    await shot(page, '29-library-videos-first');
+    await goto(page, 'today');
   });
 
   await step('My body: standing spots in Settings drive "Use my usual spots" and the Journal', async () => {
@@ -1264,7 +1284,7 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
     ok((await page.locator('#storage-note').innerText()).includes('signed in as me'), await page.locator('#storage-note').innerText());
     await goto(page, 'settings');
     ok((await page.locator('#key-status').innerText()).includes('This server provides the YouTube connection'), await page.locator('#key-status').innerText());
-    ok((await page.locator('#data-where').innerText()).includes('on the Unfurl server'), await page.locator('#data-where').innerText());
+    ok((await page.locator('#data-where').innerText()).includes(`on the ${APP_NAME} server`), await page.locator('#data-where').innerText());
     ok((await page.locator('.quota').innerText()).includes('of 1,000 units'), `the person's own share is shown: ${await page.locator('.quota').innerText()}`);
     await goto(page, 'today');
   });
@@ -1330,7 +1350,7 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
     proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r));
     proc = await launch('build-B');          // what the updater does: same data folder, new build
     await page.waitForSelector('#update-banner', { timeout: 15000 });
-    ok((await page.locator('#update-banner').innerText()).includes('new version of Unfurl is ready'), 'banner text');
+    ok((await page.locator('#update-banner').innerText()).includes(`new version of ${APP_NAME} is ready`), 'banner text');
     await shot(page, '21-update-banner');
     await Promise.all([page.waitForEvent('load'), page.click('#update-reload')]);   // it saves first, then reloads
     await page.waitForSelector('#nav a');
@@ -1342,6 +1362,269 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
   });
 
   await page.context_.close(); proc.kill(); fakeYt.close();
+}
+
+// ================================================================== World 6: strength
+console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Journal)');
+{
+  const server = await startServer();
+  const page = await newPage(browser, server);
+  const needsOf = (id) => BUILT_IN[id]?.needs ?? [];
+  const clearToasts = () => page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+
+  await step('Strength tab: asks what you train with; the home-gym preset sets it up and switches on a strength goal', async () => {
+    await goto(page, 'strength');
+    await page.waitForSelector('#strength-setup-note');
+    await page.click('#use-home-gym');
+    await page.waitForFunction(() => window.__unfurl.state.strength.equipment.configured);
+    eq(await page.locator('#strength-setup-note').count(), 0, 'the nudge goes away');
+    ok((await U(page, () => window.__unfurl.state.strength.equipment.have)).includes('cable_station'), 'cable station ticked');
+    eq(await U(page, () => window.__unfurl.state.prefs.strengthGoal), 3, 'a weekly strength goal of 3');
+  });
+
+  await step('Describe a workout: understood, built only from what you have and allow, opened in the builder', async () => {
+    await page.fill('#describe', '40 minutes upper body with dumbbells only, no overhead work, for running');
+    await page.click('#describe-go');
+    await page.waitForSelector('#editor');
+    const interp = (await page.locator('#ed-interpretation').innerText()).toLowerCase();
+    ok(interp.includes('upper body') && interp.includes('40 minutes') && interp.includes('dumbbell') && interp.includes('overhead'), interp);
+    const ids = await U(page, () => window.__unfurl.ui.strength.editor.items.map((i) => i.exId));
+    ok(ids.length >= 4, `${ids.length} exercises: ${ids}`);
+    ok(ids.every((id) => needsOf(id).every((n) => n === 'dumbbell')), `only dumbbells and bodyweight: ${ids}`);
+    ok(ids.every((id) => !BUILT_IN[id].avoid.includes('overhead')), 'nothing overhead');
+    ok((await page.locator('#ed-summary').innerText()).includes('min'), 'a time estimate');
+    await shot(page, '30-strength-builder');
+    await page.fill('#ed-name', 'Upper dumbbells');
+    await page.click('#ed-save');
+    await page.waitForSelector('#my-workouts [data-workout]');
+    eq(await page.locator('#my-workouts [data-workout]').count(), 1);
+  });
+
+  await step('Build from a few exercises you pick, ask for ideas that fit (each says why), fill to a time, move along a progression, keep main lifts', async () => {
+    await page.click('#new-workout');
+    await page.waitForSelector('#editor');
+    for (const [q, id] of [['pull-up', 'pullup'], ['seated cable row', 'seated_cable_row'], ['bench press', 'bench_press']]) {
+      await page.click('#ed-add');
+      await page.fill('#picker-list >> xpath=preceding-sibling::*[1]//input[@type="search"]', q);
+      await page.click(`.picker-row[data-ex="${id}"] [data-action=pick]`);
+      await page.click('#picker-done');
+    }
+    eq(await page.locator('.ed-item').count(), 3);
+    await page.click('#ed-suggest');
+    await page.waitForSelector('.sug-list li');
+    ok(await page.locator('.sug-list li').count() >= 3, 'several ideas');
+    ok((await page.locator('.sug-list li .why').first().innerText()).length > 8, 'each says why');
+    ok((await page.locator('#ed-summary').innerText()).includes('still missing'), await page.locator('#ed-summary').innerText());
+    await page.locator('.sug-list li [data-action=add-suggestion]').first().click();
+    eq(await page.locator('.ed-item').count(), 4);
+    await page.click('#ed-fill');
+    await page.waitForFunction(() => document.querySelectorAll('.ed-item').length >= 6);
+    ok((await U(page, () => window.__unfurl.ui.strength.editor.items.map((i) => i.exId))).every((id, i, a) => a.indexOf(id) === i), 'no duplicates');
+    await page.locator('.ed-item[data-ex=pullup] [data-action=easier]').click();
+    ok(await page.locator('.ed-item[data-ex=pullup_jumping]').count() === 1, 'an easier rung of the pull-up progression');
+    await page.locator('.ed-item[data-ex=pullup_jumping] [data-action=harder]').click();
+    await page.locator('.ed-item[data-ex=pullup] [data-action=anchor]').click();
+    ok(await page.locator('.ed-item[data-ex=pullup] .badge', { hasText: 'stays' }).count() === 1, 'marked as a main lift');
+    await page.fill('#ed-name', 'Upper A');
+    await page.click('#ed-save');
+    await page.waitForSelector('[data-workout]');
+    eq(await U(page, () => window.__unfurl.state.strength.workouts.map((w) => w.name).sort()), ['Upper A', 'Upper dumbbells']);
+    await clearToasts();
+  });
+
+  await step('Guide videos: attach a YouTube link to an exercise, watch it, and remove it again', async () => {
+    await page.click('#st-exercises');
+    await page.fill('#ex-search', 'plank');
+    await page.click('.ex-card[data-ex=plank] [data-action=guides]');
+    await page.waitForSelector('#guide-url');
+    await page.fill('#guide-url', 'https://youtu.be/dQw4w9WgXcQ');
+    await page.click('#guide-add');
+    await page.waitForSelector('#guide-list [data-guide="dQw4w9WgXcQ"]');
+    ok((await page.locator('#guide-list').innerText()).includes('Pasted video about hips'), 'title read from YouTube');
+    await page.waitForSelector('iframe[data-video="dQw4w9WgXcQ"]');
+    eq(await U(page, () => window.__unfurl.state.strength.guides.plank.length), 1);
+    ok((await page.locator('.guides a:has-text("Search YouTube")').getAttribute('href')).includes('how%20to%20Plank'), 'and a link to search YouTube');
+    await page.fill('#guide-url', 'https://example.com/not-a-video');
+    await page.click('#guide-add');
+    ok((await page.locator('#guide-status').innerText()).includes('not a link to a single YouTube video'), 'refuses what is not a video');
+    await shot(page, '31-guide-videos');
+    await page.click('.modal header .icon-btn');
+    ok((await page.locator('.ex-card[data-ex=plank] [data-action=guides]').innerText()).includes('▶ 1'), 'the button shows how many');
+    await page.click('.ex-card[data-ex=plank] [data-action=guides]');
+    await page.click('#guide-list [data-action=remove-guide]');
+    eq(await U(page, () => (window.__unfurl.state.strength.guides.plank ?? []).length), 0);
+    await page.fill('#guide-url', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    await page.click('#guide-add');
+    await page.waitForFunction(() => window.__unfurl.state.strength.guides.plank?.length === 1);
+    await page.click('.modal header .icon-btn');
+    await clearToasts();
+  });
+
+  await step('Training: sets are optional; a tap accepts the suggested numbers; weight and reps can be typed; exercises can be added on the way', async () => {
+    await page.click('#st-workouts');
+    await page.locator('[data-workout]', { hasText: 'Upper A' }).locator('[data-action=start-workout]').click();
+    await page.waitForSelector('#session');
+    const row = page.locator('.session-card[data-ex=seated_cable_row] [data-set="0"]');
+    await row.locator('[data-field=reps]').fill('10');
+    await row.locator('[data-field=weight]').fill('40');
+    await row.locator('[data-action=tick]').click();
+    eq(await row.locator('[data-action=tick]').getAttribute('aria-pressed'), 'true');
+    const pull = page.locator('.session-card[data-ex=pullup] [data-set="0"]');
+    await pull.locator('[data-action=tick]').click();
+    ok((await pull.locator('[data-field=reps]').inputValue()) !== '', 'a tap with nothing typed fills in the suggestion');
+    await page.click('#s-add');
+    await page.fill('.picker input[type=search]', 'plank');
+    await page.click('.picker-row[data-ex=plank] [data-action=pick]');
+    await page.click('#picker-done');
+    ok((await page.locator('.session-card[data-ex=plank] [data-action=guides]').innerText()).includes('▶ 1'), 'the guide video is one tap away during the session');
+    await shot(page, '32-strength-session');
+    await page.click('#s-finish');
+    await page.waitForSelector('#session-done');
+    ok((await page.locator('#session-done').innerText()).includes('Logged'), 'logged');
+    const rec = await U(page, () => window.__unfurl.state.history.at(-1));
+    eq([rec.kind, rec.videoId, rec.title], ['strength', '', 'Upper A']);
+    const rowed = rec.exercises.find((x) => x.exId === 'seated_cable_row');
+    eq(rowed.sets, [{ reps: 10, weight: 40 }]);
+    ok(rec.exercises.some((x) => x.exId === 'plank'), 'the exercise added on the way is in it');
+    ok(rec.areas.length >= 3, `areas for the muscle map: ${JSON.stringify(rec.areas.map((a) => a.id))}`);
+    eq(await page.locator('#pbs').count(), 0, 'the first time is a start, not a record');
+  });
+
+  await step('Next time it remembers: shows last time, suggests the next step, and celebrates a personal best; hands you to the stretching side', async () => {
+    await page.click('#done-close');
+    await page.locator('[data-workout]', { hasText: 'Upper A' }).locator('[data-action=start-workout]').click();
+    await page.waitForSelector('#session');
+    const note = (await page.locator('.session-card[data-ex=seated_cable_row] .next-note').innerText());
+    ok(note.includes('Last time') && note.includes('40 kg'), note);
+    const row = page.locator('.session-card[data-ex=seated_cable_row] [data-set="0"]');
+    await row.locator('[data-field=reps]').fill('12');
+    await row.locator('[data-field=weight]').fill('40');
+    await row.locator('[data-action=tick]').click();
+    await page.click('#s-finish');
+    await page.waitForSelector('#session-done');
+    ok((await page.locator('#pbs').innerText()).includes('Seated cable row'), 'a personal best is called out');
+    await shot(page, '33-strength-logged');
+    await page.click('#stretch-trained');
+    await page.waitForFunction(() => location.hash === '#today');
+    ok(await U(page, () => window.__unfurl.ui.filters.areas.length) >= 1, 'the muscles you trained are filled in on the stretching side');
+    ok((await page.locator('#filters').innerText()).length > 20, 'and its filters show them');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy);
+    await clearToasts();
+  });
+
+  await step('Journal: one log for both, with separate goals, a filter, strength stats and the muscle map for both', async () => {
+    await goto(page, 'journal');
+    await page.waitForSelector('#training-log');
+    ok((await page.locator('#tile-strength').innerText()).startsWith('2 / 3'), await page.locator('#tile-strength').innerText());
+    ok((await page.locator('#tile-week').innerText()).startsWith('0 / 3'), 'stretching has its own goal');
+    ok(await page.locator('#strength-goal').count() === 1 && await page.locator('#weekly-goal').count() === 1, 'two goals');
+    eq(await page.locator('#day-entries .day-entry.strength').count(), 2, 'both sessions listed today, with their exercises');
+    ok((await page.locator('#day-entries .day-entry.strength').first().textContent()).includes('Seated cable row'), 'the exercises and sets are there');
+    await page.click('.kinds [data-kind=stretch]');
+    eq(await page.locator('#day-entries .day-entry').count(), 0, 'the filter hides strength');
+    await page.click('.kinds [data-kind=strength]');
+    eq(await page.locator('#day-entries .day-entry').count(), 2);
+    await page.click('.kinds [data-kind=all]');
+    await page.waitForSelector('#strength-stats');
+    ok(await page.locator('#strength-stats .heat-row').count() >= 3, 'sets per muscle');
+    ok((await page.locator('#push-pull').innerText()).includes('pulling'), 'push against pull');
+    await page.selectOption('#ex-progress', 'seated_cable_row');
+    ok((await page.locator('#ex-progress-detail').innerText()).includes('12'), 'how the exercise has gone');
+    ok(await page.locator('#heatmap .bar.split').count() >= 1, 'the muscle map has both colours');
+    ok(await page.locator('[data-milestone="strength:1"]').count() === 1, 'a first-strength-session achievement');
+    await shot(page, '34-journal-both');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#log-csv')]);
+    const csv = fs.readFileSync(await dl.path(), 'utf8');
+    ok(csv.includes(',strength,') && csv.includes('Seated cable row: 12 @ 40 kg'.replace('12 @ 40 kg', '1×12 @ 40 kg')), csv.split('\r\n')[1]);
+    // edit a logged strength session, then take it back
+    await page.locator('#day-entries .day-entry.strength').first().locator('[data-action=edit-strength]').click();
+    await page.waitForSelector('#session');
+    await page.locator('.session-card[data-ex=seated_cable_row] [data-set="0"] [data-field=weight]').fill('42.5');
+    await page.click('#s-finish');
+    await page.waitForSelector('#session-done');
+    eq(await U(page, () => window.__unfurl.state.history.filter((h) => h.kind === 'strength').length), 2, 'edited in place, not duplicated');
+    await clearToasts();
+  });
+
+  await step('Your own exercises join the catalogue; one tap adds an exercise to a new workout; it can be deleted', async () => {
+    await page.click('nav a[data-tab=strength]');
+    await page.click('#st-exercises');
+    await page.fill('#ex-search', 'sled');
+    await page.click('#new-exercise');
+    await page.fill('#nx-name', 'Sled push');
+    await page.click('#nx-primary [data-value=quads]');
+    await page.click('#nx-secondary [data-value=glutes]');
+    await page.click('#nx-save');
+    await page.waitForSelector('.ex-card[data-ex^="my_sled_push"]');
+    ok((await page.locator('.ex-card[data-ex^="my_sled_push"] .badge.new').innerText()).includes('yours'), 'marked as yours');
+    eq(await U(page, () => window.__unfurl.state.strength.custom.map((e) => e.name)), ['Sled push']);
+    await page.locator('.ex-card[data-ex^="my_sled_push"] [data-action=add-ex]').click();
+    ok(await page.locator('#st-editor').count() === 1, 'a workout draft is open');
+    await page.locator('.ex-card[data-ex^="my_sled_push"] [data-action=delete-ex]').click();
+    await page.waitForFunction(() => window.__unfurl.state.strength.custom.length === 0);
+    await page.click('#st-editor');
+    await page.click('#ed-discard');
+    await clearToasts();
+  });
+
+  await step('Templates fill in with your equipment; one tap saves a whole plan, and "next up" says what to do', async () => {
+    await page.click('#st-workouts');
+    await page.locator('[data-template=runner_abc] [data-action=use-template]').click();
+    await page.waitForSelector('#plans-page [data-plan]');
+    eq(await page.locator('.plan-card .plan-days li').count(), 3, 'three workouts in the plan');
+    ok(await page.locator('.plan-card .plan-days li.next .badge', { hasText: 'next' }).count() === 1, 'says which is next');
+    await page.locator('.plan-card [data-action=start-next]').click();
+    await page.waitForSelector('#session');
+    const ids = await U(page, () => window.__unfurl.ui.strength.session.items.map((i) => i.exId));
+    eq(ids, ['pullup', 'seated_cable_row', 'bench_press', 'lat_pulldown', 'reverse_fly_machine', 'db_lateral_raise', 'plank', 'side_plank', 'hip_hike'], 'day A of the template, with your equipment');
+    await page.click('#s-cancel');
+    await page.waitForSelector('#workouts-page');
+    eq(await U(page, () => window.__unfurl.state.strength.workouts.length), 5, '2 of mine and 3 from the template');
+  });
+
+  await step('Setup changes what is suggested; an unfinished session survives a reload', async () => {
+    await page.click('#st-setup');
+    await page.uncheck('#eq-cable_station');
+    await page.uncheck('#eq-bench');
+    await page.fill('#su-bells', '5, 10, 15');
+    await page.click('#su-save');
+    eq(await U(page, () => window.__unfurl.state.strength.equipment.dumbbellKg), [5, 10, 15]);
+    await page.click('#st-workouts');
+    await page.fill('#describe', 'upper body');
+    await page.click('#describe-go');
+    await page.waitForSelector('#editor');
+    const ids = await U(page, () => window.__unfurl.ui.strength.editor.items.map((i) => i.exId));
+    ok(ids.length >= 3 && ids.every((id) => !needsOf(id).includes('cable_station') && !needsOf(id).includes('bench')), `no station or bench exercises: ${ids}`);
+    await page.click('#ed-discard');
+    // a session in progress is kept across a reload
+    await page.click('#empty-session');
+    await page.click('#s-add');
+    await page.fill('.picker input[type=search]', 'plank');
+    await page.click('.picker-row[data-ex=plank] [data-action=pick]');
+    await page.click('#picker-done');
+    await page.locator('.session-card[data-ex=plank] [data-action=tick]').first().click();
+    await page.waitForTimeout(200);
+    await page.reload(); await page.waitForSelector('#nav a');
+    await page.click('nav a[data-tab=strength]');
+    await page.waitForSelector('#session');
+    ok(await page.locator('.session-card[data-ex=plank]').count() === 1, 'the session is back');
+    await page.click('#s-cancel');
+    await page.waitForSelector('#workouts-page');
+  });
+
+  await step('Strength data is saved with the profile and survives a reload', async () => {
+    await page.waitForTimeout(700);
+    const snap = () => U(page, () => ({ w: window.__unfurl.state.strength.workouts.length, p: window.__unfurl.state.strength.plans.length, g: Object.keys(window.__unfurl.state.strength.guides).length, h: window.__unfurl.state.history.filter((x) => x.kind === 'strength').length, c: window.__unfurl.state.strength.equipment.configured }));
+    const before = await snap();
+    await page.reload(); await page.waitForSelector('#nav a');
+    eq(await snap(), before);
+    eq(before.w, 5); eq(before.p, 1); eq(before.h, 2);
+    const onDisk = readJson(server.dataDir, 'profile.json');
+    ok(onDisk.strength.workouts.length === 5 && onDisk.strength.guides.plank.length === 1, 'in profile.json');
+  });
+
+  await page.context_.close();
+  server.stop();
 }
 
 // ------------------------------------------------------------------ report

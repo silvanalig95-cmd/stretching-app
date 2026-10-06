@@ -268,7 +268,7 @@ export function mountLibrary(root) {
     const empty = {
       mine: h('div', { class: 'empty-note' }, h('strong', null, 'Your library is empty, and it’s yours to build.'),
         h('ul', null,
-          h('li', null, 'Paste links, a playlist or a teacher into the box above.'),
+          h('li', null, 'Open “＋ Add videos” above and paste links, a playlist or a teacher.'),
           h('li', null, 'Press “＋ Add to library” on anything you like in Today or in ', h('button', { class: 'link', type: 'button', onclick: () => { lf.tab = 'suggestions'; rerender(); } }, 'Suggestions'), '.'),
           h('li', null, 'Routines you finish are added automatically.'))),
       discovered: h('p', { class: 'empty-note' }, 'Nothing here yet. Web searches and teacher imports collect their finds here; promote the ones you like to your library.'),
@@ -343,16 +343,21 @@ export function mountLibrary(root) {
         h('button', { class: 'btn small ghost', type: 'button', onclick: () => { editing = null; renderList(); } }, 'Cancel')));
   }
 
+  // Your videos come first. Adding, importing and looking at a video sit in one menu under the heading (open by itself
+  // only while there is nothing to show yet).
+  const nothingYet = !buckets().mine.length && !buckets().discovered.length;
+  const addMenu = h('details', { class: 'panel add-menu', id: 'add-menu', open: nothingYet },
+    h('summary', null, '＋ Add videos', h('small', { class: 'muted' }, ' · paste links, import a playlist or a teacher, look at a video first, or let the app go looking')),
+    h('div', { class: 'two add-menu-body' },
+      h('div', null, h('h3', null, 'Add to your library'), addForm, followSlot),
+      h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
+        h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).'),
+        missBtn,
+        h('p', { class: 'hint' }, 'What viewers say in the comments is where most of the muscle evidence comes from. Imports read them automatically; this catches up on anything that has none yet (1 quota unit per video, up to 300 a press, your library first).'))),
+    analyzePanel({ onChange: () => rerender() }));
+
   fill(root,
-    h('h1', null, 'Library'), heading,
-    h('section', { class: 'panel' },
-      h('div', { class: 'two' },
-        h('div', null, h('h3', null, 'Add to your library'), addForm, followSlot),
-        h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
-          h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).'),
-          missBtn,
-          h('p', { class: 'hint' }, 'What viewers say in the comments is where most of the muscle evidence comes from. Imports read them automatically; this catches up on anything that has none yet (1 quota unit per video, up to 300 a press, your library first).')))),
-    analyzePanel({ onChange: () => rerender() }),
+    h('h1', null, 'Library'), heading, addMenu,
     tabsSlot, covSlot, h('section', { class: 'panel' }, controls, tips, interpSlot, savedSlot, tagSlot), listSlot);
   rerender();
 }
