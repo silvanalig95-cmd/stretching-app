@@ -17,13 +17,14 @@ Nothing here is exposed to the internet. Don't set up port forwarding on your ro
 ## 1. This PC only
 
 1. **Install Python.** Go to <https://www.python.org/downloads/>, press the big yellow *Download Python* button, run the installer, and **tick "Add python.exe to PATH"** on the first screen before pressing *Install Now*.
-2. **Get the app.** Easiest way to also get updates later: install **Git for Windows** (<https://git-scm.com/download/win>, accept all defaults), then open **PowerShell** (Start menu → type `powershell`) and run:
-   ```powershell
-   cd C:\
-   git clone https://github.com/silvanalig95-cmd/stretching-app.git Unfurl
-   ```
-   This makes `C:\Unfurl` (keep it outside OneDrive-synced folders).
-   *No Git?* Download <https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip>, right-click → *Extract All…* → `C:\Unfurl`. Updates are then manual (download again; your data isn't in that folder, so it's safe).
+2. **Get the app.** Pick one of these two ways:
+   * **A. ZIP file (no extra software, simplest to start).** Download <https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip>, right-click the file → *Extract All…* → extract into `C:\`. You get a folder called `stretching-app-claude-sharp-cray-hko5xu` (Windows sometimes nests it one level deeper; the right folder is the one that contains `start.bat`). Rename it to `Unfurl` if you like. Updates are manual: download the ZIP again and replace the folder (your data isn't in that folder, so it's safe).
+   * **B. Git (needed for easy updates in steps 2 and 3).** In PowerShell run `winget install --id Git.Git -e` (or install **Git for Windows** from <https://git-scm.com/download/win> with all the defaults). **Then close PowerShell and open a new window**: an already-open window doesn't know about newly installed programs, and still says *"git is not recognized"*. Then:
+     ```powershell
+     cd C:\
+     git clone https://github.com/silvanalig95-cmd/stretching-app.git Unfurl
+     ```
+   Either way, keep the folder outside OneDrive-synced folders. The rest of this guide calls it `C:\Unfurl`.
 3. **Start it.** Open `C:\Unfurl` and double-click **`start.bat`**. Your browser opens <http://localhost:8765>.
 4. **Add your YouTube key:** *Settings* → paste → *Save*.
 
@@ -112,6 +113,7 @@ If you later move to an always-on Linux machine, the same settings file and the 
 
 | What you see | Do this |
 |---|---|
+| `git` "is not recognized" | Git isn't installed yet, or this PowerShell window was opened before you installed it: install it (step 1.2 B), then **close and reopen PowerShell**. Or use the ZIP instead (step 1.2 A). |
 | "Python was not found" | Re-run the Python installer → *Modify* / *Repair*, and make sure *Add python.exe to PATH* is ticked. |
 | Window says *Refusing to listen without a login* | The password line in `network-settings.bat` is missing or empty. |
 | Other devices can't connect at all | Firewall rule (2.3), network profile is *Private*, the PC isn't asleep, and you typed the right address. Test on the PC itself with <http://localhost:8765> first. |
