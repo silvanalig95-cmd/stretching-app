@@ -1,14 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <symbol id="mark" viewBox="0 0 32 32">
-    <circle cx="16" cy="16" r="15" fill="#b0502c"/>
-    <circle cx="16" cy="16" r="12.6" fill="none" stroke="#e5c372" stroke-width="1"/>
-    <!-- a pillar: the Greek letter Pi, which also starts "palaestra" -->
-    <rect x="7.5" y="8" width="17" height="2.6" rx=".6" fill="#f6efe0"/>
-    <rect x="6.3" y="7.1" width="19.4" height="1.4" rx=".5" fill="#f6efe0"/>
-    <rect x="10.2" y="10.6" width="3" height="11" fill="#f6efe0"/>
-    <rect x="18.8" y="10.6" width="3" height="11" fill="#f6efe0"/>
-    <rect x="8.4" y="21.6" width="6.6" height="1.6" rx=".4" fill="#f6efe0"/>
-    <rect x="17" y="21.6" width="6.6" height="1.6" rx=".4" fill="#f6efe0"/>
+    <rect width="32" height="32" rx="8" fill="#2b6cb0"/>
+    <!-- a figure reaching up: one stretch, one line -->
+    <circle cx="16" cy="8.6" r="2.7" fill="#e1edf9"/>
+    <path d="M9.5 24.5 C 12.5 20.5, 14.5 16.5, 16 12.6 C 17.5 16.5, 19.5 20.5, 22.5 24.5" fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M10.2 14.4 L16 12.6 L21.8 14.4" fill="none" stroke="#bcd7f2" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
   </symbol>
   <use href="#mark"/>
 </svg>

@@ -12,6 +12,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { handle as fakeApi, fault, VIDEOS, GONE, chId, PLAYLIST_ID } from '../helpers/fake-youtube.js';
 import { BUILT_IN } from '../../js/strength/catalog.js';
+import { fakeAnthropic } from '../helpers/fake-anthropic.js';
 import { APP_NAME } from '../../js/brand.js';
 
 const require = createRequire(import.meta.url);
@@ -33,9 +34,9 @@ const ok = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 
-async function startServer({ dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-')), legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-')) } = {}) {
+async function startServer({ dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-')), legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-')), env = {} } = {}) {
   const port = await freePort();
-  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', legacyDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', legacyDir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -85,7 +86,12 @@ async function newPage(browser, server, { colorScheme = 'light', viewport = { wi
   page.on('pageerror', (e) => consoleProblems.push(`pageerror: ${e.message}`));
   // A 400/403 from the (fake) API is expected when a test deliberately uses a bad key or exhausts the quota.
   // (Connection resets/refusals only happen when a test restarts the server on purpose, to mimic a deployed update.)
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: (the server responded with a status of (400|403)|net::ERR_CONNECTION_(RESET|REFUSED))/.test(m.text())) consoleProblems.push(`console.error: ${m.text()}`); });
+  // The same goes for the AI coach's own error answers (a rejected key, a busy service, a daily limit) in the test that provokes them.
+  page.on('console', (m) => {
+    const expected = /Failed to load resource: (the server responded with a status of (400|403)|net::ERR_CONNECTION_(RESET|REFUSED))/.test(m.text())
+      || (/Failed to load resource: the server responded with a status of (400|422|429|502)/.test(m.text()) && /\/api\/llm/.test(m.location()?.url ?? ''));
+    if (m.type() === 'error' && !expected) consoleProblems.push(`console.error: ${m.text()}`);
+  });
   page.on('dialog', (d) => d.accept()); // confirm() prompts
   page.apiCalls = apiCalls; page.context_ = context;
   await page.goto(server.url);
@@ -100,6 +106,8 @@ const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.p
 
 // ------------------------------------------------------------------ the run
 
+// E2E_WORLDS=6 runs just that world (comma-separated for several); handy while working on one part
+const want = (n) => !process.env.E2E_WORLDS || process.env.E2E_WORLDS.split(',').includes(String(n));
 const browser = await chromium.launch();
 const libCount = (page) => U(page, () => Object.keys(window.__unfurl.state.library).length);
 const readJson = (dir, name) => JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
@@ -110,7 +118,7 @@ const goto = async (page, tab) => {
 
 // ================================================================== World 1: first run, no key
 console.log('\nWorld 1: first run, no YouTube key');
-{
+if (want(1)) {
   const server = await startServer();
   const page = await newPage(browser, server);
 
@@ -735,7 +743,7 @@ console.log('\nWorld 1: first run, no YouTube key');
 
 // ================================================================== World 2: with a YouTube key
 console.log('\nWorld 2: with a YouTube key (live search, comments, imports, growth, learning)');
-{
+if (want(2)) {
   const server = await startServer();
   const page = await newPage(browser, server);
 
@@ -1120,7 +1128,7 @@ console.log('\nWorld 2: with a YouTube key (live search, comments, imports, grow
 
 // ================================================================== World 3: upgrading from version 1
 console.log('\nWorld 3: upgrading an existing version-1 install (data must survive)');
-{
+if (want(3)) {
   const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-'));
   const v1 = {
     version: 1, starterVersion: 1,
@@ -1178,7 +1186,7 @@ console.log('\nWorld 3: upgrading an existing version-1 install (data must survi
 
 // ================================================================== World 4: a new app version, same data; and data from a NEWER version
 console.log('\nWorld 4: data outlives the app (new app copy, same data folder) and is protected from older versions');
-{
+if (want(4)) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-persist-'));
   let server = await startServer({ dataDir });
   let page = await newPage(browser, server);
@@ -1247,7 +1255,7 @@ console.log('\nWorld 4: data outlives the app (new app copy, same data folder) a
 
 // ================================================================== World 5: hosted on a server (login, shared key, live update banner)
 console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new version" banner)');
-{
+if (want(5)) {
   const http = await import('node:http');
   const upstream = [];
   const fakeYt = http.createServer((req, res) => {
@@ -1366,7 +1374,7 @@ console.log('\nWorld 5: hosted on a server (login, server-held YouTube key, "new
 
 // ================================================================== World 6: strength
 console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Journal)');
-{
+if (want(6)) {
   const server = await startServer();
   const page = await newPage(browser, server);
   const needsOf = (id) => BUILT_IN[id]?.needs ?? [];
@@ -1432,9 +1440,38 @@ console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Jou
     await clearToasts();
   });
 
+  await step('The exercise list is grouped and compact: groups open on tap, a row opens for the details', async () => {
+    await page.click('#st-exercises');
+    await page.fill('#ex-search', '');
+    await page.waitForSelector('.ex-group');
+    ok((await page.locator('.ex-group').count()) >= 8, 'one group per kind of movement');
+    eq(await page.locator('.ex-group[open]').count(), 0, 'all closed at first');
+    eq(await page.locator('.ex-row').count(), 0, 'rows are only drawn for open groups');
+    await page.click('.ex-group[data-slot=pull_v] > summary');
+    await page.waitForSelector('.ex-group[data-slot=pull_v] .ex-row');
+    ok((await page.locator('.ex-group[data-slot=pull_v] .ex-row').count()) >= 5, 'the group lists its exercises');
+    ok((await page.locator('.ex-card[data-ex=pullup] .ex-title').innerText()).toLowerCase().includes('pull-up bar'), 'a row says what it takes');
+    eq(await page.locator('.ex-detail').count(), 0, 'no details yet');
+    await page.click('.ex-card[data-ex=pullup] .ex-toggle');
+    const detail = await page.locator('.ex-card[data-ex=pullup] .ex-detail').innerText();
+    ok(detail.includes('Progression') && detail.includes('Never suggest') && detail.includes('Guide'), 'opening a row shows how it is done, the progression, the guide and "never suggest"');
+    eq(await page.locator('.ex-card[data-ex=pullup] .ex-toggle').getAttribute('aria-expanded'), 'true');
+    await shot(page, '28-exercise-list');
+    await page.click('#ex-expand-all');
+    ok((await page.locator('.ex-row').count()) >= 80, 'open all groups');
+    eq(await page.locator('.ex-card[data-ex=pullup] .ex-detail').count(), 1, 'the row you opened stays open');
+    await page.click('#ex-collapse-all');
+    eq(await page.locator('.ex-group[open]').count(), 0);
+    await page.fill('#ex-search', 'face pull');
+    ok((await page.locator('.ex-group[open] .ex-card[data-ex=face_pull]').count()) === 1, 'searching opens the groups that match');
+    await page.fill('#ex-search', '');
+  });
+
   await step('Guide videos: attach a YouTube link to an exercise, watch it, and remove it again', async () => {
     await page.click('#st-exercises');
     await page.fill('#ex-search', 'plank');
+    ok(await page.locator('.ex-card[data-ex=plank] [data-action=guides]').count() === 0, 'the guide button is tucked away until the row is opened');
+    await page.click('.ex-card[data-ex=plank] .ex-toggle');
     await page.click('.ex-card[data-ex=plank] [data-action=guides]');
     await page.waitForSelector('#guide-url');
     await page.fill('#guide-url', 'https://youtu.be/dQw4w9WgXcQ');
@@ -1450,6 +1487,7 @@ console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Jou
     await shot(page, '31-guide-videos');
     await page.click('.modal header .icon-btn');
     ok((await page.locator('.ex-card[data-ex=plank] [data-action=guides]').innerText()).includes('▶ 1'), 'the button shows how many');
+    ok((await page.locator('.ex-card[data-ex=plank] .ex-side').innerText()).includes('▶ 1'), 'and the row says so even when closed');
     await page.click('.ex-card[data-ex=plank] [data-action=guides]');
     await page.click('#guide-list [data-action=remove-guide]');
     eq(await U(page, () => (window.__unfurl.state.strength.guides.plank ?? []).length), 0);
@@ -1560,6 +1598,9 @@ console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Jou
     eq(await U(page, () => window.__unfurl.state.strength.custom.map((e) => e.name)), ['Sled push']);
     await page.locator('.ex-card[data-ex^="my_sled_push"] [data-action=add-ex]').click();
     ok(await page.locator('#st-editor').count() === 1, 'a workout draft is open');
+    await page.click('#st-exercises');
+    await page.waitForSelector('.ex-card[data-ex^="my_sled_push"]');
+    await page.locator('.ex-card[data-ex^="my_sled_push"] .ex-toggle').click();
     await page.locator('.ex-card[data-ex^="my_sled_push"] [data-action=delete-ex]').click();
     await page.waitForFunction(() => window.__unfurl.state.strength.custom.length === 0);
     await page.click('#st-editor');
@@ -1580,6 +1621,13 @@ console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Jou
     await page.click('#s-cancel');
     await page.waitForSelector('#workouts-page');
     eq(await U(page, () => window.__unfurl.state.strength.workouts.length), 5, '2 of mine and 3 from the template');
+    ok(await page.locator('#next-up [data-action=start-next-up]').count() === 1, '"Next up" sits at the top of the Workouts page');
+    ok((await page.locator('#next-up').innerText()).includes('from the plan'), 'and names the plan it comes from');
+    eq(await page.locator('.wk-card .badge.plan').count(), 3, 'workouts say which plan they are in');
+    eq(await page.locator('.wk-card .badge', { hasText: 'single workout' }).count(), 2, 'and which ones stand alone');
+    ok((await page.locator('#how-it-fits').textContent()).includes('rotate through'), 'the explainer is there');
+    eq(await page.locator('#how-it-fits').getAttribute('open'), null, 'folded away once you have a plan');
+    await shot(page, '29-workouts-and-plans');
   });
 
   await step('Setup changes what is suggested; an unfinished session survives a reload', async () => {
@@ -1625,6 +1673,162 @@ console.log('\nWorld 6: strength (catalogue, builder, guide videos, logging, Jou
 
   await page.context_.close();
   server.stop();
+}
+
+// ================================================================== World 7: the AI coach
+console.log('\nWorld 7: the AI coach (your own Anthropic key, answers checked against your catalogue; nothing real is called)');
+if (want(7)) {
+  const ai = await fakeAnthropic();
+  const server = await startServer({ env: { UNFURL_ANTHROPIC_BASE: ai.url } });
+  const page = await newPage(browser, server);
+  const KEY = 'sk-ant-api03-E2E-ONLY-0123456789abcdefWXYZ';
+  const clearToasts = () => page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+  const row = (exercise_id, o = {}) => ({ exercise_id, sets: 3, reps_low: 6, reps_high: 10, seconds_low: 0, seconds_high: 0, why: `because ${exercise_id}`, ...o });
+  const answer = (workouts, extra = {}) => ({ text: JSON.stringify({ title: 'Upper strength', explanation: 'A pull, a press, then core, kept short.', workouts, notes: ['Choose a weight you could lift two more times.'], ...extra }) });
+
+  await step('Settings: the coach is off until you paste your key; a bad key is refused; a good one is kept on the server and never shown again', async () => {
+    await goto(page, 'settings');
+    await page.waitForSelector('#ai-panel #llm-ready');
+    ok((await page.locator('#llm-ready').innerText()).includes('Not set up'), 'starts off');
+    await page.fill('#llm-key', 'definitely-not-a-key');
+    await page.click('#save-llm-key');
+    await page.waitForFunction(() => document.getElementById('llm-status')?.textContent.includes('sk-ant-'));
+    await page.fill('#llm-key', KEY);
+    await page.click('#save-llm-key');
+    await page.waitForFunction(() => document.getElementById('llm-ready')?.textContent.includes('Ready'));
+    ok((await page.locator('#llm-ready').innerText()).includes('…WXYZ'), 'only the last characters are shown');
+    eq(await page.locator('#llm-key').inputValue(), '', 'the field is emptied');
+    ok(!(await page.content()).includes('0123456789abcdef'), 'the key is nowhere in the page');
+    ok(!JSON.stringify(readJson(server.dataDir, 'profile.json')).includes('0123456789abcdef'), 'and not in the profile that syncs and gets exported');
+    eq(readJson(server.dataDir, 'llm.json').key, KEY, 'it lives in the server\'s private file');
+    ok(await page.locator('#llm-model option').count() === 2, 'two models to choose from');
+    await page.locator('#llm-details').evaluate((d) => { d.open = true; });
+    ok((await page.locator('#llm-details').innerText()).includes('Never sent'), 'what is and is not sent is spelled out');
+    await shot(page, '35-ai-settings');
+    await clearToasts();
+  });
+
+  await step('Strength: "Ask the coach" turns a description into a draft in the builder, labelled as Claude\'s, with reasons; anything it invents is dropped and said so', async () => {
+    await goto(page, 'strength');
+    await page.click('#use-home-gym');
+    await page.waitForFunction(() => window.__unfurl.state.strength.equipment.configured);
+    await page.waitForSelector('#coach-line');
+    ok((await page.locator('#coach-line').innerText()).includes('Claude Opus 5.5'), 'the page says the coach is ready and which model');
+    ok((await page.locator('#describe-explainer').innerText()).includes('not an expert'), 'and is honest about what "Build it" is');
+    await page.fill('#describe', 'upper body for strength, 40 minutes, my shoulder is cranky');
+    ai.reply(answer([{ name: 'Upper A', items: [row('seated_cable_row', { why: 'a strong horizontal pull' }), row('pullup', { sets: 4, reps_low: 3, reps_high: 6 }), row('turbo_squat_9000'), row('plank', { reps_low: 0, reps_high: 0, seconds_low: 30, seconds_high: 45 })] }]));
+    await page.click('#describe-coach');
+    await page.waitForSelector('#editor');
+    ok((await page.locator('#ed-source').innerText()).includes('Claude Opus 5.5'), 'labelled as the coach\'s draft');
+    eq(await U(page, () => window.__unfurl.ui.strength.editor.items.map((i) => i.exId)), ['seated_cable_row', 'pullup', 'plank'], 'the invented exercise is gone');
+    ok((await page.locator('#ed-interpretation').innerText()).includes('A pull, a press'), 'its explanation is shown');
+    ok((await page.locator('#editor').innerText()).includes('turbo_squat_9000'), 'and the dropped one is mentioned');
+    ok((await page.locator('#editor').innerText()).includes('a strong horizontal pull'), 'each exercise carries its reason');
+    ok((await page.locator('#editor').innerText()).includes('two more times'), 'and the coach\'s notes');
+    const sent = ai.seen.at(-1);
+    eq(sent.headers['x-api-key'], KEY);
+    eq(sent.body.model, 'claude-opus-5-5');
+    ok(sent.body.messages[0].content.includes('my shoulder is cranky'), 'the request reached Claude');
+    ok(sent.body.system[0].text.includes('seated_cable_row |') && !sent.body.system[0].text.includes('| Sled'), 'with the catalogue of what you can do');
+    ok(!JSON.stringify(sent.body).includes('youtube') && !JSON.stringify(sent.body).includes('apiKey'), 'and nothing about your library or keys');
+    await shot(page, '36-ai-draft');
+    await clearToasts();
+  });
+
+  await step('Builder: "Ask the coach" proposes what to add (never what is already there); adding keeps the rest of its list', async () => {
+    ai.reply({ text: JSON.stringify({ summary: 'You have pulling and core but no pressing or legs.', ideas: [{ exercise_id: 'pullup', why: 'already there' }, { exercise_id: 'db_bench_press', why: 'a horizontal press to balance the rows' }, { exercise_id: 'goblet_squat', why: 'some legs' }] }) });
+    await page.click('#ed-coach');
+    await page.waitForSelector('#ed-ideas');
+    ok((await page.locator('#ed-ideas h3').innerText()).includes('Ideas from Claude Opus 5.5'));
+    ok((await page.locator('#ed-ideas').innerText()).includes('no pressing or legs'), 'its summary is shown');
+    eq(await page.locator('#ed-ideas [data-ex]').count(), 2, 'the one already in the workout is not offered');
+    await page.locator('#ed-ideas [data-ex=db_bench_press] [data-action=add-suggestion]').click();
+    ok((await U(page, () => window.__unfurl.ui.strength.editor.items.map((i) => i.exId))).includes('db_bench_press'), 'added to the workout');
+    eq(await page.locator('#ed-ideas [data-ex]').count(), 1, 'the other idea stays on offer');
+    ok((await page.locator('.ed-item[data-ex=db_bench_press]').innerText()).includes('a horizontal press to balance'), 'with its reason');
+    await page.fill('#ed-name', 'Upper A');
+    await page.click('#ed-save');
+    await page.waitForSelector('[data-workout]');
+    eq(await U(page, () => window.__unfurl.state.strength.workouts.length), 1);
+    await clearToasts();
+  });
+
+  await step('A request for several days comes back as a plan to preview; one tap saves the workouts and the plan that rotates through them', async () => {
+    await page.fill('#describe', 'a 2-day upper/lower split for running strength');
+    ai.reply(answer([{ name: 'Upper', items: [row('pullup'), row('pushup'), row('plank', { reps_low: 0, reps_high: 0, seconds_low: 30, seconds_high: 40 })] }, { name: 'Lower', items: [row('goblet_squat'), row('hip_hike'), row('calf_raise')] }], { title: 'Runner split' }));
+    await page.click('#describe-coach');
+    await page.waitForSelector('#coach-plan');
+    eq(await page.locator('#coach-plan [data-day]').count(), 2, 'two training days previewed');
+    ok((await page.locator('#coach-plan').innerText()).includes('Built by Claude Opus 5.5'));
+    eq(await U(page, () => window.__unfurl.state.strength.workouts.length), 1, 'nothing is saved yet');
+    await shot(page, '37-ai-plan');
+    await page.click('#coach-save-plan');
+    await page.waitForSelector('#plans-page [data-plan]');
+    eq(await U(page, () => window.__unfurl.state.strength.workouts.length), 3);
+    eq(await U(page, () => window.__unfurl.state.strength.plans[0].name), 'Runner split');
+    eq(await page.locator('.plan-card .plan-days li').count(), 2, 'a plan of two workouts');
+    await clearToasts();
+  });
+
+  await step('When it goes wrong you are told plainly and can carry on: a rejected key, a busy service, a daily limit, a garbled answer', async () => {
+    await page.click('#st-workouts');
+    await page.fill('#describe', 'anything');
+    const note = () => page.locator('#describe-note').innerText();
+    ai.reply({ status: 401, errorType: 'authentication_error', message: 'invalid x-api-key' });
+    await page.click('#describe-coach');
+    await page.waitForFunction(() => document.getElementById('describe-note')?.textContent.includes('did not accept'));
+    ok(await page.locator('#describe-note #coach-open-settings').count() === 1, 'with a way to fix the key');
+    ok((await note()).includes('rule-based builder'), 'and a reminder that the simple builder still works');
+    eq(await page.locator('#editor').count(), 0, 'no half-made workout appears');
+    ai.reply({ status: 529, errorType: 'overloaded_error', message: 'Overloaded' });
+    await page.click('#describe-coach');
+    await page.waitForFunction(() => document.getElementById('describe-note')?.textContent.includes('busy'));
+    ai.reply({ text: 'this is not json at all' });
+    await page.click('#describe-coach');
+    await page.waitForFunction(() => document.getElementById('describe-note')?.textContent.includes('expected form'));
+    ai.reply(answer([{ name: 'Nothing real', items: [row('imaginary_lift')] }]));
+    await page.click('#describe-coach');
+    await page.waitForFunction(() => document.getElementById('describe-note')?.textContent.includes('Try describing it'));
+    eq(await page.locator('#editor').count(), 0);
+    ok(await page.locator('#describe-coach').isEnabled(), 'the buttons come back to life');
+    // the simple builder is still there, and says what it is
+    await page.click('#describe-go');
+    await page.waitForSelector('#editor');
+    ok((await page.locator('#ed-source').innerText()).includes('simple rules'), 'rule-based drafts are labelled too');
+    await page.click('#ed-discard'); 
+    await clearToasts();
+  });
+
+  await step('The model can be changed in Settings, and the next request uses it; removing the key switches the coach off again', async () => {
+    await goto(page, 'settings');
+    await page.waitForSelector('#llm-model');
+    await page.selectOption('#llm-model', 'claude-sonnet-5-5');
+    await page.waitForFunction(() => document.querySelector('#llm-model')?.value === 'claude-sonnet-5-5');
+    await goto(page, 'strength');
+    await page.waitForSelector('#coach-line');
+    await page.fill('#describe', 'core and glutes');
+    ai.reply(answer([{ name: 'Core', items: [row('plank', { seconds_low: 30, seconds_high: 40, reps_low: 0, reps_high: 0 })] }]));
+    await page.click('#describe-coach');
+    await page.waitForSelector('#editor');
+    eq(ai.seen.at(-1).body.model, 'claude-sonnet-5-5');
+    ok((await page.locator('#ed-source').innerText()).includes('Sonnet'), 'the draft names the model that made it');
+    await page.click('#ed-discard');
+    await goto(page, 'settings');
+    await page.click('#remove-llm-key');
+    await page.waitForFunction(() => document.getElementById('llm-ready')?.textContent.includes('Not set up'));
+    await goto(page, 'strength');
+    await page.fill('#describe', 'core and glutes');
+    await page.click('#describe-coach');
+    await page.waitForFunction(() => document.getElementById('describe-note')?.textContent.includes('Anthropic API key'));
+    eq(await page.locator('#editor').count(), 0);
+    const calls = ai.seen.length;
+    await page.click('#describe-coach');
+    eq(ai.seen.length, calls, 'nothing is sent without a key');
+  });
+
+  await page.context_.close();
+  server.stop();
+  ai.close();
 }
 
 // ------------------------------------------------------------------ report

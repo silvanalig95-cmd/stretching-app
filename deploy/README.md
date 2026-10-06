@@ -60,7 +60,7 @@ The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates i
 
 ## How to tell which version is running
 
-The footer of the app shows the build (`Palaestra 0.4.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
+The footer of the app shows the build (`Palaestra 0.5.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 
@@ -112,6 +112,10 @@ server {
 ## YouTube access for everyone
 
 Searching YouTube needs a free API key. Either each person pastes their own in **Settings** (their own 10,000 units a day), or you keep **one key on the server** (`UNFURL_YOUTUBE_KEY` or `UNFURL_YOUTUBE_KEY_FILE`) and nobody needs one: the browser never sees it, and each person is capped (`UNFURL_USER_DAILY_UNITS`, default 3,000 of the key's 10,000 a day, counted in Pacific time like YouTube's own day and remembered across restarts). A person who pastes their own key uses that instead.
+
+## The AI coach (optional)
+
+Strength has a **✨ Ask the coach** button that lets Claude (an AI model by Anthropic) design a workout or a whole plan from a description. It needs an Anthropic API key and costs a few US cents per request, billed by Anthropic to whoever owns the key. Either each person pastes their own in **Settings → AI coach** (it is stored on the server in `llm.json`, never sent back to the browser, and included in backups), or you keep one key on the server (`UNFURL_ANTHROPIC_KEY` or `UNFURL_ANTHROPIC_KEY_FILE`) so friends can use the coach on your credit; each person is capped (`UNFURL_USER_DAILY_LLM_CALLS`, 40 by default, 0 = no cap). `UNFURL_LLM_MODEL` sets the default model. What is sent to Anthropic: only the request text, the exercises you can do, your goal and settings and your last two weeks of strength sessions; never your video library, notes, channels or keys. Without a key the rest of the app is unaffected.
 
 ## Private repository
 

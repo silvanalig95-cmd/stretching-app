@@ -24,6 +24,8 @@ Each login gets its own library, history, ratings and settings, completely separ
 
 **Their YouTube searches.** Either each friend pastes their own free YouTube key in Settings (their own 10,000 units a day), or you put your key on the server (`UNFURL_YOUTUBE_KEY=…`, see below) and they need nothing. With a shared key every person is capped (`UNFURL_USER_DAILY_UNITS`, default 3000 a day, about 10–30 web searches) so no one friend can use up everyone's allowance; with 10,000 units a day in total, 3 friends at 3000 each is about the limit. Reading comments and importing playlists costs units too.
 
+**The AI coach.** Strength's “Ask the coach” uses Anthropic's Claude and costs a few cents per request. Friends can paste their own Anthropic key in Settings (their own bill), or you can put one on the server (`UNFURL_ANTHROPIC_KEY`) and let them use yours within a per-person daily cap (`UNFURL_USER_DAILY_LLM_CALLS`, default 40). Leave both unset and the button simply explains that it is not set up.
+
 ## 2. Pick how they reach it
 
 ### Option A (recommended): Tailscale — a private network, nothing opened to the internet

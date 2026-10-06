@@ -5,10 +5,10 @@ import { h, fill } from '../dom.js';
 import { ctx } from '../ctx.js';
 import { openModal, toast } from '../modal.js';
 import { searchExercises, ladderOf, doable } from '../strength/catalog.js';
-import { MUSCLES, EQUIPMENT, AVOID_FLAGS, SLOTS, TYPE_ORDER } from '../strength/muscles.js';
+import { MUSCLES, EQUIPMENT, AVOID_FLAGS, SLOTS, TYPE_ORDER, muscleLabel } from '../strength/muscles.js';
 import { defaultRx, describeRx, summarizeSets } from '../strength/rx.js';
 import { lastSets, bestsFor } from '../strength/stats.js';
-import { catalogOf, haveOf, addCustomExercise, deleteCustomExercise, addGuide } from '../strength/store.js';
+import { catalogOf, haveOf, addCustomExercise, deleteCustomExercise, addGuide, guidesFor } from '../strength/store.js';
 import { parseSourceInput, fetchOEmbed } from '../youtube.js';
 import { itemFor } from '../strength/builder.js';
 import { guideButton } from './guides.js';
@@ -19,40 +19,72 @@ const TYPE_TEXT = { compound: 'main lift', accessory: 'accessory', stability: 's
 
 // ---------------------------------------------------------------- one exercise
 
-/**
- * @param {object} ex
- * @param {{onAdd?:(ex:object)=>void, addLabel?:string, onChange?:()=>void, compact?:boolean}} [o]
- */
-export function exerciseCard(ex, { onAdd = null, addLabel = '＋ Add to workout', onChange = () => {}, compact = false } = {}) {
+/** Which rows and which groups are open. Kept while you visit other pages, not saved. */
+const openRows = () => (ui().exOpen ??= new Set());
+const openGroups = () => (ui().exGroups ??= new Set());
+
+/** One line of facts that fits on a phone: the main muscles and what it takes. */
+function oneLine(ex) {
+  return h('span', { class: 'sub' }, ex.primary.map(muscleLabel).join(', '), ` · ${needsText(ex)}`, ex.unilateral ? ' · one side at a time' : '');
+}
+
+/** Everything else about an exercise. Built the first time a row is opened. */
+export function exerciseDetail(ex, { onChange = () => {}, manage = true } = {}) {
   const { state, store } = ctx;
   const st = S();
   const last = lastSets(state.history, ex.id), best = bestsFor(state.history, ex.id);
   const ladder = ladderOf(ex.id, catalogOf(state));
   const excluded = st.prefs.excluded.includes(ex.id);
   const rx = defaultRx(ex, st.prefs.goal);
-  const can = doable(ex, haveOf(state));
-  return h('article', { class: `ex-card${can ? '' : ' unavailable'}`, 'data-ex': ex.id },
-    h('div', { class: 'ex-head' },
-      h('h4', null, ex.name),
-      h('span', { class: 'badges' },
-        h('span', { class: 'badge' }, TYPE_TEXT[ex.type] ?? ex.type), h('span', { class: `badge lvl${ex.level}` }, LEVEL_TEXT[ex.level]),
-        ex.unilateral ? h('span', { class: 'badge' }, 'one side at a time') : null,
-        ex.custom ? h('span', { class: 'badge new' }, 'yours') : null,
-        !can ? h('span', { class: 'badge warn', title: 'Needs equipment that is not ticked in Setup' }, `needs ${needsText(ex)}`) : null)),
-    h('p', { class: 'ex-meta' }, muscleLine(ex), h('small', { class: 'muted' }, ` · ${describeRx(rx)} · ${needsText(ex)}${ex.loads.length ? ` (heavier with ${ex.loads.join(', ').replace('dumbbell', 'dumbbells')})` : ''}`)),
-    !compact && ex.cue ? h('p', { class: 'cue' }, ex.cue) : null,
-    !compact && ladder.length > 1 ? h('p', { class: 'ladder' }, h('small', { class: 'muted' }, 'Progression: '),
-      ladder.map((r, i) => [i ? ' → ' : '', r.id === ex.id ? h('strong', null, r.name.replace(/ \(.*\)/, '')) : h('span', null, r.name.replace(/ \(.*\)/, ''))]).flat()) : null,
-    !compact && (last || best) ? h('p', { class: 'hint' }, last ? `Last time: ${summarizeSets(last)}` : '', best?.e1rm ? ` · best estimated max ${best.e1rm} kg` : best?.reps ? ` · best ${best.reps} reps` : best?.secs ? ` · best hold ${best.secs} s` : '') : null,
+  return h('div', { class: 'ex-detail' },
+    ex.cue ? h('p', { class: 'cue' }, ex.cue) : h('p', { class: 'cue muted' }, 'No description yet.'),
+    h('dl', { class: 'ex-facts' },
+      h('dt', null, 'Works'), h('dd', null, muscleLine(ex)),
+      h('dt', null, 'Kind'), h('dd', null, `${TYPE_TEXT[ex.type] ?? ex.type}, ${LEVEL_TEXT[ex.level]}`),
+      h('dt', null, 'Usually'), h('dd', null, describeRx(rx)),
+      h('dt', null, 'Needs'), h('dd', null, `${needsText(ex)}${ex.loads.length ? ` (heavier with ${ex.loads.join(', ').replace('dumbbell', 'dumbbells')})` : ''}`),
+      ladder.length > 1 ? [h('dt', null, 'Progression'), h('dd', { class: 'ladder' }, ladder.map((r, i) => [i ? ' → ' : '', r.id === ex.id ? h('strong', null, r.name.replace(/ \(.*\)/, '')) : h('span', null, r.name.replace(/ \(.*\)/, ''))]).flat())] : null,
+      last || best ? [h('dt', null, 'Your log'), h('dd', null, last ? `Last time: ${summarizeSets(last)}` : '', best?.e1rm ? ` · best estimated max ${best.e1rm} kg` : best?.reps ? ` · best ${best.reps} reps` : best?.secs ? ` · best hold ${best.secs} s` : '')] : null),
     h('div', { class: 'row-actions' },
-      onAdd ? h('button', { class: 'btn small primary', type: 'button', 'data-action': 'add-ex', onclick: () => onAdd(ex) }, addLabel) : null,
-      guideButton(ex, { onChange }),
-      !compact ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'toggle-exclude', title: 'Hide it from suggestions and templates', onclick: () => {
+      guideButton(ex, { onChange, cls: 'btn small' }),
+      manage ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'toggle-exclude', title: 'Hide it from suggestions and templates', onclick: () => {
         st.prefs.excluded = excluded ? st.prefs.excluded.filter((x) => x !== ex.id) : [...st.prefs.excluded, ex.id];
         store.save(); toast(excluded ? `${ex.name} can be suggested again.` : `${ex.name} won’t be suggested.`, 'info'); onChange();
       } }, excluded ? 'Allow in suggestions' : 'Never suggest') : null,
-      !compact && ex.custom ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'edit-ex', onclick: () => openExerciseForm({ existing: ex, onSaved: onChange }) }, 'Edit') : null,
-      !compact && ex.custom ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'delete-ex', onclick: () => { if (confirm(`Delete “${ex.name}”? Workouts that use it keep its name but it can no longer be edited.`)) { deleteCustomExercise(state, ex.id); store.save(); onChange(); } } }, 'Delete') : null));
+      manage && ex.custom ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'edit-ex', onclick: () => openExerciseForm({ existing: ex, onSaved: onChange }) }, 'Edit') : null,
+      manage && ex.custom ? h('button', { class: 'btn small ghost danger', type: 'button', 'data-action': 'delete-ex', onclick: () => { if (confirm(`Delete “${ex.name}”? Workouts that use it keep its name but it can no longer be edited.`)) { deleteCustomExercise(state, ex.id); store.save(); onChange(); } } }, 'Delete') : null));
+}
+
+/**
+ * A compact row: name, main muscles, what it takes, difficulty and an add button. Tap the name to see the rest.
+ * @param {object} ex
+ * @param {{onAdd?:(ex:object)=>void, addLabel?:string, onChange?:()=>void}} [o]
+ */
+export function exerciseCard(ex, { onAdd = null, addLabel = '＋ Add', onChange = () => {} } = {}) {
+  const { state } = ctx;
+  const st = S();
+  const can = doable(ex, haveOf(state));
+  const guides = guidesFor(state, ex.id).length;
+  const excluded = st.prefs.excluded.includes(ex.id);
+  const open = openRows();
+  const detail = h('div', { class: 'ex-more', hidden: !open.has(ex.id) });
+  const toggle = h('button', { class: 'ex-toggle', type: 'button', 'aria-expanded': open.has(ex.id), 'aria-label': `${ex.name}: show details`, onclick: () => {
+    const now = detail.hidden;
+    detail.hidden = !now;
+    toggle.setAttribute('aria-expanded', String(now));
+    if (now) { open.add(ex.id); if (!detail.firstChild) detail.append(exerciseDetail(ex, { onChange })); } else open.delete(ex.id);
+  } }, h('span', { class: 'chev', 'aria-hidden': 'true' }, '▸'), h('span', { class: 'ex-title' }, h('strong', { class: 'nm' }, ex.name), oneLine(ex)));
+  if (open.has(ex.id)) detail.append(exerciseDetail(ex, { onChange }));
+  return h('div', { class: `ex-card ex-row${can ? '' : ' unavailable'}`, 'data-ex': ex.id },
+    h('div', { class: 'ex-line' }, toggle,
+      h('span', { class: 'ex-side' },
+        ex.custom ? h('span', { class: 'badge new' }, 'yours') : null,
+        excluded ? h('span', { class: 'badge warn', title: 'Never suggested' }, 'hidden') : null,
+        !can ? h('span', { class: 'badge warn', title: 'Needs equipment that is not ticked in Setup' }, 'no kit') : null,
+        guides ? h('span', { class: 'badge', title: `${guides} guide video${guides === 1 ? '' : 's'} attached` }, `▶ ${guides}`) : null,
+        h('span', { class: `badge lvl${ex.level}` }, LEVEL_TEXT[ex.level]),
+        onAdd ? h('button', { class: 'btn small primary', type: 'button', 'data-action': 'add-ex', 'aria-label': `Add ${ex.name}`, onclick: () => onAdd(ex) }, addLabel) : null)),
+    detail);
 }
 
 // ---------------------------------------------------------------- the filters shared by the page and the picker
@@ -69,6 +101,20 @@ function filterBar(f, onChange) {
 }
 const sorted = (list) => [...list].sort((a, b) => (TYPE_ORDER[a.type] ?? 9) - (TYPE_ORDER[b.type] ?? 9) || a.name.localeCompare(b.name));
 
+const BODY_PARTS = { upper: 'Upper body', lower: 'Lower body', core: 'Core and balance' };
+/** Group a list of exercises by the movement they train, in the order the slots are declared. Empty groups are left out. */
+export function groupBySlot(list) {
+  const groups = [];
+  for (const [slot, def] of Object.entries(SLOTS)) {
+    const items = sorted(list.filter((e) => e.slot === slot));
+    if (items.length) groups.push({ slot, label: def.label, part: def.group, items });
+  }
+  const known = new Set(Object.keys(SLOTS));
+  const rest = list.filter((e) => !known.has(e.slot));
+  if (rest.length) groups.push({ slot: 'other', label: 'Other', part: 'core', items: sorted(rest) });
+  return groups;
+}
+
 // ---------------------------------------------------------------- the catalogue page
 
 export function exercisesPage() {
@@ -76,21 +122,35 @@ export function exercisesPage() {
   const listSlot = h('div', { id: 'ex-list' });
   const draw = (keepFocus) => {
     const all = catalogOf(ctx.state);
-    const found = sorted(searchExercises(all, { q: f.q, muscle: f.muscle, equipment: f.equipment, slot: f.slot, mine: f.doable, have: haveOf(ctx.state) }));
-    const showing = found.slice(0, f.show);
+    const found = searchExercises(all, { q: f.q, muscle: f.muscle, equipment: f.equipment, slot: f.slot, mine: f.doable, have: haveOf(ctx.state) });
+    const groups = groupBySlot(found);
+    const filtering = Boolean(f.q.trim() || f.muscle || f.equipment || f.slot);   // while searching, everything that matched is open
+    const addTo = (e) => { const u = ui(); u.editor ??= newDraft(); u.editor.items.push({ exId: e.id, ...itemDefaults(e) }); toast(`Added ${e.name} to “${u.editor.name || 'the workout you are building'}”. See it under ✎ Building.`, 'success'); rerender(); };
+    const section = (g) => {
+      const body = h('div', { class: 'ex-rows' });
+      const isOpen = filtering || openGroups().has(g.slot);
+      const d = h('details', { class: 'ex-group', 'data-slot': g.slot, open: isOpen, ontoggle: () => { if (!filtering) { if (d.open) openGroups().add(g.slot); else openGroups().delete(g.slot); } if (d.open && !body.firstChild) fillRows(); } },
+        h('summary', null, h('span', { class: 'chev', 'aria-hidden': 'true' }, '▸'), h('span', { class: 'g-name' }, g.label.replace(/ \(.*\)/, ''), g.label.includes('(') ? h('small', { class: 'muted' }, ` ${g.label.match(/\((.*)\)/)[1]}`) : null), h('span', { class: 'count' }, g.items.length)),
+        body);
+      const fillRows = () => fill(body, g.items.map((ex) => exerciseCard(ex, { onAdd: addTo, addLabel: '＋ Add', onChange: () => draw() })));
+      if (isOpen) fillRows();
+      return d;
+    };
+    const parts = Object.entries(BODY_PARTS).map(([part, title]) => [title, groups.filter((g) => g.part === part)]).filter(([, gs]) => gs.length);
     fill(listSlot,
-      h('p', { class: 'hint', 'aria-live': 'polite', id: 'ex-count' }, `${found.length} exercise${found.length === 1 ? '' : 's'}${f.doable ? ' you can do with your equipment' : ''}`),
-      found.length ? h('div', { class: 'ex-grid' }, showing.map((ex) => exerciseCard(ex, {
-        onAdd: (e) => { const u = ui(); u.editor ??= newDraft(); u.editor.items.push({ exId: e.id, ...itemDefaults(e) }); toast(`Added ${e.name} to “${u.editor.name || 'the workout you are building'}”. See it under ✎ Building.`, 'success'); rerender(); },
-        addLabel: '＋ Add to a workout', onChange: () => draw(),
-      }))) : h('p', { class: 'empty-note' }, f.doable ? 'Nothing matches with your equipment. Untick “only what my equipment allows”, or change the filters.' : 'Nothing matches.'),
-      found.length > showing.length ? h('button', { class: 'btn', type: 'button', onclick: () => { f.show += 40; draw(); } }, `Show more (${found.length - showing.length} left)`) : null);
+      h('div', { class: 'ex-bar' },
+        h('p', { class: 'hint', 'aria-live': 'polite', id: 'ex-count' }, `${found.length} exercise${found.length === 1 ? '' : 's'}${f.doable ? ' you can do with your equipment' : ''}`),
+        groups.length > 1 && !filtering ? h('span', { class: 'ex-bulk' },
+          h('button', { class: 'link', type: 'button', id: 'ex-expand-all', onclick: () => { for (const g of groups) openGroups().add(g.slot); draw(); } }, 'Open all groups'), ' · ',
+          h('button', { class: 'link', type: 'button', id: 'ex-collapse-all', onclick: () => { openGroups().clear(); draw(); } }, 'Close all')) : null),
+      groups.length ? parts.map(([title, gs]) => h('section', { class: 'ex-part' }, h('h3', null, title), gs.map(section)))
+        : h('p', { class: 'empty-note' }, f.doable ? 'Nothing matches with your equipment. Untick “only what my equipment allows”, or change the filters.' : 'Nothing matches.'));
     if (keepFocus) document.getElementById('ex-search')?.focus();
   };
   const page = h('div', { id: 'ex-page' },
-    h('p', { class: 'hint' }, `${catalogOf(ctx.state).length} exercises, built around dumbbells, a cable station, a pull-up bar, loop bands and bodyweight. Add your own below; attach YouTube guides to any of them.`),
+    h('p', { class: 'hint' }, `${catalogOf(ctx.state).length} exercises, grouped by the movement they train. Open a group, then tap an exercise for how it is done, its guide videos and more. Add your own; attach YouTube guides to any of them.`),
     h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', id: 'new-exercise', onclick: () => openExerciseForm({ onSaved: () => draw() }) }, '＋ New exercise')),
-    filterBar(f, (typing) => { f.show = 40; draw(typing); }), listSlot);
+    filterBar(f, (typing) => draw(typing)), listSlot);
   draw();
   return page;
 }
@@ -108,9 +168,17 @@ export function openPicker({ title = 'Add an exercise', onPick, has = () => fals
   const listSlot = h('div', { id: 'picker-list' });
   const draw = (keepFocus) => {
     const found = sorted(searchExercises(catalogOf(ctx.state), { q: f.q, muscle: f.muscle, equipment: f.equipment, slot: f.slot, mine: f.doable, have: haveOf(ctx.state) })).slice(0, 60);
-    fill(listSlot, found.length ? found.map((ex) => h('div', { class: 'picker-row', 'data-ex': ex.id },
-      h('div', { class: 'p-body' }, h('strong', null, ex.name), h('small', { class: 'muted' }, ` · ${needsText(ex)}`), h('div', null, muscleLine(ex))),
-      h('button', { class: `btn small${has(ex.id) ? ' ghost' : ' primary'}`, type: 'button', 'data-action': 'pick', onclick: (e) => { onPick(ex); e.currentTarget.textContent = '✓ Added'; e.currentTarget.className = 'btn small ghost'; } }, has(ex.id) ? '＋ Again' : '＋ Add')))
+    fill(listSlot, found.length ? found.map((ex) => {
+      const more = h('div', { class: 'ex-more', hidden: true });
+      const info = h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'info', 'aria-expanded': 'false', 'aria-label': `More about ${ex.name}`, title: 'How it is done, guide videos', onclick: () => {
+        more.hidden = !more.hidden; info.setAttribute('aria-expanded', String(!more.hidden));
+        if (!more.hidden && !more.firstChild) more.append(exerciseDetail(ex, { manage: false, onChange: () => {} }));
+      } }, 'ⓘ');
+      return h('div', { class: 'picker-item', 'data-ex': ex.id }, h('div', { class: 'picker-row', 'data-ex': ex.id },
+        h('div', { class: 'p-body' }, h('strong', null, ex.name), h('div', null, oneLine(ex))),
+        h('span', { class: 'ex-side' }, info,
+          h('button', { class: `btn small${has(ex.id) ? ' ghost' : ' primary'}`, type: 'button', 'data-action': 'pick', onclick: (e) => { onPick(ex); e.currentTarget.textContent = '✓ Added'; e.currentTarget.className = 'btn small ghost'; } }, has(ex.id) ? '＋ Again' : '＋ Add'))), more);
+    })
       : h('p', { class: 'empty-note' }, 'Nothing matches.'));
     if (keepFocus) document.getElementById('ex-search')?.focus();
   };

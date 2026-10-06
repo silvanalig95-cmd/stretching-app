@@ -8,7 +8,7 @@ import { mountToday, unmountToday } from './views/today.js';
 import { mountLibrary } from './views/library.js';
 import { mountJournal } from './views/journal.js';
 import { mountStrength } from './views/strength.js';
-import { APP_NAME, SECTION_GREEK } from './brand.js';
+import { APP_NAME } from './brand.js';
 import { mountSettings } from './views/settings.js';
 
 const TABS = [['today', 'Stretch', mountToday], ['strength', 'Strength', mountStrength], ['library', 'Library', mountLibrary], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
@@ -24,8 +24,6 @@ function show(tab) {
   main.replaceChildren();
   TABS.find(([t]) => t === tab)[2](main);
   document.title = `${TABS.find(([t]) => t === tab)[1]} · ${APP_NAME}`;
-  const kicker = document.getElementById('kicker');
-  if (kicker) kicker.replaceChildren(h('span', { class: 'greek' }, SECTION_GREEK[tab] ?? ''), h('span', { class: 'latin' }, ` · ${TABS.find(([t]) => t === tab)[1]}`));
 }
 
 const tabFromHash = () => (TABS.some(([t]) => t === location.hash.slice(1)) ? location.hash.slice(1) : 'today');

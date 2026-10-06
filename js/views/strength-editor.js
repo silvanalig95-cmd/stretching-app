@@ -12,6 +12,7 @@ import { builderCtx, minutesOf, musclesOfItems, muscleLine, ui, rerender, S, new
 import { openPicker } from './strength-exercises.js';
 import { guideButton } from './guides.js';
 import { startSession } from './strength-session.js';
+import { coachState, coachProblem, askForIdeas, modelName } from './strength-coach.js';
 
 /** Open the builder with a draft. */
 export function openEditor(draft = {}) {
@@ -72,11 +73,20 @@ export function editorView() {
 
   const drawSuggestions = () => {
     if (!ed.suggestions) { fill(sugSlot); return; }
-    fill(sugSlot, h('div', { class: 'suggest' },
-      h('h3', null, 'Ideas that would fit'),
+    const meta = ed.suggestions.meta;   // set when the ideas came from the AI coach
+    fill(sugSlot, h('div', { class: 'suggest', id: 'ed-ideas' },
+      h('h3', null, meta ? `✨ Ideas from ${modelName(meta.model)}` : 'Ideas that would fit'),
+      meta?.summary ? h('p', { class: 'hint' }, meta.summary) : null,
+      meta?.problems?.length ? h('ul', { class: 'hint' }, meta.problems.map((p) => h('li', null, p))) : null,
       ed.suggestions.length ? h('ul', { class: 'sug-list' }, ed.suggestions.map((s) => h('li', { 'data-ex': s.ex.id },
         h('div', { class: 'sug-body' }, h('strong', null, s.ex.name), h('small', { class: 'muted' }, ` · ${describeRx(defaultRx(s.ex, st.prefs.goal))}`), h('div', { class: 'muted small' }, muscleLine(s.ex)), h('div', { class: 'why' }, s.why.join(' · '))),
-        h('button', { class: 'btn small primary', type: 'button', 'data-action': 'add-suggestion', onclick: () => { ed.why[s.ex.id] = s.why[0] ?? ''; addItem(s.ex); ed.suggestions = suggestMore(ed.items, builderCtx({ count: 6 })); drawSuggestions(); } }, '＋ Add'))))
+        h('button', { class: 'btn small primary', type: 'button', 'data-action': 'add-suggestion', onclick: () => {
+          ed.why[s.ex.id] = s.why[0] ?? '';
+          const rest = meta ? Object.assign(ed.suggestions.filter((x) => x.ex.id !== s.ex.id), { meta }) : null;   // the coach's own list is kept; the rules' list is recomputed
+          addItem(s.ex);
+          ed.suggestions = rest ?? suggestMore(ed.items, builderCtx({ count: 6 }));
+          drawSuggestions();
+        } }, '＋ Add'))))
         : h('p', { class: 'empty-note' }, 'Nothing more to suggest with your equipment and settings. You can still add anything from the catalogue.'),
       h('button', { class: 'btn small ghost', type: 'button', onclick: () => { ed.suggestions = null; drawSuggestions(); } }, 'Hide')));
   };
@@ -100,14 +110,31 @@ export function editorView() {
     return w;
   };
 
+  const coachNote = h('p', { class: 'hint', id: 'coach-note', 'aria-live': 'polite' });
+  const askCoach = async () => {
+    const st = coachState();
+    if (st === 'off') { fill(coachNote, 'The AI coach needs the app server (serve.py), which keeps your Anthropic key. This page is not connected to it.'); return; }
+    if (st === 'setup') { fill(coachNote, 'The coach needs your Anthropic API key. ', h('a', { href: '#settings', id: 'coach-open-settings' }, 'Add it in Settings'), '. “Suggest more” works without it.'); return; }
+    const button = document.getElementById('ed-coach');
+    if (button) button.disabled = true;
+    fill(coachNote, 'Asking the coach… this usually takes 10 to 40 seconds.');
+    try {
+      const { read, model } = await askForIdeas(ed);
+      ed.suggestions = Object.assign(read.ideas, { meta: { model, summary: read.summary, problems: read.problems } });
+      fill(coachNote); drawSuggestions();
+    } catch (e) { fill(coachNote, coachProblem(e)); } finally { if (button) button.disabled = false; }
+  };
+
   const page = h('section', { class: 'panel', id: 'editor' },
     h('div', { class: 'ed-head' }, h('h2', null, ed.id ? 'Edit workout' : 'Build a workout'), name),
+    ed.source ? h('p', { class: 'source' }, ed.source === 'ai' ? h('span', { class: 'badge ai', id: 'ed-source', title: 'The first draft came from the AI coach. Check it, change anything, then save.' }, `✨ Draft by ${modelName(ed.model)}`) : h('span', { class: 'badge', id: 'ed-source', title: 'Picked from the catalogue by simple scoring rules, no AI involved.' }, 'Draft from simple rules (no AI)')) : null,
     ed.interpretation ? h('p', { class: 'hint', id: 'ed-interpretation' }, ed.interpretation) : null,
     ed.notes.length ? h('ul', { class: 'hint' }, ed.notes.map((n) => h('li', null, n))) : null,
     summary, listSlot,
     h('div', { class: 'ed-actions' },
       h('button', { class: 'btn', type: 'button', id: 'ed-add', onclick: () => openPicker({ title: 'Add exercises', has: (id) => ed.items.some((i) => i.exId === id), onPick: (ex) => { addItem(ex); } }) }, '＋ Add exercise'),
-      h('button', { class: 'btn', type: 'button', id: 'ed-suggest', onclick: () => { ed.suggestions = suggestMore(ed.items, builderCtx({ count: 6 })); drawSuggestions(); } }, '✨ Suggest more'),
+      h('button', { class: 'btn', type: 'button', id: 'ed-suggest', onclick: () => { ed.suggestions = suggestMore(ed.items, builderCtx({ count: 6 })); drawSuggestions(); } }, 'Suggest more'),
+      h('button', { class: 'btn', type: 'button', id: 'ed-coach', title: 'Ask Claude what would round this workout off (needs your Anthropic key, see Settings)', onclick: askCoach }, '✨ Ask the coach'),
       h('label', { class: 'mini inline' }, h('span', null, 'fill to'), minutesInput, h('span', null, 'min')),
       h('button', { class: 'btn', type: 'button', id: 'ed-fill', onclick: () => {
         const r = fillWorkout(ed.items, builderCtx({ minutes: num(minutesInput.value, 10, 120, 45) }));
@@ -117,7 +144,7 @@ export function editorView() {
       } }, 'Fill the rest'),
       h('button', { class: 'btn ghost', type: 'button', id: 'ed-tidy', title: 'Heavy lifts first, then accessories, stability, core', onclick: () => { ed.items = orderWorkout(ed.items, by); draw(); } }, 'Tidy order')),
     h('div', { class: 'ed-context hint' }, 'For ideas I use: goal ', goalSelect, h('label', { class: 'check inline' }, tired, ' my legs are tired from a hard run')),
-    sugSlot,
+    coachNote, sugSlot,
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', type: 'button', id: 'ed-save', onclick: () => { const w = save(); if (w) { ui().editor = null; ui().page = 'workouts'; toast(`Saved “${w.name}”.`, 'success'); rerender(); } } }, 'Save workout'),
       h('button', { class: 'btn primary', type: 'button', id: 'ed-start', onclick: () => { const w = save(); if (w) { ui().editor = null; startSession({ title: w.name, workoutId: w.id, items: w.items }); } } }, 'Save and start'),

@@ -170,3 +170,16 @@ test('snapshot endpoint keeps a labelled copy of the profile (used before destru
     assert.equal(JSON.parse(fs.readFileSync(path.join(s.dataDir, 'backups', json.name), 'utf8')).precious, true, 'later writes do not alter it');
   } finally { s.stop(); }
 });
+
+test('the bundled font is served as a font and may be cached; everything else is never cached (the app updates itself)', async () => {
+  const s = await start();
+  try {
+    const font = await fetch(`${s.base}/css/fonts/inter-latin-wght-normal.woff2`);
+    assert.equal(font.status, 200);
+    assert.equal(font.headers.get('content-type'), 'font/woff2');
+    assert.match(font.headers.get('cache-control'), /max-age=\d+/);
+    assert.equal((await font.arrayBuffer()).byteLength, fs.statSync(path.join(ROOT, 'css/fonts/inter-latin-wght-normal.woff2')).size);
+    for (const p of ['/', '/js/app.js', '/css/style.css', '/favicon.svg']) assert.equal((await fetch(s.base + p)).headers.get('cache-control'), 'no-store', p);
+    assert.equal((await fetch(`${s.base}/css/fonts/../../serve.py`)).status, 404);
+  } finally { s.stop(); }
+});

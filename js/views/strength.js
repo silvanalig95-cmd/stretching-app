@@ -13,6 +13,7 @@ import { ui, S, builderCtx, minutesOf, musclesOfItems, rerender, go } from './st
 import { exercisesPage } from './strength-exercises.js';
 import { editorView, openEditor } from './strength-editor.js';
 import { sessionView, doneView, startSession, resumeDraft } from './strength-session.js';
+import { loadCoach, coachState, coachProblem, askForWorkouts, showWorkouts, modelName } from './strength-coach.js';
 
 const PAGES = [['workouts', 'Workouts'], ['exercises', 'Exercises'], ['plans', 'Plans'], ['setup', 'Setup']];
 const EXAMPLES = ['45 minutes upper body, strength', 'legs and hip stability for running, 40 min', 'dumbbells only, full body, 30 minutes', 'pistol squat progression and side plank', 'core and glutes, no equipment'];
@@ -41,6 +42,7 @@ export function mountStrength(root) {
   };
   u.mounted = draw;
   draw();
+  loadCoach();
 }
 
 function applyHomeGym() {
@@ -55,12 +57,38 @@ function applyHomeGym() {
 
 // ---------------------------------------------------------------- workouts: describe, saved, templates
 
+/** The three words, in plain language. Open for newcomers, folded away once there is a plan. */
+function explainer(open) {
+  return h('details', { class: 'panel explainer', id: 'how-it-fits', open },
+    h('summary', null, 'How exercises, workouts and plans fit together'),
+    h('ol', { class: 'fit' },
+      h('li', null, h('strong', null, 'Exercise'), ' is one movement, such as “Pull-up” or “Plank”. They live in the catalogue (the Exercises tab).'),
+      h('li', null, h('strong', null, 'Workout'), ' is one training session: a list of exercises with sets and reps, for example “Upper A”. You start a workout, log your sets, and it goes into the Journal.'),
+      h('li', null, h('strong', null, 'Plan'), ' is an order of workouts that you rotate through, for example Upper A → Lower → Upper B → Lower. A plan has no exercises of its own; it only remembers which workout is up next, so you can just press start.')),
+    h('p', { class: 'hint' }, 'You do not need a plan: single workouts are fine. A template from below is a ready-made plan that is saved as its workouts plus the rotation.'));
+}
+
+/** Plans that a workout is part of. */
+const plansOf = (workoutId) => S().plans.filter((p) => p.workoutIds.includes(workoutId));
+
+/** One line per plan: which workout is next. */
+function nextUpPanel() {
+  const rows = S().plans.map((p) => ({ p, next: nextInPlan(ctx.state, p) })).filter((r) => r.next);
+  if (!rows.length) return null;
+  return h('section', { class: 'panel next-up', id: 'next-up' },
+    h('h2', null, 'Next up'),
+    h('ul', { class: 'next-list' }, rows.map(({ p, next }) => h('li', { 'data-plan': p.id },
+      h('span', null, h('strong', null, next.name), h('small', { class: 'muted' }, ` · from the plan “${p.name}”${lastDoneDate(ctx.state, next.id) ? ` · last done ${lastDoneDate(ctx.state, next.id)}` : ' · not done yet'}`)),
+      h('button', { class: 'btn small primary', type: 'button', 'data-action': 'start-next-up', onclick: () => startSession({ title: next.name, workoutId: next.id, items: next.items }) }, '▶ Start')))));
+}
+
+
 function workoutsPage() {
   const st = S();
   const by = catalogById(ctx.state);
   const input = h('input', { type: 'text', id: 'describe', placeholder: 'Describe it: “45 minutes upper body for strength”, “legs and hip stability for running”…', 'aria-label': 'Describe the workout you want', autocomplete: 'off', spellcheck: 'false' });
   const note = h('p', { class: 'hint', id: 'describe-note', 'aria-live': 'polite' });
-  const build = () => {
+  const buildRules = () => {
     const text = input.value.trim();
     if (!text) { note.textContent = 'Say a little about what you want, for example “45 minutes upper body”.'; return; }
     const ctxb = builderCtx();
@@ -71,23 +99,47 @@ function workoutsPage() {
       document.getElementById('templates-panel')?.scrollIntoView({ block: 'start' });
     }
     const r = buildFromRequest(text, ctxb);
-    openEditor({ name: r.name, items: r.items, interpretation: r.interpretation, notes: r.notes });
+    openEditor({ name: r.name, items: r.items, interpretation: r.interpretation, notes: r.notes, source: 'rules' });
   };
+  const buildCoach = async () => {
+    const text = input.value.trim();
+    if (!text) { note.textContent = 'Say a little about what you want, for example “a 4-day plan for running strength, 45 minutes”.'; return; }
+    const state = coachState();
+    if (state === 'off') { note.textContent = 'The AI coach needs the app server (serve.py), which keeps your Anthropic key. This page is not connected to it, so “Build it” (simple rules) is what works here.'; return; }
+    if (state === 'setup') { fill(note, 'The coach needs your Anthropic API key. ', h('a', { href: '#settings', id: 'coach-open-settings' }, 'Add it in Settings'), '. Until then “Build it” uses simple rules.'); return; }
+    const buttons = [...document.querySelectorAll('#describe-panel button')];
+    buttons.forEach((b) => { b.disabled = true; });
+    fill(note, `Asking ${modelName(ui().coach?.model)}… this usually takes 10 to 40 seconds.`);
+    try {
+      const { read, model } = await askForWorkouts(text);
+      showWorkouts(read, model, openEditor);
+      fill(note);
+    } catch (e) { fill(note, coachProblem(e)); } finally { buttons.forEach((b) => { b.disabled = false; }); }
+  };
+  const coach = ui().coach;
+  const coachLine = coachState() === 'ready' ? `AI coach ready: ${modelName(coach.model)}${coach.dailyCap ? `, ${coach.usedToday ?? 0} of ${coach.dailyCap} requests used today` : ''}.`
+    : coachState() === 'setup' ? 'The AI coach is off until you add your Anthropic key in Settings.' : '';
   const describePanel = h('section', { class: 'panel', id: 'describe-panel' },
     h('h2', null, 'Describe a workout'),
-    h('form', { class: 'command', onsubmit: (e) => { e.preventDefault(); build(); } }, input, h('button', { class: 'btn primary', type: 'submit', id: 'describe-go' }, 'Build it')),
-    h('div', { class: 'chips' }, EXAMPLES.map((t) => h('button', { type: 'button', class: 'chip quick', onclick: () => { input.value = t; build(); } }, t))),
+    h('form', { class: 'command', onsubmit: (e) => { e.preventDefault(); buildRules(); } }, input,
+      h('button', { class: 'btn primary', type: 'submit', id: 'describe-go', title: 'Instant and offline: picks exercises from the catalogue with simple scoring rules' }, 'Build it'),
+      h('button', { class: 'btn', type: 'button', id: 'describe-coach', title: 'Ask Claude to design it (needs your Anthropic API key)', onclick: buildCoach }, '✨ Ask the coach')),
+    h('div', { class: 'chips' }, EXAMPLES.map((t) => h('button', { type: 'button', class: 'chip quick', onclick: () => { input.value = t; buildRules(); } }, t))),
     note,
+    h('p', { class: 'hint', id: 'describe-explainer' }, h('strong', null, 'Build it'), ' uses simple built-in rules: it picks up muscles, length, equipment and goal words from what you type and chooses from the catalogue by scoring. It is quick and works offline, but it is not an expert. ',
+      h('strong', null, '✨ Ask the coach'), ' sends your request, your equipment, your goal and your last two weeks of strength sessions to Claude, which designs the workout (or a whole plan) from the same catalogue and explains why. ', coachLine ? h('span', { id: 'coach-line' }, coachLine) : null),
     h('div', { class: 'actions' }, h('button', { class: 'btn', type: 'button', id: 'new-workout', onclick: () => openEditor({ name: '' }) }, '＋ Start from nothing'),
       h('button', { class: 'btn', type: 'button', id: 'empty-session', onclick: () => startSession({ title: 'Strength session', items: [] }) }, '▶ Log a session as I go')));
 
   const saved = st.workouts;
   const savedPanel = h('section', { class: 'panel', id: 'my-workouts' },
     h('h2', null, `My workouts${saved.length ? ` (${saved.length})` : ''}`),
+    h('p', { class: 'hint' }, 'A workout is one training session. Start one to log it, or put several into a plan (Plans tab) to rotate through them.'),
     saved.length ? h('div', { class: 'wk-grid' }, [...saved].sort((a, b) => b.updatedAt - a.updatedAt).map((w) => {
       const last = lastDoneDate(ctx.state, w.id);
       return h('article', { class: 'wk-card', 'data-workout': w.id },
         h('h3', null, w.name),
+        h('p', { class: 'badges' }, plansOf(w.id).length ? plansOf(w.id).map((p) => h('button', { class: 'badge plan', type: 'button', title: 'Show this plan', 'data-action': 'show-plan', onclick: () => go('plans') }, `in plan: ${p.name}`)) : h('span', { class: 'badge' }, 'single workout')),
         h('p', { class: 'hint' }, `${w.items.length} exercise${w.items.length === 1 ? '' : 's'} · about ${minutesOf(w.items)} min${last ? ` · last done ${last}` : ''}`),
         h('p', { class: 'muted small' }, musclesOfItems(w.items, by).slice(0, 5).join(', ')),
         h('ol', { class: 'wk-items' }, w.items.slice(0, 8).map((i) => h('li', null, by[i.exId]?.name ?? i.exId, i.anchor ? ' ★' : '', h('small', { class: 'muted' }, ` ${by[i.exId] ? describeRx({ ...i, perSide: by[i.exId].unilateral }) : ''}`))), w.items.length > 8 ? h('li', { class: 'muted' }, `+${w.items.length - 8} more`) : null),
@@ -101,20 +153,20 @@ function workoutsPage() {
   const ctxb = builderCtx();
   const templatesPanel = h('section', { class: 'panel', id: 'templates-panel' },
     h('h2', null, 'Start from a template'),
-    h('p', { class: 'hint' }, 'Templates are filled in with what you own and your settings. The ★ lifts are the ones to keep for 6–8 weeks; everything else can be swapped.'),
+    h('p', { class: 'hint' }, 'Ready-made programmes, filled in with what you own and your settings. A template with several days saves those days as separate workouts plus a plan that rotates through them; a one-day template saves a single workout. The ★ lifts are the ones to keep for 6–8 weeks; everything else can be swapped.'),
     h('div', { class: 'tpl-grid' }, TEMPLATES.map((tpl) => {
       const { workouts, notes } = instantiate(tpl, ctxb);
       return h('article', { class: 'tpl-card', 'data-template': tpl.id },
         h('h3', null, tpl.name),
         h('p', { class: 'hint' }, tpl.blurb),
-        h('details', null, h('summary', null, `${workouts.length} workout${workouts.length === 1 ? '' : 's'}: preview`),
+        h('details', null, h('summary', null, workouts.length > 1 ? `${workouts.length} workouts in rotation: preview` : 'One workout: preview'),
           workouts.map((w) => h('div', { class: 'tpl-day' }, h('strong', null, w.name), h('ol', null, w.items.map((i) => h('li', null, by[i.exId]?.name ?? i.exId, i.anchor ? ' ★' : ''))),
             h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'open-day', onclick: () => openEditor({ name: `${tpl.name.split(',')[0]} · ${w.name}`, items: w.items, template: tpl.id }) }, 'Open in the builder'))),
           notes.length ? h('ul', { class: 'hint' }, notes.map((n) => h('li', null, n))) : null,
           tpl.tips?.length ? h('ul', { class: 'hint' }, tpl.tips.map((t) => h('li', null, t))) : null),
-        h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', type: 'button', 'data-action': 'use-template', onclick: () => useTemplate(tpl, workouts) }, workouts.length > 1 ? 'Save as a plan' : 'Save this workout')));
+        h('div', { class: 'row-actions' }, h('button', { class: 'btn small primary', type: 'button', 'data-action': 'use-template', onclick: () => useTemplate(tpl, workouts) }, workouts.length > 1 ? `Save as a plan (${workouts.length} workouts)` : 'Save this workout')));
     })));
-  return h('div', { id: 'workouts-page' }, describePanel, savedPanel, templatesPanel);
+  return h('div', { id: 'workouts-page' }, explainer(!st.plans.length && st.workouts.length < 3), nextUpPanel(), describePanel, savedPanel, templatesPanel);
 }
 
 /** Save a template's workouts, and (when there are several) a plan that cycles through them. */
@@ -122,7 +174,7 @@ function useTemplate(tpl, workouts) {
   const ids = workouts.map((w) => saveWorkout(ctx.state, { name: `${tpl.name.split(',')[0]} · ${w.name}`, items: w.items, template: tpl.id })?.id).filter(Boolean);
   if (workouts.length > 1) savePlan(ctx.state, { name: tpl.name, workoutIds: ids, template: tpl.id, note: (tpl.tips ?? []).join(' ') });
   ctx.store.save();
-  toast(workouts.length > 1 ? `Saved ${ids.length} workouts and a plan “${tpl.name}”.` : `Saved “${tpl.name}”.`, 'success');
+  toast(workouts.length > 1 ? `Saved ${ids.length} workouts (My workouts) and a plan “${tpl.name}” that rotates through them.` : `Saved “${tpl.name}” as a workout.`, 'success');
   ui().page = workouts.length > 1 ? 'plans' : 'workouts';
   rerender();
 }
@@ -138,6 +190,7 @@ function plansPage() {
     const body = h('article', { class: 'plan-card', 'data-plan': p.id });
     const drawCard = () => fill(body,
       h('h3', null, p.name),
+      h('p', { class: 'rotation muted small' }, p.workoutIds.length ? `Rotation: ${p.workoutIds.map((id) => wk(id)?.name ?? '(deleted)').join(' → ')} → and round again` : 'Empty: add a workout below.'),
       p.note ? h('p', { class: 'hint' }, p.note) : null,
       h('ol', { class: 'plan-days' }, p.workoutIds.map((id, i) => { const w = wk(id); return h('li', { class: w && next?.id === id ? 'next' : '' }, w ? w.name : '(deleted)', w && next?.id === id ? h('span', { class: 'badge new' }, 'next') : null, w ? h('small', { class: 'muted' }, ` ${lastDoneDate(ctx.state, id) ? `last ${lastDoneDate(ctx.state, id)}` : 'not done yet'}`) : null,
         h('button', { class: 'btn small ghost', type: 'button', 'aria-label': 'Move up', disabled: i === 0, onclick: () => { [p.workoutIds[i - 1], p.workoutIds[i]] = [p.workoutIds[i], p.workoutIds[i - 1]]; ctx.store.save(); drawCard(); } }, '▲'),
@@ -160,7 +213,7 @@ function plansPage() {
   return h('div', { id: 'plans-page' },
     h('section', { class: 'panel' },
       h('h2', null, 'Plans'),
-      h('p', { class: 'hint' }, 'A plan is an ordered list of your saved workouts. “Next up” is the one after the one you did last, so you can just press start. Keep the ★ lifts the same for 6–8 weeks so progress is measurable; swap accessories when you like.'),
+      h('p', { class: 'hint' }, 'A plan is an order of workouts that you rotate through; it holds no exercises of its own. “Next up” is the workout after the one you did last, and after the last one it starts again from the top. Keep the ★ lifts the same for 6–8 weeks so progress is measurable; swap accessories when you like.'),
       st.plans.length ? h('div', { class: 'plan-grid' }, st.plans.map(planCard)) : h('p', { class: 'empty-note', id: 'no-plans' }, 'No plans yet. Save a template as a plan on the Workouts page, or make one from your own workouts below.')),
     h('section', { class: 'panel' },
       h('h3', null, 'New plan from my workouts'),

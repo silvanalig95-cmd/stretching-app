@@ -14,7 +14,7 @@ export function ui() {
   return (ctx.ui.strength ??= { page: 'workouts', editor: null, session: null, filters: { q: '', muscle: '', equipment: '', slot: '', doable: true, show: 40 }, mounted: null, done: null });
 }
 /** An empty workout draft for the builder. */
-export const newDraft = (d = {}) => ({ id: d.id ?? null, name: d.name ?? '', note: d.note ?? '', items: (d.items ?? []).map((i) => ({ ...i })), template: d.template ?? null, interpretation: d.interpretation ?? '', notes: d.notes ?? [], suggestions: null, why: d.why ?? {} });
+export const newDraft = (d = {}) => ({ id: d.id ?? null, name: d.name ?? '', note: d.note ?? '', items: (d.items ?? []).map((i) => ({ ...i })), template: d.template ?? null, interpretation: d.interpretation ?? '', notes: d.notes ?? [], suggestions: null, why: d.why ?? {}, source: d.source ?? '', model: d.model ?? '' });
 
 /** Re-draw the strength page (set by the page itself). */
 export const rerender = () => ui().mounted?.();
@@ -28,6 +28,11 @@ export function builderCtx(extra = {}) {
     weakAreas: ctx.state.prefs.focus.filter((f) => f.mode === 'weak').map((f) => f.id), recent: recentExercises(ctx.state),
     exclude: new Set(st.prefs.excluded), legsFatigued: st.prefs.legsFatigued, minutes: st.prefs.minutes, ...extra,
   };
+}
+
+/** What the AI coach is told about you: the builder's context plus the numbers it needs to talk about loads and recent training. */
+export function coachCtx(extra = {}) {
+  return { ...builderCtx(), equipment: S().equipment, history: ctx.state.history, perWeek: ctx.state.prefs.strengthGoal || 0, today: localDate(), ...extra };
 }
 
 export const exName = (id) => catalogById(ctx.state)[id]?.name ?? id;
