@@ -69,7 +69,7 @@ Your data (library, history, key) lives in `%APPDATA%\Unfurl` (paste that into t
 
 This runs the same tested auto-updating setup used for Linux servers, inside Docker. Every minute it checks GitHub; a new version is tested, switched to, health-checked, and **rolled back automatically** if it fails to start.
 
-1. **Install Docker Desktop** from <https://www.docker.com/products/docker-desktop/>. Keep *Use WSL 2* ticked, restart when asked, open Docker Desktop once and accept the terms. In its *Settings → General*, tick **Start Docker Desktop when you sign in to Windows**.
+1. **Install Docker Desktop** from <https://www.docker.com/products/docker-desktop/>. Keep *Use WSL 2* ticked, restart when asked, open Docker Desktop once and accept the terms. In its *Settings → General*, tick **Start Docker Desktop when you sign in to Windows**. Before the next step, make sure Docker Desktop is **running** (window says *Engine running*); `docker info` in PowerShell should print details without an error.
 2. Stop the step-2 server if it is running (close its window), and remove its autostart if you added it (see 2.6).
 3. Open PowerShell in the app folder and create your settings file:
    ```powershell
@@ -120,4 +120,5 @@ If you later move to an always-on Linux machine, the same settings file and the 
 | Page opens but says it can't reach the server / "forbidden" | The name or address you typed isn't in `UNFURL_ALLOWED_HOSTS`. Add it (exactly as you type it, without `http://` or the port) and restart. |
 | "Address already in use" | Another copy is running. Close its window, or change `UNFURL_PORT`. |
 | A video says *Error 153* or won't play | Tell me; it depends on the address you use to open the app. Opening it as `localhost` on the PC itself is the reference that always works. |
+| Docker: `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine ... cannot find the file specified` | Docker Desktop is installed but **not running**. Start it from the Start menu and wait until its window says *Engine running* (the whale icon in the tray stops animating). First time: accept the terms, skip the sign-in. If it complains about WSL or virtualization: open PowerShell **as administrator**, run `wsl --install`, restart the PC, and make sure virtualization is enabled in the BIOS/UEFI (Task Manager → Performance → CPU shows "Virtualization: Enabled"). Check with `docker info`, then re-run the `docker compose ... up -d --build` command. |
 | Docker: container keeps restarting | `docker compose -f deploy/docker-compose.yml logs --tail 50` and send me the last lines. |
