@@ -6,6 +6,7 @@ import { ctx } from '../ctx.js';
 import { localDate } from '../model.js';
 import { formatDuration } from '../analyze.js';
 import { openFeedback } from './feedback.js';
+import { watchLine } from '../practice.js';
 import { logSession, deleteSession, restoreSession } from '../state.js';
 import { AREAS, areaLabel } from '../lexicon.js';
 import { toast } from '../modal.js';
@@ -106,6 +107,7 @@ export function trainingLog(redraw, { keep = false } = {}) {
           h('small', { class: 'muted' }, ` · ${rec.kind === 'manual' ? 'no video' : (rec.channel ?? v?.channel ?? '')}${mins ? ` · ${mins} min` : ''}`)),
         h('p', { class: 'badges' }, areas.map((a) => h('span', { class: `badge${rec.ratings?.[a] ? ` rate-${rec.ratings[a]}` : ''}` }, `${rec.ratings?.[a] ? { much: '😀 ', some: '🙂 ', none: '😐 ' }[rec.ratings[a]] : ''}${areaLabel(a)}`)),
           rec.intensity ? h('span', { class: 'badge' }, { easy: 'too easy', right: 'just right', hard: 'too hard' }[rec.intensity]) : null),
+        rec.watch ? h('p', { class: 'hint watched', title: rec.watch.skipped?.length ? `Skipped: ${rec.watch.skipped.join(', ')}` : '' }, `played ${watchLine(rec.watch, rec.durationSec)}${rec.watch.skipped?.length ? ` · skipped ${rec.watch.skipped.length} section${rec.watch.skipped.length === 1 ? '' : 's'}` : ''}`) : null,
         rec.note ? h('p', { class: 'note-text' }, `“${rec.note}”`) : null),
       h('div', { class: 'row-actions' },
         h('button', { class: 'btn small', type: 'button', 'data-action': 'rate-entry', onclick: () => openFeedback(rec.videoId, { sessionId: rec.id, onDone: (how) => { if (how === 'saved') redraw(); } }) }, rated.length ? 'Edit' : 'How did it go?'),

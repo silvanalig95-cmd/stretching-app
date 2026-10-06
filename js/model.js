@@ -218,6 +218,7 @@ export function rankCandidates({
   videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], adventure = 0.35, today = localDate(), now = Date.now(),
   textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
   libraryIds = null,   // Set of ids in the user's library
+  collectionIds = null, // Set of ids in the collection the person picked ("Morning"): nothing else is considered
 }) {
   const selected = filters.areas ?? [];
   const blockedSet = new Set(blocked);
@@ -230,6 +231,7 @@ export function rankCandidates({
     const inLib = !!libraryIds?.has(video.id);
     if (filters.source === 'library' && !inLib) continue;
     if (filters.source === 'discovered' && inLib) continue;
+    if (collectionIds && !collectionIds.has(video.id)) continue;
     const fit = lengthFit(video, filters.minMin ?? 0, filters.maxMin ?? 999);
     if (fit === 0) continue;
     const areaMatch = matchScore(video, selected);

@@ -2,7 +2,9 @@
 // named poses, viewer comments) into a plain report a person can read before deciding to keep the video.
 // Pure functions: no DOM, no network.
 
-import { AREA_BY_ID, POSE_BY_ID, BENEFITS, STYLES, SPECIFIC_TO_GENERIC } from './lexicon.js';
+import { AREA_BY_ID, POSE_BY_ID, BENEFITS, SPECIFIC_TO_GENERIC } from './lexicon.js';
+import { STYLE_BY_ID, traitLine } from './style.js';
+import { timelineOf } from './timeline.js';
 import { qualityScore, isHiddenGem, likeRatioScore } from './analyze.js';
 import { coverage, isTrusted, channelKey } from './model.js';
 
@@ -64,7 +66,24 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
 
   const poses = (p.poses ?? []).slice(0, 12).map(({ id, count }) => ({ id, count, label: POSE_BY_ID[id]?.label ?? id, mode: POSE_BY_ID[id]?.mode ?? 'stretch' }));
   const chapters = (p.chapters ?? []).slice(0, 14).map((c) => ({ at: clock(c.t), label: c.label }));
-  const styles = Object.entries(p.styles ?? {}).filter(([, s]) => s >= 0.3).sort((a, b) => b[1] - a[1]).map(([id]) => STYLES.find((s) => s.id === id)?.label ?? id);
+  // what kind of routine it is (see style.js), plus any other styles it clearly has
+  const kind = p.kind ?? null;
+  const styles = Object.entries(p.styles ?? {}).filter(([id, s]) => s >= 0.45 && id !== kind?.id && id !== kind?.discipline && STYLE_BY_ID[id]).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => STYLE_BY_ID[id].label);
+  const tl = timelineOf(p);
+  const timeline = tl ? {
+    source: tl.source,
+    label: { chapters: 'from the chapter list', transcript: 'from what the teacher says', comments: 'from viewers’ comments (approximate)' }[tl.source],
+    items: tl.items.slice(0, 40).map((i) => ({ t: i.t, at: clock(i.t), label: i.label, poseId: i.poseId ?? null })),
+  } : null;
+  // the teacher's usual kind of routine, from the other videos of theirs that are clearly one thing
+  let teacherUsually = null;
+  const chOf = channelKey(video);
+  if (chOf) {
+    const labels = Object.values(state.videos ?? {}).filter((o) => o.id !== video.id && channelKey(o) === chOf && (o.profile?.kind?.confidence ?? 0) >= 0.6 && !o.profile.kind.fixed).map((o) => o.profile.kind.label);
+    const tally = labels.reduce((m, l) => m.set(l, (m.get(l) ?? 0) + 1), new Map());
+    const [best, n] = [...tally].sort((a, b) => b[1] - a[1])[0] ?? [];
+    if (best && labels.length >= 3 && n / labels.length >= 0.6) teacherUsually = { label: best, n, of: labels.length };
+  }
 
   const benefits = Object.entries(ev?.benefits ?? {}).filter(([, n]) => n >= 1).sort((a, b) => b[1] - a[1]).slice(0, 5)
     .map(([id, n]) => ({ label: BENEFITS.find((b) => b.id === id)?.label ?? id, n }));
@@ -113,7 +132,7 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
 
   return {
     id: video.id, title: video.title, channel: video.channel || '', durationSec: video.durationSec ?? null, durationApprox: !!video.durationApprox,
-    level: LEVELS[p.level] ?? null, styles, areas, fullBody, poses, chapters, transcript: spoken, viewers, quality, fit, limits,
+    level: LEVELS[p.level] ?? null, kind, traits: p.traits ?? null, traitLine: traitLine(p.traits), timeline, teacherUsually, fixedStyle: state.styleFixes?.[video.id] ?? null, styles, areas, fullBody, poses, chapters, transcript: spoken, viewers, quality, fit, limits,
     summary: summarize(areas, fullBody),
   };
 }

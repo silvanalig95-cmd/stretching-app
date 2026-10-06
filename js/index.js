@@ -17,6 +17,7 @@
 //   as-you-type  prefixes and autocomplete
 
 import { normalize, scan, AREA_TERMS, POSE_TERMS, POSE_BY_ID, BENEFITS, AREA_BY_ID, AREAS } from './lexicon.js';
+import { STYLE_BY_ID } from './style.js';
 
 export const FIELD_WEIGHTS = { title: 3, tags: 3, channel: 2, concepts: 2, chapters: 2, keywords: 1.5, description: 1, viewers: 1, note: 1 };
 const K1 = 1.2, B = 0.75;
@@ -146,7 +147,7 @@ export function videoFields(video, libItem) {
     title: video.title,
     channel: video.channel,
     tags: `${(video.tags ?? []).join(' ')} ${(libItem?.tags ?? []).join(' ')}`,
-    concepts: [...areaWords, ...(p.poses ?? []).map(({ id }) => POSE_BY_ID[id]?.label ?? ''), ...Object.keys(p.styles ?? {})].join(' '),
+    concepts: [...areaWords, ...(p.poses ?? []).map(({ id }) => POSE_BY_ID[id]?.label ?? ''), ...Object.entries(p.styles ?? {}).filter(([, x]) => x >= 0.3).map(([id]) => STYLE_BY_ID[id]?.name ?? id), p.kind?.label ?? ''].join(' '),
     chapters: (p.chapters ?? []).map((c) => c.label).join(' '),
     keywords: benefitWords.join(' '),
     description: String(video.description ?? '').slice(0, 1500),

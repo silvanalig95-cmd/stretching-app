@@ -22,6 +22,15 @@ export function append(el, kids) {
   }
   return el;
 }
+const SVG_NS = 'http://www.w3.org/2000/svg';
+/** An SVG element (they need their own namespace). Attributes with null/false are skipped; children may be nested arrays. */
+export function svgEl(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs ?? {})) if (v != null && v !== false) el.setAttribute(k, v === true ? '' : String(v));
+  for (const k of kids.flat(Infinity)) if (k) el.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return el;
+}
+
 /** Replace an element's children. Unlike the native replaceChildren it flattens arrays and skips null/false. */
 export function fill(el, ...kids) {
   el.replaceChildren();

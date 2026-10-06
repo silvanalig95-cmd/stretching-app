@@ -7,6 +7,7 @@ import { buildModel, insights, areaHeat, neglectedAreas } from '../model.js';
 import { deleteSession } from '../state.js';
 import { trainingLog } from './traininglog.js';
 import { sessionMinutes } from '../progress.js';
+import { emptyBlock } from './placeholders.js';
 
 const FACE = { much: ['😀', 'much better'], some: ['🙂', 'a little'], none: ['😐', 'not really'] };
 
@@ -56,7 +57,8 @@ export function mountJournal(root, { keep = false } = {}) {
               deleteSession(state, s.id); ctx.store.save(); mountJournal(root, { keep: true });
             } }, 'Delete'));
         }))
-        : h('p', { class: 'empty-note' }, 'No routines logged yet.')));
+        : emptyBlock({ kind: 'calendar', title: 'No routines logged yet.', body: h('p', { class: 'hint' }, 'After a routine, press “I did it” (or “✓ Did today” on any video) and it appears here, with how it went.'),
+          actions: [h('button', { class: 'btn primary', type: 'button', onclick: () => ctx.hooks.navigate('today') }, 'Find a routine')] })));
 }
 
 /** Which muscles you've been working lately, and which of your standing spots have gone quiet. */

@@ -8,8 +8,8 @@ import {
   fetchOEmbed, KeyError, QuotaError, DAILY_QUOTA, PROXY_BASE,
 } from './youtube.js';
 import { buildModel, rankCandidates, pickRoutine, seededRng, localDate, mulberry32, neglectedAreas, composeCombos } from './model.js';
-import { applyDiscovery, addManualVideo, addAnalyzedVideo, importRecords, followChannel } from './state.js';
-import { attachComments, analyzeVideoText, attachTranscript, cleanTranscript } from './analyze.js';
+import { applyDiscovery, addManualVideo, addAnalyzedVideo, importRecords, followChannel, setStyleFix } from './state.js';
+import { attachComments, analyzeVideoText, attachTranscript, cleanTranscript, reanalyze } from './analyze.js';
 import { buildReport } from './report.js';
 import { SearchIndex } from './index.js';
 import { areaLabel } from './lexicon.js';
@@ -71,6 +71,13 @@ export function initFilters() {
   ctx.ui.filters.maxMin = prefs.maxMin;
 }
 
+/** "Pick from: Morning": the ids in that collection (null when the request is not limited to one). */
+export function sourceCollection(f) {
+  const id = typeof f.source === 'string' && f.source.startsWith('collection:') ? f.source.slice(11) : null;
+  const c = id ? ctx.state.collections.find((x) => x.id === id) : null;
+  return id ? new Set(c?.videoIds ?? []) : null;
+}
+
 export function describeFilters(f = ctx.ui.filters) {
   const parts = [];
   if (f.areas.length) parts.push(f.areas.map((a) => `${areaLabel(a.id)}${a.mode === 'weak' ? ' (weak)' : ''}`).join(', '));
@@ -78,6 +85,7 @@ export function describeFilters(f = ctx.ui.filters) {
   parts.push(f.minMin == null && f.maxMin == null ? 'any length' : `${f.minMin ?? 0}–${f.maxMin ?? '∞'} min`);
   if (f.styles.length) parts.push(f.styles.join(', '));
   if (f.source === 'library') parts.push('my library only');
+  if (typeof f.source === 'string' && f.source.startsWith('collection:')) parts.push(`from “${ctx.state.collections.find((c) => `collection:${c.id}` === f.source)?.name ?? 'a collection'}”`);
   return parts.join(' · ');
 }
 
@@ -125,7 +133,7 @@ export function rankNow() {
     if (rel.size) textScores = rel; else ui.termsIgnored = true;   // nothing known mentions it: don't let it empty the results
   }
   ui.ranked = rankCandidates({
-    videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(),
+    videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(), collectionIds: sourceCollection(ui.filters),
     trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
   });
   return ui.ranked;
@@ -327,6 +335,20 @@ export function addTranscriptToAnalysis(raw) {
   return a;
 }
 
+/** "This is really Pilates": remember what kind of routine a video is, for a stored video or the analysis on screen. `null` takes it back. */
+export function fixStyle(videoId, styleId) {
+  if (!setStyleFix(ctx.state, videoId, styleId)) return false;
+  const a = ctx.ui.analysis;
+  if (a?.video.id === videoId) {
+    const v = { ...a.video };
+    if (styleId) v.styleFix = styleId; else delete v.styleFix;
+    a.video = reanalyze(v);
+    a.report = buildReport(a.video, { state: ctx.state, subscribers: a.video.subscribers ?? null });
+  }
+  ctx.store.save();
+  return true;
+}
+
 /** Keep an analysed video (see analyzeLink): into the index, and into the library unless told otherwise. */
 export function commitAnalysis(video, { toLibrary = true } = {}) {
   const rec = addAnalyzedVideo(ctx.state, video, { toLibrary });
@@ -462,7 +484,7 @@ export function buildCombos() {
   const model = buildModel(state.history, state.videos);
   // rank with a loose minimum length: the parts are SHORTER than the whole session
   const cands = rankCandidates({
-    videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(),
+    videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(), collectionIds: sourceCollection(f),
     trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
   });
   ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };

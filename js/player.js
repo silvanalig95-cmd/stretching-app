@@ -31,7 +31,7 @@ export const PLAYER_ERRORS = {
 
 /**
  * Mount a player into `container`. Handlers: onInfo({duration,title,author}), onEnded, onPlaying, onError(code, message), onUnavailable().
- * Returns {destroy()}.
+ * Returns the player's remote control: destroy(), time(), duration(), playing(), seekTo(sec), play(), pause(), rate(), rates(), setRate(r).
  */
 export function mountPlayer(container, videoId, handlers = {}) {
   let dead = false, player = null, gotDuration = false;
@@ -64,7 +64,19 @@ export function mountPlayer(container, videoId, handlers = {}) {
     });
   }).catch(() => { if (!dead) handlers.onUnavailable?.(); });
 
+  // What a person following along needs from the player. Every call is safe before the player is ready.
+  const call = (fn, fallback = null) => { try { return player?.[fn] ? player[fn]() : fallback; } catch { return fallback; } };
   return {
     destroy() { dead = true; try { player?.destroy?.(); } catch { /* already gone */ } },
+    get ready() { return !!player && typeof player.getCurrentTime === 'function'; },
+    time: () => Number(call('getCurrentTime', 0)) || 0,
+    duration: () => Number(call('getDuration', 0)) || 0,
+    playing: () => call('getPlayerState', -1) === 1,
+    seekTo(sec) { try { player?.seekTo?.(Math.max(0, sec), true); } catch { /* not ready */ } },
+    play() { try { player?.playVideo?.(); } catch { /* not ready */ } },
+    pause() { try { player?.pauseVideo?.(); } catch { /* not ready */ } },
+    rate: () => Number(call('getPlaybackRate', 1)) || 1,
+    rates: () => call('getAvailablePlaybackRates', []) ?? [],
+    setRate(r) { try { player?.setPlaybackRate?.(r); } catch { /* not ready */ } },
   };
 }

@@ -107,12 +107,13 @@ export function mountSettings(root) {
   const renderSpots = () => {
     const picker = areaPicker({
       skipWhole: true, showSpecific: !!prefs.showSpecific, modeOf: (id) => prefs.focus.find((f) => f.id === id)?.mode,
+      onPick: (id) => { cycleArea(id, prefs.focus); store.save(); renderSpots(); },
       onToggle: () => { prefs.showSpecific = !prefs.showSpecific; store.save(); renderSpots(); },
       makeChip: (a, m) => h('button', { type: 'button', class: `chip area${parentOf(a.id) ? ' sub' : ''}${m ? ` on ${m}` : ''}`, 'aria-pressed': !!m, 'aria-label': `${areaPath(a.id)}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not set'}`,
         onclick: () => { cycleArea(a.id, prefs.focus); store.save(); renderSpots(); } },
       a.label, m ? h('small', { class: 'mode' }, m === 'weak' ? 'weak' : 'tight') : null),
     });
-    fill(spotsSlot, picker.toggle, picker.groups);
+    fill(spotsSlot, picker.toggle, picker.groups, picker.map);
   };
 
   // ---------------------------------------------------------------- data

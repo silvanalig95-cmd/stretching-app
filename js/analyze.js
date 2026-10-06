@@ -6,8 +6,10 @@
 // with a "noisy-OR": each source says "I'm X% sure this video works area A",
 // and several agreeing sources make the final number higher than any one.
 
+import { classifyStyle, withFix, stylesWithFix } from './style.js';
+import { buildTimeline } from './timeline.js';
 import {
-  AREA_TERMS, POSE_TERMS, STYLE_TERMS, DIFFICULTY_TERMS, BENEFIT_TERMS,
+  AREA_TERMS, POSE_TERMS, DIFFICULTY_TERMS, BENEFIT_TERMS,
   POSE_BY_ID, AREA_BY_ID, NEG_RE, POS_RE, PACE_RE, BENEFITS, normalize, scan,
   rootOf, SPECIFIC_TO_GENERIC, GENERIC_TO_SPECIFIC,
 } from './lexicon.js';
@@ -18,7 +20,7 @@ const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 // Bump this whenever the analysis changes in a way that alters profiles (lexicon,
 // weights, parsing). On load the app re-runs the analysis over everything it has
 // stored, so improvements apply retroactively without re-fetching anything.
-export const ANALYSIS_VERSION = 4;
+export const ANALYSIS_VERSION = 5;
 
 // How much we trust each kind of evidence.
 export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75, mine: 0.8 };
@@ -242,16 +244,6 @@ export function combineSources(sources) {
   return Object.fromEntries(Object.entries(areas).map(([a, v]) => [a, Math.round(v * 1000) / 1000]));
 }
 
-function detectStyles(title, desc, poseCounts) {
-  const score = {};
-  for (const { entry } of scan(STYLE_TERMS, title)) score[entry.id] = (score[entry.id] ?? 0) + 2;
-  for (const { entry } of scan(STYLE_TERMS, desc.slice(0, 1200))) score[entry.id] = Math.min(4, (score[entry.id] ?? 0) + 0.5);
-  // Many strength-type exercises named => it's genuinely a strength session.
-  const strengthMoves = Object.entries(poseCounts).filter(([id]) => POSE_BY_ID[id]?.mode === 'strength').length;
-  if (strengthMoves >= 3) score.strength = (score.strength ?? 0) + 1.5;
-  return Object.fromEntries(Object.entries(score).map(([k, v]) => [k, Math.round(sat(v, 0.5) * 100) / 100]));
-}
-
 function detectLevel(title, desc) {
   const pick = (matches) => {
     const c = {};
@@ -291,13 +283,25 @@ export function analyzeVideoText(video) {
     ...(spoken ? { transcript: spoken.areas } : {}),
     ...(mine ? { mine: mine.areas } : {}),
   };
+  const poses = Object.entries(poseCounts).map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count);
+  const level = detectLevel(title, description);
+  // What kind of routine this is, and how it feels to do (see style.js). Read from the words around the video, never the footage.
+  const found = classifyStyle({
+    title, channel: video.channel, tags: video.tags, description, chapters, poses, transcript: video.transcript, comments: video.comments, durationSec: video.durationSec, level,
+  });
+  // a correction the person made ("this is really Pilates") travels on the video record, so every re-analysis keeps it
+  const styles = video.styleFix ? stylesWithFix(found.styles, video.styleFix) : found.styles;
+  const kind = video.styleFix ? withFix(found.kind, video.styleFix) : found.kind;
+  const traits = found.traits;
+  const timeline = buildTimeline({ chapters, transcriptTimeline: spoken?.timeline, comments: video.comments, durationSec: video.durationSec });
   return {
     sources,
     areas: combineSources(sources),
-    poses: Object.entries(poseCounts).map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count),
+    poses,
     chapters: chapters.slice(0, 40),
-    styles: detectStyles(title, `${description} ${String(video.transcript ?? '').slice(0, 3000)}`, poseCounts),
-    level: detectLevel(title, description),
+    styles, kind, traits,
+    level,
+    ...(timeline && timeline.source !== 'chapters' ? { timeline } : {}),   // a chapter list is already stored as `chapters`
     ...(spoken ? { transcript: { words: spoken.words, lines: spoken.lines, timeline: spoken.timeline } } : {}),
   };
 }
@@ -411,7 +415,7 @@ export function attachTranscript(video, raw) {
 export function attachComments(video, comments) {
   const sample = compactComments(comments);
   const evidence = analyzeComments(sample.map((c) => ({ text: c.t, likes: c.l })));
-  const base = video.profile ?? analyzeVideoText(video);
+  const base = analyzeVideoText({ ...video, comments: sample });   // comments also say what kind of routine it is
   return { ...video, comments: sample, evidence, profile: applyComments(base, evidence) };
 }
 

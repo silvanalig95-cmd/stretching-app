@@ -11,6 +11,7 @@
 import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
 import { mergeVideo } from './youtube.js';
+import { STYLE_BY_ID } from './style.js';
 import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
 import { APP_NAME } from './brand.js';
 
@@ -42,6 +43,8 @@ export function emptyState() {
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
+    collections: [], // your own groups of library videos ("Morning", "After a run"): [{id, name, videoIds[], createdAt}]
+    styleFixes: {},  // videoId -> style id, when you told the app what kind of routine a video really is
     prefs: { ...DEFAULT_PREFS, trusted: [...DEFAULT_TRUSTED], focus: [] },
     // ---- index
     videos: {},      // id -> video record (metadata + raw text/comments sample + derived profile)
@@ -54,7 +57,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -149,6 +152,8 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
+    s.collections = cleanCollections(p.collections);
+    if (isObj(p.styleFixes)) s.styleFixes = Object.fromEntries(Object.entries(p.styleFixes).filter(([k, v]) => typeof k === 'string' && STYLE_BY_ID[v]));
     if (Array.isArray(p.following)) s.following = p.following;
     if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
@@ -164,6 +169,10 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     changed = true; // an index from an incompatible version is simply rebuilt
   }
 
+  for (const [id, fix] of Object.entries(s.styleFixes)) {   // corrections live in the profile; make sure the index agrees with them
+    const v = s.videos[id];
+    if (isObj(v) && v.styleFix !== fix) { v.styleFix = fix; if (v.profile) s.videos[id] = reanalyze(v); }
+  }
   if (!readOnly) {
     if (seedSuggestions(s)) changed = true;
     if (ensureStubs(s)) changed = true;
@@ -278,12 +287,75 @@ export function addToLibrary(state, id, extra = {}) {
   snapshot(state, id);
   return state.library[id];
 }
-export function removeFromLibrary(state, id) { delete state.library[id]; refreshMine(state, id); }
+export function removeFromLibrary(state, id) {
+  delete state.library[id];
+  for (const c of state.collections) c.videoIds = c.videoIds.filter((x) => x !== id);   // a collection only holds library videos
+  refreshMine(state, id);
+}
 /** Returns true if the video is in the library afterwards. */
 export function toggleLibrary(state, id) {
   if (inLibrary(state, id)) { removeFromLibrary(state, id); return false; }
   addToLibrary(state, id); return true;
 }
+// ---------------------------------------------------------------- collections and style corrections
+
+export const MAX_COLLECTIONS = 30;
+const cleanCollections = (raw) => (Array.isArray(raw) ? raw : []).filter((c) => isObj(c) && typeof c.id === 'string' && typeof c.name === 'string' && c.name.trim()).slice(0, MAX_COLLECTIONS)
+  .map((c) => ({ id: c.id, name: c.name.trim().slice(0, 40), createdAt: Number(c.createdAt) || 0, videoIds: [...new Set((Array.isArray(c.videoIds) ? c.videoIds : []).filter((x) => typeof x === 'string'))].slice(0, 500) }));
+
+/** A new, empty collection. Returns it, the existing one if the name is taken, or null (no name / too many). */
+export function createCollection(state, name) {
+  const clean = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!clean) return null;
+  const same = state.collections.find((c) => c.name.toLowerCase() === clean.toLowerCase());
+  if (same) return same;
+  if (state.collections.length >= MAX_COLLECTIONS) return null;
+  const c = { id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, name: clean, videoIds: [], createdAt: Date.now() };
+  state.collections.push(c);
+  return c;
+}
+export function renameCollection(state, id, name) {
+  const c = state.collections.find((x) => x.id === id);
+  const clean = String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  if (!c || !clean || state.collections.some((x) => x.id !== id && x.name.toLowerCase() === clean.toLowerCase())) return false;
+  c.name = clean;
+  return true;
+}
+export function deleteCollection(state, id) { state.collections = state.collections.filter((c) => c.id !== id); }
+/** Adding puts the video in your library too (a collection is a way of sorting what you keep). */
+export function addToCollection(state, id, videoId) {
+  const c = state.collections.find((x) => x.id === id);
+  if (!c || !state.videos[videoId]) return false;
+  addToLibrary(state, videoId);
+  if (!c.videoIds.includes(videoId)) c.videoIds.push(videoId);
+  return true;
+}
+export function removeFromCollection(state, id, videoId) {
+  const c = state.collections.find((x) => x.id === id);
+  if (c) c.videoIds = c.videoIds.filter((x) => x !== videoId);
+}
+/** Move a video one place earlier (-1) or later (+1) in a collection, for "play in order". */
+export function moveInCollection(state, id, videoId, dir) {
+  const c = state.collections.find((x) => x.id === id);
+  const i = c ? c.videoIds.indexOf(videoId) : -1, j = i + dir;
+  if (i < 0 || j < 0 || j >= c.videoIds.length) return false;
+  [c.videoIds[i], c.videoIds[j]] = [c.videoIds[j], c.videoIds[i]];
+  return true;
+}
+export const collectionsOf = (state, videoId) => state.collections.filter((c) => c.videoIds.includes(videoId));
+
+/** "This is really Pilates": remember the person's correction of what kind of routine a video is. `null` takes it back. */
+export function setStyleFix(state, videoId, styleId) {
+  if (styleId && !STYLE_BY_ID[styleId]) return false;
+  if (styleId) state.styleFixes[videoId] = styleId; else delete state.styleFixes[videoId];
+  const v = state.videos[videoId];
+  if (v) {
+    if (styleId) v.styleFix = styleId; else delete v.styleFix;
+    state.videos[videoId] = reanalyze(v);
+  }
+  return true;
+}
+
 export function updateLibraryItem(state, id, { tags, note }) {
   const item = state.library[id];
   if (!item) return null;
@@ -386,6 +458,13 @@ const validDay = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) 
  * Record a finished routine and what you thought of it. A routine you've done is
  * part of your practice, so it joins your library.
  */
+function cleanWatch(w) {
+  if (!isObj(w) || !(Number(w.sec) > 0)) return null;
+  const f = Number(w.fraction);
+  return { sec: Math.min(86400, Math.round(Number(w.sec))), ...(w.fraction != null && f >= 0 && f <= 1 ? { fraction: Math.round(f * 100) / 100 } : {}),
+    ...(Array.isArray(w.skipped) && w.skipped.length ? { skipped: w.skipped.slice(0, 6).map((x) => String(x).slice(0, 60)) } : {}) };
+}
+
 export function logSession(state, entry, { library = true } = {}) {
   const v = state.videos[entry.videoId];
   const manual = !entry.videoId;                 // something you did that is not a video: a class, a walk, your own routine
@@ -403,6 +482,7 @@ export function logSession(state, entry, { library = true } = {}) {
     intensity: entry.intensity ?? null,
     repeat: entry.repeat ?? null,
     note: (entry.note ?? '').slice(0, 500),
+    ...(cleanWatch(entry.watch) ? { watch: cleanWatch(entry.watch) } : {}),   // how much of the video was played, when you followed along in the app
   };
   state.history.push(rec);
   if (rec.note && !manual) refreshMine(state, rec.videoId);
@@ -526,6 +606,12 @@ export function mergeImport(state, incoming) {
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);
   state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));
+  for (const c of inc.collections) {
+    const mine = state.collections.find((x) => x.id === c.id || x.name.toLowerCase() === c.name.toLowerCase());
+    if (mine) mine.videoIds = [...new Set([...mine.videoIds, ...c.videoIds.filter((id) => id in state.library)])];
+    else if (state.collections.length < MAX_COLLECTIONS) state.collections.push({ ...c, videoIds: c.videoIds.filter((id) => id in state.library) });
+  }
+  for (const [id, fix] of Object.entries(inc.styleFixes)) if (!(id in state.styleFixes)) state.styleFixes[id] = fix;
   for (const f of inc.following) followChannel(state, f);
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;

@@ -18,7 +18,7 @@ export function normalize(text) {
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Build one alternation regex (longest phrase first) + a phrase -> entry map. */
-function compile(entries) {
+export function compile(entries) {
   const map = new Map();
   for (const e of entries) for (const p of e.phrases) map.set(normalize(p), e);
   const alts = [...map.keys()].sort((a, b) => b.length - a.length).map(escapeRe);
@@ -271,6 +271,19 @@ export const POSES = [
   pose('snail', 'Snail / plough', ['snail pose', 'plough pose', 'plow pose', 'halasana'], { upper_back: 0.7, spine: 0.8, neck: 0.5 }),
   pose('triceps_stretch', 'Triceps / overhead stretch', ['triceps stretch', 'overhead stretch', 'cross body shoulder', 'cross body stretch'], { arms: 0.9, triceps: 1, shoulders: 0.6 }),
   pose('biceps_stretch', 'Biceps stretch', ['biceps stretch', 'bicep stretch', 'wall biceps stretch', 'biceps and forearm stretch'], { biceps: 1, arms: 0.7, chest: 0.3 }),
+  // Classic Pilates mat exercises (the style classifier uses their names as evidence, and they work the core and hips).
+  pose('pilates_hundred', 'The Hundred', ['the hundred', 'pilates hundred'], { core: 1, abs_upper: 0.8, deep_core: 0.7 }, 'strength'),
+  pose('roll_up', 'Roll up', ['roll up', 'roll ups', 'pilates roll up'], { abs_upper: 0.9, core: 0.9, spine: 0.6, hamstrings: 0.4 }, 'both'),
+  pose('single_leg_stretch', 'Single-leg stretch', ['single leg stretch', 'double leg stretch'], { abs_upper: 0.9, core: 0.9, abs_lower: 0.5 }, 'strength'),
+  pose('criss_cross', 'Criss-cross', ['criss cross', 'criss crosses'], { obliques: 1, core: 0.8, abs_upper: 0.6 }, 'strength'),
+  pose('teaser', 'Teaser', ['teaser', 'pilates teaser'], { core: 1, abs_lower: 0.9, hip_flexors: 0.5, deep_core: 0.6 }, 'strength'),
+  pose('leg_circles', 'Leg circles', ['leg circles', 'single leg circles'], { hip_flexors: 0.6, glutes: 0.4, core: 0.6, outer_hip: 0.4 }, 'both'),
+  pose('rolling_ball', 'Rolling like a ball', ['rolling like a ball'], { core: 0.8, spine: 0.8, abs_upper: 0.6 }, 'both'),
+  pose('spine_stretch', 'Spine stretch forward', ['spine stretch forward', 'spine stretch'], { spine: 0.8, hamstrings: 0.6, lower_back: 0.5, core: 0.4 }),
+  pose('side_kick', 'Side-kick series', ['side kick series', 'side kicks', 'pilates side kick'], { outer_hip: 1, glutes: 0.7, obliques: 0.4 }, 'strength'),
+  pose('mermaid', 'Mermaid stretch', ['mermaid stretch', 'mermaid'], { lats: 0.9, obliques: 0.7, ql: 0.6, shoulders: 0.3 }),
+  pose('shoulder_bridge', 'Shoulder bridge', ['shoulder bridge'], { glutes: 0.9, hamstrings: 0.6, core: 0.5, hip_flexors: 0.4 }, 'both'),
+  pose('leg_pull', 'Leg pull', ['leg pull', 'leg pull front'], { core: 0.9, shoulders: 0.6, glutes: 0.5 }, 'strength'),
 ];
 export const POSE_BY_ID = Object.fromEntries(POSES.map((p) => [p.id, p]));
 export const POSE_TERMS = compile(POSES);
@@ -278,14 +291,7 @@ export const POSE_TERMS = compile(POSES);
 // ---------------------------------------------------------------- styles
 
 const style = (id, phrases) => ({ id, phrases });
-export const STYLES = [
-  { id: 'stretch', label: 'Stretch & release' },
-  { id: 'yin', label: 'Yin / deep holds' },
-  { id: 'flow', label: 'Flow' },
-  { id: 'strength', label: 'Strength' },
-  { id: 'mobility', label: 'Mobility' },
-  { id: 'restorative', label: 'Gentle / sleep' },
-];
+// (The list of styles shown as filters, with their labels, lives in style.js next to the classifier.)
 export const STYLE_TERMS = compile([
   style('yin', ['yin', 'deep hold', 'long hold', 'long holds', 'fascia']),
   style('restorative', ['restorative', 'bedtime', 'before bed', 'sleep', 'wind down', 'relax', 'relaxing', 'gentle', 'nidra', 'calm', 'unwind', 'evening']),
@@ -293,6 +299,11 @@ export const STYLE_TERMS = compile([
   style('strength', ['strength', 'strong', 'strengthen', 'strengthening', 'workout', 'sculpt', 'burn', 'activation', 'stability', 'stabilize', 'core work']),
   style('stretch', ['stretch', 'stretching', 'release', 'loosen', 'flexibility', 'deep stretch', 'opener', 'tight', 'tension', 'relief']),
   style('mobility', ['mobility', 'mobilize', 'range of motion', 'dynamic', 'joint', 'joints', 'warm up', 'warmup']),
+  // kinds of practice a person can ask for by name
+  style('pilates', ['pilates']), style('wall_pilates', ['wall pilates']), style('reformer', ['reformer', 'reformer pilates']),
+  style('hatha', ['hatha']), style('ashtanga', ['ashtanga']), style('kundalini', ['kundalini']), style('chair', ['chair yoga', 'seated yoga', 'desk yoga']),
+  style('rolling', ['foam rolling', 'foam roller', 'self massage', 'myofascial']), style('taichi', ['tai chi', 'qigong', 'qi gong']),
+  style('barre', ['barre']), style('meditation', ['meditation', 'breathwork']),
 ]);
 
 export const DIFFICULTY_TERMS = compile([

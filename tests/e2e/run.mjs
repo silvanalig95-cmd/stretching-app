@@ -62,6 +62,15 @@ window.YT = { PlayerState: { ENDED: 0, PLAYING: 1, PAUSED: 2, BUFFERING: 3, CUED
       }, 30);
     }
     getDuration() { return 777; }
+    getCurrentTime() { return this.__t || 0; }
+    getPlayerState() { return this.__state ?? 2; }
+    seekTo(t) { this.__t = t; this.__seeks = (this.__seeks || []).concat(t); }
+    playVideo() { this.__state = 1; this.o.events.onStateChange({ data: 1, target: this }); }
+    pauseVideo() { this.__state = 2; this.o.events.onStateChange({ data: 2, target: this }); }
+    getPlaybackRate() { return this.__rate || 1; }
+    setPlaybackRate(r) { this.__rate = r; }
+    getAvailablePlaybackRates() { return [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2]; }
+    __at(t, playing = true) { this.__t = t; this.__state = playing ? 1 : 2; }
     getVideoData() { const r = window.__unfurl && window.__unfurl.state.videos[this.id]; return { title: r ? r.title : '', author: 'Stub Channel' }; }
     destroy() { this.f.remove(); }
     __end() { this.o.events.onStateChange({ data: 0, target: this }); }
@@ -131,6 +140,7 @@ if (want(1)) {
     eq(await page.locator('#tab-suggestions .count').innerText(), '46');
     eq(await page.locator('#tab-discovered .count').innerText(), '0');
     ok((await page.locator('.empty-note').first().innerText()).includes('Your library is empty'), 'friendly empty state');
+    ok(await page.locator('#lib-list .empty-block svg.empty-art').count() === 1 && await page.locator('#open-add-menu').count() === 1, 'with a picture and a button to start');
     await shot(page, '10-library-empty');
     await goto(page, 'today');
   });
@@ -154,6 +164,45 @@ if (want(1)) {
     const id = await featuredId(page);
     await page.waitForFunction((i) => window.__unfurl.state.videos[i].durationApprox === false, id);
     eq(await U(page, (i) => window.__unfurl.state.videos[i].durationSec, id), 777);
+  });
+
+  await step('Follow along: sections from the chapters, now and next, jump, repeat, slow down, focus view; what you played is offered when you finish', async () => {
+    await waitFeatured(page);
+    const id = await featuredId(page);
+    await page.waitForSelector(`iframe[data-video="${id}"]`);
+    ok((await page.locator('#pr-hint').innerText()).includes('No chapter list'), 'says so when the video has no chapters');
+    await U(page, (i) => { window.__unfurl.state.videos[i].profile.chapters = [{ t: 0, label: 'Intro' }, { t: 60, label: 'Pigeon pose' }, { t: 200, label: 'Low lunge' }, { t: 400, label: 'Child pose' }]; }, id);
+    await page.waitForSelector('#pr-list li:nth-child(4)');
+    ok((await page.locator('#pr-hint').innerText()).includes('chapter list'), 'the sections come from the chapter list');
+    const at = (t, playing = true) => page.evaluate(({ t, playing }) => { window.__players.at(-1).__at(t, playing); document.getElementById('practice').__poll(); }, { t, playing });
+    const seeks = () => U(page, () => window.__players.at(-1).__seeks ?? []);
+    await at(65);
+    eq(await page.locator('#pr-now-label').innerText(), 'Pigeon pose');
+    eq(await page.locator('#pr-next-label').innerText(), 'Low lunge');
+    eq(await page.locator('#pr-list li:nth-child(2) button').getAttribute('aria-current'), 'step', 'the current section is marked');
+    await page.click('#pr-next'); eq((await seeks()).at(-1), 200, 'next section');
+    await at(205); await page.click('#pr-prev'); eq((await seeks()).at(-1), 200, 'back goes to the start of this section first');
+    await at(201); await page.click('#pr-prev'); eq((await seeks()).at(-1), 60, 'and then to the one before');
+    await page.click('#pr-list li:nth-child(4) button'); eq((await seeks()).at(-1), 400, 'a section can be picked from the list');
+    await at(150); await page.click('#pr-loop'); await at(199.8);
+    eq((await seeks()).at(-1), 60, 'repeating a section sends it back to its start');
+    await page.click('#pr-loop');
+    await page.selectOption('#pr-speed', '1.25');
+    eq(await U(page, () => window.__players.at(-1).__rate), 1.25, 'speed');
+    await page.click('#pr-focus');
+    ok(await page.locator('.top').isHidden() && await page.locator('#filters').isHidden(), 'focus view hides everything but the video');
+    ok(await page.locator('#pr-done').isVisible(), 'and keeps "I did it"');
+    await page.click('#pr-focus');
+    ok(await page.locator('.top').isVisible(), 'and gives it back');
+    await shot(page, '26-follow-along');
+    // play the first minute, skip to the end part, play a little: the dialog says what was played and what was skipped
+    await U(page, () => { const w = document.getElementById('practice'); const p = window.__players.at(-1); for (let t = 0; t <= 59; t++) { p.__at(t, true); w.__poll(); } p.__at(400, true); w.__poll(); for (let t = 401; t <= 460; t++) { p.__at(t, true); w.__poll(); } });
+    await page.click('#pr-done');
+    await page.waitForSelector('#feedback-watched');
+    const said = await page.locator('#feedback-watched').innerText();
+    ok(/You played 2 min of 13 min/.test(said) && said.includes('Pigeon pose') && said.includes('Low lunge'), said);
+    await page.click('[role=dialog] .btn.ghost:has-text("Don’t log it")');
+    await page.waitForFunction(() => !document.querySelector('[role=dialog]'));
   });
 
   await step('typing a command sets muscles + length and finds a matching routine', async () => {
@@ -269,11 +318,11 @@ if (want(1)) {
     const ranked = () => U(page, () => window.__unfurl.ui.ranked.map((r) => r.video.id));
     // --- just this video
     const first = await featuredId(page);
-    await page.click('details.menu summary');
+    await page.click('details[data-menu=block] summary');
     await shot(page, '24-not-for-me-menu');
-    ok(await page.locator('details.menu [data-block=video]').isVisible(), 'the menu offers the video');
-    ok((await page.locator('details.menu .menu-items').innerText()).includes('Just this video'), 'in plain words');
-    await page.click('details.menu [data-block=video]');
+    ok(await page.locator('details[data-menu=block] [data-block=video]').isVisible(), 'the menu offers the video');
+    ok((await page.locator('details[data-menu=block] .menu-items').innerText()).includes('Just this video'), 'in plain words');
+    await page.click('details[data-menu=block] [data-block=video]');
     await page.waitForFunction((id) => window.__unfurl.ui.featuredId !== id, first);
     ok(await U(page, (id) => window.__unfurl.state.blocked.includes(id), first), 'recorded');
     ok(!(await ranked()).includes(first), 'never suggested again');
@@ -283,9 +332,9 @@ if (want(1)) {
     const channel = await U(page, (id) => window.__unfurl.state.videos[id].channel, second);
     ok(channel, 'the next video has a known channel');
     const sameChannel = await U(page, (ch) => Object.values(window.__unfurl.state.videos).filter((v) => v.channel === ch).map((v) => v.id), channel);
-    await page.click('details.menu summary');
-    ok((await page.locator('details.menu [data-block=channel]').innerText()).includes(channel), 'names the channel');
-    await page.click('details.menu [data-block=channel]');
+    await page.click('details[data-menu=block] summary');
+    ok((await page.locator('details[data-menu=block] [data-block=channel]').innerText()).includes(channel), 'names the channel');
+    await page.click('details[data-menu=block] [data-block=channel]');
     await page.waitForFunction((id) => window.__unfurl.ui.featuredId !== id, second);
     eq(await U(page, () => window.__unfurl.state.blockedChannels.map((c) => c.name)), [channel]);
     const after = await ranked();
@@ -513,8 +562,8 @@ if (want(1)) {
   await step('"Not for me" hides a video for good (with undo)', async () => {
     await waitFeatured(page);
     const id = await featuredId(page);
-    await page.click('details.menu summary');
-    await page.click('details.menu [data-block=video]');
+    await page.click('details[data-menu=block] summary');
+    await page.click('details[data-menu=block] [data-block=video]');
     await page.waitForFunction((i) => window.__unfurl.ui.featuredId !== i, id);
     ok(await U(page, (i) => window.__unfurl.state.blocked.includes(i), id), 'blocked');
     await page.click('.toast .link:has-text("Undo")');
@@ -709,6 +758,87 @@ if (want(1)) {
     await goto(page, 'today'); await waitFeatured(page);
     await shot(page, '04-today-mobile');
     await page.setViewportSize({ width: 1280, height: 900 });
+  });
+
+  await step('Collections: sort videos into your own groups, filter the Library by one, put it in order, play it in order, ask Today for just that one', async () => {
+    await U(page, () => { const s = window.__unfurl.state; for (const id of Object.keys(s.videos).filter((i) => !(i in s.library)).slice(0, 2)) s.library[id] = { addedAt: Date.now(), tags: [], note: '' }; window.__unfurl.store.save(); });
+    await goto(page, 'library'); await page.click('#tab-mine');
+    const rows = page.locator('#lib-list .row-card');
+    ok((await rows.count()) >= 2, 'two videos in the library');
+    ok(await page.locator('#collections-bar').innerText().then((t) => t.includes('Sort your videos into your own groups')), 'explains itself while there are none');
+    await rows.nth(0).locator('details[data-menu=collections] > summary').click();
+    await page.fill('#new-collection-name', 'Morning'); await page.click('#new-collection-add');
+    await page.waitForSelector('#collections-bar [data-collection]:has-text("Morning")');
+    ok((await page.locator('#collections-bar [data-collection]:has-text("Morning")').innerText()).includes('1'), 'the chip counts its videos');
+    await page.locator('#lib-list .row-card').nth(1).locator('details[data-menu=collections] > summary').click();
+    await page.locator('#lib-list .row-card').nth(1).locator('[data-collection]').first().click();
+    eq(await U(page, () => window.__unfurl.state.collections[0].videoIds.length), 2, 'a second video joins it');
+    await page.click('#collections-bar [data-collection]:has-text("Morning")');
+    eq(await page.locator('#lib-list .row-card').count(), 2, 'the list shows just that collection');
+    const order = await U(page, () => [...window.__unfurl.state.collections[0].videoIds]);
+    await page.locator('#lib-list .row-card').first().locator('[data-action=move-down]').click();
+    eq(await U(page, () => window.__unfurl.state.collections[0].videoIds), [order[1], order[0]], 'the order can be changed');
+    eq(await page.locator('#lib-list .row-card').first().getAttribute('data-video'), order[1], 'and the list follows it');
+    await shot(page, '27-collections');
+    await page.click('#play-collection');
+    await page.waitForSelector('#combo-progress');
+    ok((await page.locator('#combo-progress').innerText()).includes('part 1 of 2'), 'played in order');
+    eq(await featuredId(page), order[1]);
+    await U(page, () => { window.__unfurl.ui.combo = null; });
+    await goto(page, 'today');
+    await page.selectOption('#scope', { label: 'Collection: Morning' });
+    await page.click('#find'); await page.waitForFunction(() => !window.__unfurl.ui.busy);
+    ok(await U(page, (ids) => window.__unfurl.ui.ranked.length > 0 && window.__unfurl.ui.ranked.every((r) => ids.includes(r.video.id)), order), 'only videos from that collection are suggested');
+    await page.selectOption('#scope', 'all');
+    await goto(page, 'library'); await page.click('#tab-mine');
+    await page.click('#collections-bar [data-collection]:has-text("Morning")');
+    await page.click('#delete-collection');
+    eq(await U(page, () => window.__unfurl.state.collections.length), 0);
+    ok((await U(page, () => Object.keys(window.__unfurl.state.library).length)) >= 2, 'its videos stay in the library');
+    await page.click('.toast .link:has-text("Undo")');
+    eq(await U(page, () => window.__unfurl.state.collections.length), 1, 'deleting can be undone');
+    await page.click('#collections-bar [data-collection]:has-text("Morning")');
+    await page.click('#delete-collection');
+    await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => t.remove()));
+  });
+
+  await step('The body map is there but closed; a tap does what a chip does, and the chips and the map agree', async () => {
+    await goto(page, 'today');
+    await U(page, () => { window.__unfurl.ui.filters.areas = []; });
+    await page.click('nav a[data-tab=library]'); await page.click('nav a[data-tab=today]');
+    eq(await page.locator('#bodymap').getAttribute('open'), null, 'closed by default');
+    await page.click('#bodymap > summary');
+    const tap = (view, id) => page.locator(`.bm-svg.${view} [data-area=${id}] > :not(title)`).first().click();
+    const modes = () => U(page, () => window.__unfurl.ui.filters.areas.map((a) => `${a.id}:${a.mode}`));
+    await tap('back', 'hamstrings');
+    eq(await modes(), ['hamstrings:tight']);
+    ok(await page.locator('#bodymap').getAttribute('open') !== null, 'it stays open while you pick');
+    ok((await page.locator('.bm-svg.back [data-area=hamstrings]').getAttribute('class')).includes('tight'), 'the map shows it');
+    ok(await page.locator('.chip.area.on', { hasText: 'Hamstrings' }).count() === 1, 'and so does the chip');
+    await tap('back', 'hamstrings'); eq(await modes(), ['hamstrings:weak']);
+    await tap('back', 'hamstrings'); eq(await modes(), [], 'a third tap clears it');
+    await page.locator('.bm-svg.front [data-area=neck]').focus(); await page.keyboard.press('Enter');
+    eq(await modes(), ['neck:tight'], 'it works from the keyboard');
+    ok((await page.locator('.bm-svg.front [data-area=neck]').getAttribute('aria-label')).includes('tight spot'), 'and says so to a screen reader');
+    await page.click('.chip.area:has-text("Quads")');
+    ok((await page.locator('.bm-svg.front [data-area=quads]').getAttribute('class')).includes('tight'), 'a chip tap shows on the map');
+    await U(page, () => { window.__unfurl.ui.filters.areas = [{ id: 'abs_lower', mode: 'tight' }]; });
+    await page.click('nav a[data-tab=library]'); await page.click('nav a[data-tab=today]');
+    ok((await page.locator('.bm-svg.front [data-area=core]').getAttribute('class')).includes('part'), 'a specific part (lower abs) marks its general region');
+    await shot(page, '28-body-map');
+    await U(page, () => { window.__unfurl.ui.filters.areas = []; });
+  });
+
+  await step('While it looks, the page shows an outline of what is coming (and "More that fit" too); a calm page, not a bare spinner', async () => {
+    await goto(page, 'today'); await waitFeatured(page);
+    await U(page, () => { window.__unfurl.ui.busy = true; window.__unfurl.hooks.renderResults(); });
+    await page.waitForSelector('.card.busy[aria-busy=true] .sk-player');
+    ok(await page.locator('.card.busy .busy-text').innerText().then((t) => t.includes('Looking for the right routine')), 'and says what it is doing');
+    ok(await page.locator('#alts-slot .sk-card').count() >= 3, 'outlines of the tiles below');
+    await shot(page, '30-loading-outline');
+    await U(page, () => { window.__unfurl.ui.busy = false; window.__unfurl.hooks.renderResults(); });
+    await page.waitForSelector('.card.featured');
+    eq(await page.locator('.sk').count(), 0, 'the outlines go away');
   });
 
   await step('dark mode renders (screenshot)', async () => {
@@ -1043,6 +1173,17 @@ if (want(2)) {
     await page.setViewportSize({ width: 1280, height: 900 });
   });
 
+  await step('The report says what kind of routine it is, with its evidence and how it feels; you can correct it, and the correction is kept', async () => {
+    ok((await page.locator('#analysis').innerText()).includes('What kind of routine is it?'), 'a section for it');
+    ok(await page.locator('#analysis .badge.kind').count() <= 1);
+    await page.selectOption('#style-fix', 'wall_pilates');
+    await page.waitForFunction(() => document.getElementById('analysis-kind')?.innerText.includes('Wall Pilates'));
+    ok((await page.locator('#analysis-kind').innerText()).includes('you set this'), 'it says the choice is yours');
+    ok(await page.locator('#analysis .badge.kind.fixed').count() === 1, 'and the badge shows it');
+    eq(await U(page, (i) => window.__unfurl.state.styleFixes[i], page.analyzeId), 'wall_pilates', 'kept in your data');
+    await shot(page, '33-kind-of-routine');
+  });
+
   await step('adding from the report puts the video, with its analysis and comments, into My library', async () => {
     const id = page.analyzeId;
     const libBefore = await libCount(page);
@@ -1056,6 +1197,13 @@ if (want(2)) {
     ok(await page.locator('#lib-list').innerText().then((t) => t.length > 0));
     await page.click('#analysis-discard');
     eq(await page.locator('#analysis').count(), 0, 'closing removes the report');
+    // the kind you set travels with the video: it is on its row, and the Library can be filtered by it
+    await page.click('#tab-mine');
+    await page.selectOption('#lib-style', 'wall_pilates');
+    await page.waitForSelector(`.row-card[data-video="${id}"] .badge.kind.fixed`);
+    ok((await page.locator(`.row-card[data-video="${id}"] .badge.kind`).innerText()).includes('Wall Pilates'));
+    eq(await page.locator('#lib-list .row-card').count(), 1, 'only that one is of that kind');
+    await page.selectOption('#lib-style', '');
   });
 
   await step('Library: a transcript can be added to (or removed from) any video in your library, and sharpens its analysis', async () => {

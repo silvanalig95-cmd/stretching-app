@@ -6,6 +6,8 @@ import { ctx, play, analyzeLink, commitAnalysis, addTranscriptToAnalysis } from 
 import { toast } from '../modal.js';
 import { areaLabel } from '../lexicon.js';
 import { youtubeWatchUrl } from '../query.js';
+import { styleEditor } from './stylebadge.js';
+import { skeletonReport } from './placeholders.js';
 
 const badge = (text, cls = '', title) => h('span', { class: `badge ${cls}`, title }, text);
 const section = (title, ...body) => h('div', { class: 'a-section' }, h('h4', null, title), ...body);
@@ -20,15 +22,15 @@ export function analyzePanel({ onChange = () => {} } = {}) {
 
   const form = h('form', { class: 'analyze-form', onsubmit: async (e) => {
     e.preventDefault();
-    btn.disabled = true; status.textContent = 'Working…';
+    btn.disabled = true; status.textContent = 'Working…'; fill(slot, skeletonReport('Reading the video…'));
     try {
       const res = await analyzeLink(input.value, { progress: (m) => { status.textContent = m; } });
-      if (res.error) { status.textContent = res.error; return; }
+      if (res.error) { status.textContent = res.error; showCurrent(); return; }
       ctx.ui.analysis = res;
       status.textContent = res.notes.join(' ');
       showCurrent();
       slot.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-    } catch (err) { status.textContent = err.message; toast(err.message, 'error'); }
+    } catch (err) { status.textContent = err.message; toast(err.message, 'error'); showCurrent(); }
     finally { btn.disabled = false; }
   } }, input, btn);
 
@@ -65,10 +67,13 @@ function reportCard({ video, report: r, notes }, { onChange }) {
         h('p', { class: 'meta' }, r.channel ? h('span', { class: 'channel' }, r.channel) : null, h('span', null, len), fmtViews(q.views) && h('span', null, fmtViews(q.views)), q.likePct != null && h('span', null, `${q.likePct}% like it`)),
         h('div', { class: 'badges' },
           inLib && badge('✓ In your library', 'lib'),
+          r.kind && badge(r.kind.confidence < 0.45 && !r.kind.fixed ? `${r.kind.label}?` : r.kind.label, `kind${r.kind.fixed ? ' fixed' : ''}`, r.kind.fixed ? 'You set this' : `${r.kind.certainty}: ${r.kind.evidence.join('; ')}`),
           r.level && badge(r.level), ...r.styles.map((s) => badge(s)),
           q.trusted && badge('Trusted teacher'), q.hiddenGem && badge('Hidden gem', 'gem', 'Well liked relative to its views'),
           video.evidence ? badge(`${video.evidence.n} comments read`) : badge('Comments not read', 'warn')))),
     h('p', { class: 'a-summary', id: 'analysis-summary' }, r.summary),
+
+    kindSection(r, video, onChange),
 
     section('Muscles it works',
       r.areas.length
@@ -82,8 +87,9 @@ function reportCard({ video, report: r, notes }, { onChange }) {
     r.poses.length ? section('Exercises I found in it', h('div', { class: 'chips' }, r.poses.map((p) =>
       h('span', { class: 'chip static', title: p.mode === 'strength' ? 'strengthening' : p.mode === 'both' ? 'stretch and strengthen' : 'stretch' }, p.label, p.count > 1 ? ` ×${p.count}` : '')))) : null,
 
-    r.chapters.length ? h('details', { class: 'a-section' }, h('summary', null, `Chapters (${r.chapters.length})`),
-      h('ol', { class: 'a-chapters' }, r.chapters.map((c) => h('li', null, h('span', { class: 'at' }, c.at), ' ', c.label)))) : null,
+    r.timeline ? h('details', { class: 'a-section', id: 'analysis-timeline' }, h('summary', null, `Order of the routine (${r.timeline.items.length} parts, ${r.timeline.label})`),
+      h('ol', { class: 'a-chapters' }, r.timeline.items.map((c) => h('li', null, h('span', { class: 'at' }, c.at), ' ', c.label))),
+      r.timeline.source === 'comments' ? h('p', { class: 'hint' }, 'The video has no chapter list, so these times come from viewers who wrote them in comments. They are approximate.') : null) : null,
 
     section('What viewers say',
       r.viewers
@@ -129,4 +135,20 @@ function transcriptSection(r, onChange) {
       h('div', { class: 'actions' }, h('button', { class: 'btn small', type: 'button', id: 'transcript-apply', onclick: apply }, 'Update the analysis'),
         t ? h('button', { class: 'btn small ghost', type: 'button', onclick: () => { box.value = ''; apply(); } }, 'Remove it') : null),
       status));
+}
+
+/** What kind of routine it is, why the app thinks so, how it feels to do, and a way to correct it. */
+function kindSection(r, video, onChange) {
+  const k = r.kind;
+  const traits = r.traits;
+  return section('What kind of routine is it?',
+    k ? h('div', { id: 'analysis-kind' },
+      h('p', { class: 'a-kind' }, h('strong', null, k.label), k.fixed ? ' (you set this)' : ` (${k.certainty}, ${Math.round(k.confidence * 100)}%)`),
+      !k.fixed && k.evidence.length ? h('ul', { class: 'a-evidence' }, k.evidence.map((e) => h('li', null, e))) : null,
+      !k.fixed && k.alternatives.length ? h('p', { class: 'hint' }, `Could also be: ${k.alternatives.map((a) => a.label.toLowerCase()).join(', ')}.`) : null)
+      : h('p', { class: 'hint' }, 'The text doesn’t say what kind of routine this is (yoga, Pilates, plain stretching …).'),
+    r.traitLine ? h('p', { class: 'a-traits', id: 'analysis-traits' }, r.traitLine) : null,
+    traits?.hold || traits?.guidance ? h('p', { class: 'hint' }, [traits.hold ? `Holds: ${traits.hold.label}.` : '', traits.guidance ? `Teacher ${traits.guidance.label} (about ${traits.guidance.wpm} words a minute).` : ''].filter(Boolean).join(' ')) : null,
+    r.teacherUsually ? h('p', { class: 'hint' }, `This teacher usually does: ${r.teacherUsually.label.toLowerCase()} (${r.teacherUsually.n} of ${r.teacherUsually.of} of their other videos here).`) : null,
+    styleEditor(video, { onChange }));
 }

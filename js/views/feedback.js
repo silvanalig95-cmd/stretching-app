@@ -8,6 +8,7 @@ import { ctx, rankNow } from '../ctx.js';
 import { logSession, updateSession } from '../state.js';
 import { localDate } from '../model.js';
 import { AREAS, AREA_BY_ID, POSE_BY_ID, areaLabel, areaPath } from '../lexicon.js';
+import { watchRecord, watchLine } from '../practice.js';
 
 const RATINGS = [['much', '😀', 'Much better'], ['some', '🙂', 'A little'], ['none', '😐', 'Not really']];
 const INTENSITY = [['easy', 'Too easy'], ['right', 'Just right'], ['hard', 'Too hard']];
@@ -25,9 +26,10 @@ export function fallbackAreas(video) {
 /**
  * @param {{onDone?: (how:'saved'|'dismissed')=>void, date?: string, sessionId?: string}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo;
  *   date logs the routine for an earlier day (the training log's “log a routine I did”);
+ *   watch is what the follow-along panel noticed (how much was played, which sections were skipped); it is noted with the entry when it was a real viewing;
  *   sessionId opens an entry that is already in your log (logged with “Did today”, or to change your answers later) instead of making a new one.
  */
-export function openFeedback(videoId, { onDone = null, date = null, sessionId = null } = {}) {
+export function openFeedback(videoId, { onDone = null, date = null, sessionId = null, watch = null } = {}) {
   const existing = sessionId ? ctx.state.history.find((x) => x.id === sessionId) : null;
   if (sessionId && !existing) return;
   const video = videoId ? ctx.state.videos[videoId] : null;
@@ -40,6 +42,7 @@ export function openFeedback(videoId, { onDone = null, date = null, sessionId = 
   const ratings = { ...(existing?.ratings ?? {}) };
   let intensity = existing?.intensity ?? null, repeat = existing?.repeat ?? null, when = existing?.date || date || localDate();
   const noteInit = existing?.note ?? '';
+  const watched = existing ? null : watchRecord(watch);   // only a new entry records what was watched
 
   const body = h('div', { class: 'feedback' });
   let modal, finished = false;
@@ -64,6 +67,7 @@ export function openFeedback(videoId, { onDone = null, date = null, sessionId = 
       h('p', { class: 'hint' }, existing ? 'This routine is already in your training log. Say how it went, or change the day.' : 'Saving adds this routine to your training log. Answering is optional, but the answers are what teach the app what works for you.'),
       h('label', { class: 'note' }, h('span', null, 'When did you do it?'),
         h('input', { type: 'date', id: 'feedback-date', value: when, max: localDate(), onchange: (e) => { when = e.target.value || localDate(); } })),
+      watched ? h('p', { class: 'hint', id: 'feedback-watched' }, `You played ${watchLine(watched, video?.durationSec)}.${watched.skipped?.length ? ` You skipped: ${watched.skipped.join(', ')}.` : ''} This is noted with the entry.`) : null,
       h('h3', null, 'Did it help?'),
       areas.length
         ? areas.map((a) => h('div', { class: 'rate-row' },
@@ -90,7 +94,7 @@ export function openFeedback(videoId, { onDone = null, date = null, sessionId = 
   const save = () => {
     const note = body.querySelector('textarea')?.value ?? '';
     if (existing) updateSession(ctx.state, existing.id, { areas, ratings, intensity, repeat, note, date: when });
-    else logSession(ctx.state, { videoId: videoId ?? '', areas, ratings, intensity, repeat, note, date: when });
+    else logSession(ctx.state, { videoId: videoId ?? '', areas, ratings, intensity, repeat, note, date: when, watch: watched });
     ctx.store.save();
     finished = true;      // the close below must not also report 'dismissed'
     modal.close();

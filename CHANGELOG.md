@@ -10,6 +10,20 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.7.0
+
+**What kind of routine is it?** Every video now gets an estimate of its discipline and kind (Yoga: Hatha, Vinyasa/flow, Power, Ashtanga, Iyengar, Kundalini, Yin, Restorative, Yoga nidra, Chair yoga · Pilates: mat, wall, reformer · stretching · mobility · foam rolling · rehab/physio · tai chi/qigong · barre · meditation · workout), with the **evidence** behind it, how sure it is, and what else it could be. It reads the title, channel name, tags, description, chapters, the poses it names (Sanskrit names, classic Pilates exercises, yin poses), hold times mentioned, viewers' comments and, if you added one, the transcript. Many weak hints ("relax", "tight") cannot add up to a kind; a specific kind needs at least one decisive word. A badge on cards and rows, a section in *Look at a video first*, a **Style** filter in the Library and many more styles under Today's style chips, and typed requests such as “wall pilates” or “foam rolling” work. Wrong? Pick the real kind and it is remembered (and survives every re-analysis). Also **how it feels**: slow or flowing, gentle or challenging, hold lengths, floor or standing or seated, props, and (with a transcript) whether the teacher talks you through it. The teacher's usual kind is shown too. The analysis version went up, so everything already stored is re-read on first start; nothing is fetched again.
+
+**The order of a routine.** Sections come from the chapter list; without one, from what the teacher says (transcript with times) or from the times viewers wrote in comments (“12:30 pigeon is where it clicked”).
+
+**Follow along.** Under the player on Today: Now / Next, jump to any section, back or forward a section or 10 s, repeat this section, slower or faster, keep the screen on (where the browser allows it), and a focus view with just the video. It notes which seconds you actually played; “I did it” tells you how much that was and which sections you skipped, and the entry in your training log keeps it (“played 12 min of 15 (80%) · skipped 1 section”).
+
+**Collections.** Your own groups of library videos (“Morning”, “After a run”). Put a video in several from “Collections ▾”, filter the Library by one, order it, play it in order, ask Today for just that collection, rename, delete (with undo). They are part of your data and your backups.
+
+**Body map.** An optional front/back figure beside the muscle chips (closed by default; Today and Settings → My body). A tap does what a chip tap does (tight, weak, off); both always agree; it works from the keyboard.
+
+**Looks.** Larger thumbnails; shimmering outlines instead of a bare spinner while a routine or a report is being looked for; friendlier empty states with a picture and a next step (Library, Journal, nothing found).
+
 ## 0.6.0
 
 **Atlas.** The app has a new name. Its look is the one it always had; only the name changed, and it now lives in one constant (`js/brand.js`) plus a few lines of `index.html`, so renaming it again is a small job. Technical names (`UNFURL_*` settings, the data folder, Docker volumes, the `X-Unfurl` header) keep their old spelling so nothing that exists has to move.

@@ -3,11 +3,13 @@
 
 import { h } from '../dom.js';
 import { AREAS, GROUPS, parentOf } from '../lexicon.js';
+import { bodyMap } from './bodymap.js';
 
 /**
- * @param {{modeOf:(id:string)=>string|undefined, makeChip:(area:object, mode:string|undefined)=>Node, showSpecific:boolean, onToggle:()=>void, skipWhole?:boolean}} o
+ * @param {{modeOf:(id:string)=>string|undefined, makeChip:(area:object, mode:string|undefined)=>Node, showSpecific:boolean, onToggle:()=>void, skipWhole?:boolean, onPick?:(id:string)=>void}} o
+ *   onPick: when given, a closed "pick on a body map" is offered too (it does what a chip tap does)
  */
-export function areaPicker({ modeOf, makeChip, showSpecific, onToggle, skipWhole = false }) {
+export function areaPicker({ modeOf, makeChip, showSpecific, onToggle, skipWhole = false, onPick = null }) {
   const visible = (a) => (skipWhole ? a.id !== 'full_body' : true) && (!parentOf(a.id) || showSpecific || !!modeOf(a.id));
   const hiddenSelected = AREAS.filter((a) => parentOf(a.id) && modeOf(a.id)).length;
   const toggle = h('button', {
@@ -20,5 +22,5 @@ export function areaPicker({ modeOf, makeChip, showSpecific, onToggle, skipWhole
     return h('fieldset', { class: 'group' }, h('legend', null, g.label),
       h('div', { class: 'chips' }, items.map((a) => makeChip(a, modeOf(a.id)))));
   }));
-  return { toggle, groups };
+  return { toggle, groups, map: onPick ? bodyMap({ modeOf, onPick }) : null };
 }

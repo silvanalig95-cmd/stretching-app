@@ -82,7 +82,7 @@ export function parseCommand(text) {
   out.areas = [...seen].map(([id, mode]) => ({ id, mode }));
 
   // --- styles ('stretch' is deliberately not a filter: nearly everything is one)
-  const styleMap = { yin: 'yin', restorative: 'restorative', flow: 'flow', strength: 'strength', mobility: 'mobility' };
+  const styleMap = Object.fromEntries(['yin', 'restorative', 'flow', 'strength', 'mobility', 'pilates', 'wall_pilates', 'reformer', 'hatha', 'ashtanga', 'kundalini', 'chair', 'rolling', 'taichi', 'barre', 'meditation'].map((x) => [x, x]));
   // "weak glutes" / "strengthen hips" describe the muscle, not a style request; only a literal "strength" does.
   const styleText = raw.replace(new RegExp(WEAK_CUES.source, 'g'), (w) => (w === 'strength' ? 'strength' : ' '));
   for (const { entry } of scan(STYLE_TERMS, styleText)) if (styleMap[entry.id] && !out.styles.includes(entry.id)) out.styles.push(entry.id);

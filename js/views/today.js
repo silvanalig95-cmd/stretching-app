@@ -3,7 +3,12 @@
 import { h, fill } from '../dom.js';
 import { THOROUGHNESS } from '../youtube.js';
 import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyParsed, findRoutine, another, play, entryFor, suggestNow, rankNow, useMySpots, aimAtNeglected, buildCombos, startCombo, advanceCombo, comboKey } from '../ctx.js';
-import { STYLES, QUICK_PICKS, areaLabel, parentOf, areaPath } from '../lexicon.js';
+import { QUICK_PICKS, areaLabel, parentOf, areaPath } from '../lexicon.js';
+import { STYLE_LIST, traitLine } from '../style.js';
+import { styleBadge } from './stylebadge.js';
+import { practicePanel } from './practice.js';
+import { collectionMenu } from './collections.js';
+import { skeletonFeatured, skeletonGrid, emptyArt } from './placeholders.js';
 import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
@@ -21,10 +26,10 @@ import { openFeedback } from './feedback.js';
 import { toast } from '../modal.js';
 
 const slots = {};
-let playerCtl = null, playerFor = null, playerBox = null, article = null, infoHost = null;
+let playerCtl = null, playerFor = null, playerBox = null, article = null, infoHost = null, practice = null;
 
 export function unmountToday() {
-  playerCtl?.destroy(); playerCtl = null; playerFor = null; playerBox = null; article = null; infoHost = null;
+  practice?.destroy(); practice = null; playerCtl?.destroy(); playerCtl = null; playerFor = null; playerBox = null; article = null; infoHost = null;
 }
 
 export function mountToday(root) {
@@ -109,6 +114,7 @@ export function renderFilters() {
   const picker = areaPicker({
     modeOf, showSpecific: !!prefs.showSpecific,
     onToggle: () => { prefs.showSpecific = !prefs.showSpecific; ctx.store.save(); again(); },
+    onPick: (id) => { cycleArea(id); again(); },
     makeChip: (a, m) => chip(a.label, !!m, () => { cycleArea(a.id); again(); }, {
       cls: `area${parentOf(a.id) ? ' sub' : ''}`, mode: m,
       aria: `${areaPath(a.id)}: ${m ? (m === 'weak' ? 'weak spot' : 'tight spot') : 'not selected'}`,
@@ -137,19 +143,23 @@ export function renderFilters() {
       }, { cls: 'quick' })))),
     h('div', { class: 'row' },
       h('div', { class: 'label' }, 'Muscles & spots', h('small', { class: 'hint inline' }, ' tap once = tight (stretch), twice = weak (strengthen), third = off')),
-      picker.toggle, picker.groups),
+      picker.toggle, picker.groups, picker.map),
     h('div', { class: 'row inline-row' },
       h('div', null, h('div', { class: 'label' }, 'Length (minutes)'),
         h('div', { class: 'len' }, minIn, h('span', null, 'to'), maxIn),
         h('div', { class: 'chips small' }, presets.map(([l, a, b]) => chip(l, f.minMin === a && f.maxMin === b, () => { setLength(a, b); again(); })))),
       h('div', null, h('div', { class: 'label' }, 'Style (optional)'),
-        h('div', { class: 'chips' }, STYLES.map((s) => chip(s.label, f.styles.includes(s.id), () => {
-          f.styles = f.styles.includes(s.id) ? f.styles.filter((x) => x !== s.id) : [...f.styles, s.id]; again();
-        }))))),
+        (() => {
+          const toggle = (s) => chip(s.label, f.styles.includes(s.id), () => { f.styles = f.styles.includes(s.id) ? f.styles.filter((x) => x !== s.id) : [...f.styles, s.id]; again(); });
+          const more = STYLE_LIST.filter((s) => !s.main);
+          return h('div', null, h('div', { class: 'chips' }, STYLE_LIST.filter((s) => s.main).map(toggle)),
+            h('details', { class: 'more-styles', id: 'more-styles', open: more.some((s) => f.styles.includes(s.id)) },
+              h('summary', null, 'More styles (Hatha, Ashtanga, Wall Pilates, foam rolling, tai chi …)'), h('div', { class: 'chips' }, more.map(toggle))));
+        })())),
     h('div', { class: 'row' },
       h('label', { class: 'field inline-field' }, h('span', null, 'Pick from'),
         h('select', { id: 'scope', onchange: (e) => { f.source = e.target.value; again(); } },
-          [['all', 'Everything I know about'], ['library', 'My library only'], ['discovered', 'Not in my library yet']].map(([v, t]) => h('option', { value: v, selected: f.source === v }, t))))),
+          [['all', 'Everything I know about'], ['library', 'My library only'], ['discovered', 'Not in my library yet'], ...ctx.state.collections.map((c) => [`collection:${c.id}`, `Collection: ${c.name}`])].map(([v, t]) => h('option', { value: v, selected: f.source === v }, t))))),
     h('div', { class: 'row find-row' },
       h('div', { class: 'web' },
         h('label', { class: 'check' },
@@ -193,14 +203,14 @@ export function renderLog() {
     h('ol', null, lines.map((l) => h('li', null, l)))));
 }
 
-function destroyPlayer() { playerCtl?.destroy(); playerCtl = null; playerFor = null; playerBox = null; article = null; infoHost = null; }
+function destroyPlayer() { practice?.destroy(); practice = null; playerCtl?.destroy(); playerCtl = null; playerFor = null; playerBox = null; article = null; infoHost = null; }
 
 function renderFeatured() {
   const { ui } = ctx;
   if (!slots.featured) return;
   if (ui.busy) {
     destroyPlayer();
-    fill(slots.featured, h('div', { class: 'card busy', 'aria-busy': 'true' }, h('div', { class: 'spinner', 'aria-hidden': 'true' }), h('p', null, 'Looking for the right routine…')));
+    fill(slots.featured, skeletonFeatured('Looking for the right routine…'));
     return;
   }
   const entry = ui.featuredId ? entryFor(ui.featuredId) : null;
@@ -228,6 +238,9 @@ function renderFeatured() {
       },
       onUnavailable: () => playerProblem(v, 'The YouTube player couldn’t load (you may be offline, or it’s blocked). You can still open it on YouTube.'),
     });
+    // Follow along: sections, repeat, speed ... It lives next to the player (not in the info below, which is redrawn often).
+    practice = practicePanel(v, { getVideo: () => ctx.state.videos[v.id], remote: playerCtl, onFinish: () => finishVideo(v.id) });
+    article.insertBefore(practice.el, infoHost);
   }
   renderFeaturedInfo();
 }
@@ -248,7 +261,7 @@ function playerProblem(v, message) {
 }
 
 /** Ask how it went; if this is a part of a combo, move on to the next one afterwards. */
-function finishVideo(id) { openFeedback(id, { onDone: () => advanceCombo(id) }); }
+function finishVideo(id) { openFeedback(id, { onDone: () => advanceCombo(id), watch: playerFor === id ? practice?.watch() : null }); }
 
 function renderCombo() {
   const { ui } = ctx;
@@ -302,6 +315,7 @@ function featuredInfo(entry) {
       v.channel ? h('span', { class: 'channel' }, v.channel) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
       h('span', null, lengthText(v)), fmtViews(v.views) && h('span', null, fmtViews(v.views)), likePct && h('span', null, likePct)),
     h('div', { class: 'badges' },
+      styleBadge(v),
       saved && badge('✓ In your library', 'lib'),
       f.suggestion && !saved && badge('Suggested', '', 'A recommended starting point; add it to your library if you like it'),
       ctx.ui.foundIds.has(v.id) && badge('✨ Just found', 'new'),
@@ -311,12 +325,14 @@ function featuredInfo(entry) {
       f.trusted && badge('Trusted teacher', '', 'On your trusted list'),
       f.commentsRead && badge(`${ev.n} comments read`, '', 'Viewer comments were analysed for what it did for people'),
       !v.verified && badge('Details unverified', 'warn', 'Length and channel come from a guess; they’ll be checked when you add a YouTube key or play it')),
+    traitLine(v.profile?.traits) ? h('p', { class: 'hint traits', id: 'traits' }, traitLine(v.profile.traits)) : null,
     h('div', { class: 'actions' },
       h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => finishVideo(v.id) }, 'I did it ✓'),
       didTodayButton(v, { onChange: () => { weekLine(); renderFeaturedInfo(); renderAlts(); } }),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
       favoriteButton(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
+      collectionMenu(v, { cls: 'btn ghost', onChange: () => { renderFeaturedInfo(); renderAlts(); } }),
       blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
     notesBlock(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
@@ -366,6 +382,7 @@ function emptyState() {
   const rng = mulberry32((Math.random() * 2 ** 32) >>> 0);
   const queries = buildQueries(filters, { queryLog: ctx.state.queryLog, rng, n: 3 }).map((q) => q.q);
   return h('div', { class: 'card empty' },
+    emptyArt('search'),
     h('h2', null, 'Nothing in your library fits that yet'),
     h('p', null, `Looking for: ${describeFilters()}.`),
     h('ul', null,
@@ -379,7 +396,8 @@ function emptyState() {
 function renderAlts() {
   const { ui } = ctx;
   if (!slots.alts) return;
-  if (ui.busy || !ui.ranked.length) { slots.alts.replaceChildren(); return; }
+  if (ui.busy) { fill(slots.alts, h('h3', { class: 'section-title' }, 'More that fit'), skeletonGrid(4)); return; }
+  if (!ui.ranked.length) { slots.alts.replaceChildren(); return; }
   const rest = ui.ranked.filter((r) => r.video.id !== ui.featuredId).slice(0, 9);
   if (!rest.length) { slots.alts.replaceChildren(); return; }
   fill(slots.alts, 
@@ -394,6 +412,7 @@ function videoCard(r) {
     h('span', { class: 'vtitle' }, v.title),
     h('span', { class: 'vmeta' }, v.channel || 'unknown channel', ' · fit ', `${Math.round((r.parts.match ?? 0) * 100)}%`),
     h('span', { class: 'badges' },
+      styleBadge(v),
       inLibrary(ctx.state, v.id) && badge('In library', 'lib'), f.suggestion && !inLibrary(ctx.state, v.id) && badge('Suggested'),
       ctx.ui.foundIds.has(v.id) && badge('Just found', 'new'),
       f.favorite && badge('★ Favourite', 'fav'), f.newChannel && badge('New teacher', 'new'), f.hiddenGem && badge('Hidden gem', 'gem')));
