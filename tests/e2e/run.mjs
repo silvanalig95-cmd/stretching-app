@@ -296,6 +296,27 @@ console.log('\nWorld 1: first run, no YouTube key');
     await goto(page, 'today');
   });
 
+  await step('"☆ Favourite channel": flag a teacher you love; it shows on the card and in Settings, and can be removed', async () => {
+    await waitFeatured(page);
+    const id = await featuredId(page);
+    const channel = await U(page, (i) => window.__unfurl.state.videos[i].channel, id);
+    ok(channel, 'the featured video has a known channel');
+    eq(await page.locator('.featured [data-action=favorite-channel]').getAttribute('aria-pressed'), 'false');
+    await page.click('.featured [data-action=favorite-channel]');
+    eq(await U(page, () => window.__unfurl.state.favoriteChannels.map((c) => c.name)), [channel]);
+    eq(await page.locator('.featured [data-action=favorite-channel]').getAttribute('aria-pressed'), 'true');
+    ok(await page.locator('.featured .badge.fav').count() === 1, 'the card says it is a favourite');
+    ok(await U(page, (i) => window.__unfurl.ui.ranked.find((r) => r.video.id === i)?.flags.favorite, id), 'the ranking knows');
+    ok(await page.locator('.toast', { hasText: 'favourite' }).count() >= 1, 'says what happened');
+    await shot(page, '25-favourite-channel');
+    await goto(page, 'settings');
+    ok(await page.locator('#favorite-channels li', { hasText: channel }).count() === 1, 'listed in Settings');
+    await page.click('[data-unfavorite]');
+    ok(await page.locator('#favorites-empty').count() === 1, 'removed again');
+    eq(await U(page, () => window.__unfurl.state.favoriteChannels.length), 0);
+    await goto(page, 'today');
+  });
+
   await step('finishing a video opens the feedback dialog; answers are logged, learned from, and the video joins the library', async () => {
     await page.click('#another');
     const id = await featuredId(page);
@@ -329,6 +350,55 @@ console.log('\nWorld 1: first run, no YouTube key');
     ok(await page.locator('#heatmap .heat-row').count() >= 1, 'heat-map rows');
     ok((await page.locator('#heatmap .heat-row').first().innerText()).includes('today'), 'worked today');
     await shot(page, '02-journal');
+  });
+
+  await step('Training log: this week against a goal, streak, calendar and achievements, a goal you can change, an earlier day you can log, and a CSV download', async () => {
+    const ymd = (back) => { const d = new Date(); d.setDate(d.getDate() - back); const p = (x) => String(x).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+    await goto(page, 'journal');
+    await page.waitForSelector('#training-log');
+    ok((await page.locator('#tile-week').innerText()).startsWith('1 / 3'), `this week 1 of the default goal 3: ${await page.locator('#tile-week').innerText()}`);
+    ok((await page.locator('#tile-streak').innerText()).startsWith('1'), 'a one-day streak');
+    ok(await page.locator(`.cal-day.today.done[data-sessions="1"]`).count() === 1, 'today is marked in the calendar');
+    ok(await page.locator('[data-milestone="routines:1"]').count() === 1, 'the first-routine achievement');
+    ok((await page.locator('#encouragement').innerText()).includes('2 more routines'), await page.locator('#encouragement').innerText());
+    ok(await page.locator('#weekbars li.now .n').innerText() === '1', 'this week\'s bar');
+    await shot(page, '26-training-log');
+    // the goal is yours to set
+    await page.selectOption('#weekly-goal', '1');
+    await page.waitForSelector('#tile-week');
+    ok((await page.locator('#tile-week').innerText()).startsWith('1 / 1'), 'goal changed');
+    ok((await page.locator('#encouragement').innerText()).includes('Weekly goal reached'), 'and met');
+    eq(await U(page, () => window.__unfurl.state.prefs.weeklyGoal), 1);
+    // an earlier day, logged by hand
+    await page.click('#log-open');
+    await page.selectOption('#log-video', { index: 0 });
+    await page.fill('#log-date', ymd(1));
+    await page.click('#log-continue');
+    await page.waitForSelector('[role=dialog]');
+    eq(await page.inputValue('#feedback-date'), ymd(1));
+    await page.click('#save-feedback');
+    await page.waitForSelector('#training-log');
+    await page.waitForFunction(() => document.querySelectorAll('.hist-item').length === 2);
+    eq(await U(page, () => window.__unfurl.state.history.map((h) => h.date).sort()), [ymd(1), ymd(0)]);
+    ok((await page.locator('#tile-total').innerText()).startsWith('2'), 'two routines in total');
+    ok(await page.locator(`.cal-day.done[data-date="${ymd(1)}"]`).count() >= 1 || ymd(1).slice(0, 7) !== ymd(0).slice(0, 7), 'yesterday is marked too');
+    ok((await page.locator('#tile-streak').innerText()).startsWith('2'), 'two days in a row');
+    // the whole log, as a spreadsheet
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#log-csv')]);
+    ok(/^unfurl-training-log-\d{4}-\d{2}-\d{2}\.csv$/.test(dl.suggestedFilename()), dl.suggestedFilename());
+    const csv = fs.readFileSync(await dl.path(), 'utf8');
+    ok(csv.startsWith('\ufeffdate,title,channel,minutes'), 'header');
+    eq(csv.trim().split('\r\n').length, 3);
+    // put things back for the steps that follow
+    await page.locator(`.hist-item:has-text("${ymd(1)}") button:has-text("Delete")`).click();
+    await page.waitForFunction(() => document.querySelectorAll('.hist-item').length === 1);
+    await page.selectOption('#weekly-goal', '3');
+    // and a quiet reminder on the page you start from
+    await goto(page, 'today');
+    ok((await page.locator('#week-line').innerText()).startsWith('This week: 1 of 3'), await page.locator('#week-line').innerText());
+    await page.click('#week-line button');
+    await page.waitForSelector('#training-log');
+    await goto(page, 'today');
   });
 
   await step('"What have I been neglecting?" aims at areas you have gone longest without', async () => {

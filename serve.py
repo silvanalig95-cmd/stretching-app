@@ -27,6 +27,10 @@ WHERE THE DATA LIVES
                    data-format upgrade
   With several users, each gets their own folder under users/.
 
+BACKING UP (to another disk or a cloud drive; see deploy/BACKUP.md)
+  python3 serve.py --backup FOLDER [--keep 14] [--small]   one dated unfurl-backup-YYYY-MM-DD.zip of everybody's data, then exit
+  python3 serve.py --restore FILE.zip [--force]            put it back (stop the server first)
+
 SETTINGS (environment variables; every one has a command-line flag too)
   UNFURL_HOST             address to listen on          (default 127.0.0.1 = this computer only)
   UNFURL_PORT             port                          (default 8765)
@@ -73,6 +77,7 @@ import time
 import urllib.error
 import urllib.request
 import webbrowser
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -953,6 +958,136 @@ def selftest() -> int:
     return 1 if problems else 0
 
 
+# ---------------------------------------------------------------- whole-folder backups (for another disk or a cloud drive)
+
+ARCHIVE_NAME = re.compile(r"^unfurl-backup-\d{4}-\d{2}-\d{2}\.zip$")
+_USER = r"users/[a-z0-9_-][a-z0-9._-]{0,63}/"
+RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
+USER_FOLDER = re.compile(r"^[a-z0-9_-][a-z0-9._-]{0,63}$")
+RECENT_COPIES = 3            # of the app's own rolling profile backups, per person, that go into the archive
+MAX_RESTORE_BYTES = 4 << 30
+
+
+def backup_sources(data_dir: Path, small: bool = False):
+    """(path inside the archive, file) for everything worth keeping, for every person.
+    Not included: temp files, damaged copies, and all but the newest few rolling backups (the archive itself is the history)."""
+    found = []
+
+    def folder(path: Path, prefix: str):
+        for name in ("profile.json", "config.json", "usage.json") + (() if small else ("index.json",)):
+            f = path / name
+            if f.is_file() and not f.is_symlink():
+                found.append((prefix + name, f))
+        bdir = path / "backups"
+        if bdir.is_dir() and not bdir.is_symlink():
+            newest = sorted((p for p in bdir.iterdir() if BACKUP_NAME.match(p.name) and p.is_file() and not p.is_symlink()),
+                            key=lambda p: p.stat().st_mtime, reverse=True)[:RECENT_COPIES]
+            found.extend((f"{prefix}backups/{p.name}", p) for p in newest)
+
+    folder(data_dir, "")
+    users = data_dir / "users"
+    if users.is_dir() and not users.is_symlink():
+        for u in sorted(users.iterdir()):
+            if u.is_dir() and not u.is_symlink() and USER_FOLDER.match(u.name):
+                folder(u, f"users/{u.name}/")
+    return found
+
+
+def make_backup(data_dir: Path, dest: Path, keep: int = 14, small: bool = False) -> str:
+    """One zip per day (`unfurl-backup-YYYY-MM-DD.zip`) in `dest`; running again the same day replaces it.
+    Written to a temporary name and renamed, so a sync tool never sees half a file. Older archives beyond `keep` are
+    removed, but only ones with exactly this name pattern: nothing else in `dest` is ever touched."""
+    files = backup_sources(data_dir, small)
+    if not any(arc.endswith("profile.json") for arc, _ in files):
+        sys.exit(f"Nothing to back up: there is no profile.json in {data_dir} (or in its users/ folders).\n"
+                 "Is this the right data folder? Docker uses the data volume (see deploy/BACKUP.md); otherwise pass --data-dir.")
+    if keep < 1:
+        sys.exit("--keep must be at least 1.")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=dest, prefix=".unfurl-backup-", suffix=".part")
+    except OSError as e:
+        sys.exit(f"Can't write to {dest}: {e}")
+    final = dest / f"unfurl-backup-{time.strftime('%Y-%m-%d')}.zip"
+    warnings = []
+    try:
+        with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as z:
+            for arc, src in files:
+                if arc.endswith("/profile.json") or arc == "profile.json":
+                    try:
+                        json.loads(src.read_bytes())
+                    except ValueError:
+                        warnings.append(f"{arc} is damaged; it was saved anyway, together with the app's most recent automatic copies")
+                z.write(src, arc)
+            z.writestr("MANIFEST.json", json.dumps({
+                "app": "unfurl", "version": APP_VERSION, "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "small": small, "files": [a for a, _ in files],
+            }, indent=1))
+        with zipfile.ZipFile(tmp) as check:
+            bad = check.testzip()
+            if bad:
+                sys.exit(f"The new archive failed its own check ({bad}); nothing was kept.")
+        os.replace(tmp, final)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    removed = 0
+    archives = sorted(p for p in dest.iterdir() if ARCHIVE_NAME.match(p.name) and p.is_file())
+    for old in archives[:-keep]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    people = sorted({a.split("/")[1] for a, _ in files if a.startswith("users/")})
+    size = final.stat().st_size
+    lines = [f"Saved {final} ({size / 1_048_576:.1f} MB; {len(files)} files"
+             f"{f', {len(people)} people' if people else ''}{', without the rebuildable index' if small else ''})."]
+    lines.append(f"Keeping the newest {keep} backup{'s' if keep != 1 else ''}{f' (removed {removed} older)' if removed else ''}.")
+    lines += [f"WARNING: {w}" for w in warnings]
+    return "\n".join(lines)
+
+
+def restore_backup(archive: Path, data_dir: Path, force: bool = False) -> str:
+    """Put an archive made by make_backup back into the data folder. Stop the server first.
+    Only the file names a backup can contain are accepted (nothing can land outside the data folder)."""
+    try:
+        z = zipfile.ZipFile(archive)
+    except (OSError, zipfile.BadZipFile) as e:
+        sys.exit(f"Can't read {archive} as a backup: {e}. Nothing was changed.")
+    with z:
+        infos = [i for i in z.infolist() if not i.is_dir()]
+        wanted = [i for i in infos if i.filename != "MANIFEST.json"]
+        stray = [i.filename for i in wanted if not RESTORABLE.match(i.filename)]
+        if stray:
+            sys.exit(f"This doesn't look like an Unfurl backup (it contains {stray[0]!r}). Nothing was changed.")
+        if not any(i.filename.endswith("profile.json") for i in wanted):
+            sys.exit("This archive has no profile.json, so there is nothing to restore. Nothing was changed.")
+        if sum(i.file_size for i in wanted) > MAX_RESTORE_BYTES:
+            sys.exit("This archive is far larger than any Unfurl backup. Nothing was changed.")
+        bad = z.testzip()
+        if bad:
+            sys.exit(f"{archive} is damaged ({bad}). Nothing was changed.")
+        data_dir.mkdir(parents=True, exist_ok=True)
+        current = [n for n in ("profile.json", "index.json", "config.json", "usage.json", "users") if (data_dir / n).exists()]
+        aside = None
+        if current:
+            if not force:
+                sys.exit(f"{data_dir} already holds data ({', '.join(current)}). Restore into an empty folder, or add --force to move the "
+                         "current files aside first (into a before-restore-… folder next to them). Nothing was changed.")
+            aside = data_dir / f"before-restore-{time.strftime('%Y%m%d-%H%M%S')}"
+            aside.mkdir()
+            for n in current:
+                shutil.move(str(data_dir / n), str(aside / n))
+        for i in wanted:
+            atomic_write(data_dir.joinpath(*i.filename.split("/")), z.read(i), private=i.filename.endswith("config.json"))
+    people = sorted({i.filename.split("/")[1] for i in wanted if i.filename.startswith("users/")})
+    msg = f"Restored {len(wanted)} files{f' for {len(people)} people' if people else ''} from {archive} into {data_dir}."
+    if aside:
+        msg += f"\nThe files that were there before were moved to {aside}."
+    return msg + "\nStart Unfurl again; everything is as it was when the backup was made."
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv=None, env=None):
@@ -967,6 +1102,11 @@ def main(argv=None, env=None):
     ap.add_argument("--no-open", action="store_true", help="don't open a browser tab")
     ap.add_argument("--selftest", action="store_true", help="check this copy of the app works, then exit")
     ap.add_argument("--hash-password", action="store_true", help="print a hashed password for UNFURL_AUTH / the users file")
+    ap.add_argument("--backup", metavar="FOLDER", default=None, help="save a dated .zip of all the data into FOLDER, then exit (see deploy/BACKUP.md)")
+    ap.add_argument("--keep", type=int, default=14, help="with --backup: how many daily archives to keep in FOLDER (default 14)")
+    ap.add_argument("--small", action="store_true", help="with --backup: leave out index.json (rebuildable, but costs YouTube quota to re-fetch)")
+    ap.add_argument("--restore", metavar="ZIPFILE", default=None, help="put a backup made with --backup back into the data folder (stop the server first), then exit")
+    ap.add_argument("--force", action="store_true", help="with --restore: move data already in the folder aside instead of refusing")
     args = ap.parse_args(argv)
     env = os.environ if env is None else env
 
@@ -977,6 +1117,16 @@ def main(argv=None, env=None):
         if pw != getpass.getpass("Again: "):
             sys.exit("The two passwords differ.")
         print(hash_password(pw))
+        return
+    if args.backup is not None or args.restore is not None:
+        if args.backup is not None and args.restore is not None:
+            sys.exit("Use --backup or --restore, one at a time.")
+        d = args.data_dir or env.get("UNFURL_DATA")
+        data_dir = (Path(d).expanduser() if d else default_data_dir()).resolve()
+        if args.backup is not None:
+            print(make_backup(data_dir, Path(args.backup).expanduser().resolve(), keep=args.keep, small=args.small))
+        else:
+            print(restore_backup(Path(args.restore).expanduser(), data_dir, force=args.force))
         return
 
     c = build_config(args, env)

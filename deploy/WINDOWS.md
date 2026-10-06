@@ -32,7 +32,7 @@ So there are **two alternative ways to run the same app: the `.bat` files (steps
 
 ---
 
-Friends outside your home network? See **[EXTERNAL.md](EXTERNAL.md)**.
+Friends outside your home network? See **[EXTERNAL.md](EXTERNAL.md)**. Backing up to Proton Drive or another cloud, and getting it back? See **[BACKUP.md](BACKUP.md)**.
 
 Jump to: [how updates arrive](#how-updates-reach-you-and-how-to-check) · [what to keep](#what-to-keep-and-what-you-can-delete) · [start automatically](#start-automatically-when-the-pc-turns-on) · [no `:8765` in the address](#addresses-without-a-port-number) · [using the PC's name instead of its number](#using-the-pcs-name-instead-of-its-number) · [troubleshooting](#when-something-doesnt-work)
 

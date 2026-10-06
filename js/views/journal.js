@@ -3,40 +3,31 @@
 import { h, fill } from '../dom.js';
 import { ctx, play } from '../ctx.js';
 import { areaLabel } from '../lexicon.js';
-import { buildModel, insights, localDate, areaHeat, neglectedAreas } from '../model.js';
+import { buildModel, insights, areaHeat, neglectedAreas } from '../model.js';
 import { deleteSession } from '../state.js';
-import { formatDuration } from '../analyze.js';
+import { trainingLog } from './traininglog.js';
+import { sessionMinutes } from '../progress.js';
 
 const FACE = { much: ['😀', 'much better'], some: ['🙂', 'a little'], none: ['😐', 'not really'] };
-
-function streak(history) {
-  const days = new Set(history.map((s) => s.date));
-  let n = 0;
-  const d = new Date();
-  if (!days.has(localDate(d))) d.setDate(d.getDate() - 1); // today not done yet doesn't break it
-  while (days.has(localDate(d))) { n++; d.setDate(d.getDate() - 1); }
-  return n;
-}
 
 export function mountJournal(root) {
   const { state } = ctx;
   const model = buildModel(state.history, state.videos);
   const ins = insights(model, state.videos);
-  const minutes = Math.round(state.history.reduce((s, x) => s + (state.videos[x.videoId]?.durationSec ?? 0), 0) / 60);
   const tile = (n, label) => h('div', { class: 'tile' }, h('strong', null, n), h('span', null, label));
   const poseCount = new Set([...model.pose.keys()].map((k) => k.split('|')[1])).size;
 
   fill(root, 
     h('h1', null, 'Journal'),
-    h('p', { class: 'sub' }, 'Everything you’ve done, and what the app is learning about what works for your body.'),
-    h('div', { class: 'tiles' },
-      tile(state.history.length, 'routines done'), tile(`${minutes}`, 'minutes of practice'), tile(streak(state.history), 'day streak'),
-      tile(model.channelDone.size, 'teachers tried'), tile(model.ratings, '“did it help?” answers'), tile(poseCount, 'exercises learned')),
+    h('p', { class: 'sub' }, 'Your training log, and what the app is learning about what works for your body.'),
+
+    trainingLog(() => mountJournal(root)),
 
     heatmap(state),
 
     h('section', { class: 'panel' },
       h('h2', null, 'What’s working for you'),
+      h('div', { class: 'tiles' }, tile(model.channelDone.size, 'teachers tried'), tile(model.ratings, '“did it help?” answers'), tile(poseCount, 'exercises learned')),
       ins.length
         ? h('div', { class: 'insights' }, ins.map((i) => h('article', { class: 'insight' },
           h('h3', null, areaLabel(i.area)),
@@ -55,7 +46,7 @@ export function mountJournal(root) {
             h('div', null,
               h('p', { class: 'when' }, s.date),
               h('p', null, v ? h('button', { class: 'link', type: 'button', onclick: () => play(v.id) }, v.title) : 'Video no longer in library',
-                v ? h('small', { class: 'muted' }, ` · ${v.channel || 'unknown'} · ${v.durationSec ? formatDuration(v.durationSec) : ''}`) : null),
+                v ? h('small', { class: 'muted' }, ` · ${v.channel || 'unknown'}${sessionMinutes(s, state.videos) ? ` · ${sessionMinutes(s, state.videos)} min` : ''}`) : null),
               h('p', { class: 'rates' }, Object.entries(s.ratings).map(([a, r]) => h('span', { class: `badge rate-${r}`, title: FACE[r][1] }, `${FACE[r][0]} ${areaLabel(a)}`)),
                 s.intensity ? h('span', { class: 'badge' }, { easy: 'too easy', right: 'just right', hard: 'too hard' }[s.intensity]) : null),
               s.note ? h('p', { class: 'note-text' }, `“${s.note}”`) : null),

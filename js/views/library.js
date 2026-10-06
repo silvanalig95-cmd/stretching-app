@@ -6,9 +6,10 @@ import { h, fill, thumb, fmtViews } from '../dom.js';
 import { ctx, play, growLibrary, importInputs, refreshFollowedNow, readMissingComments, missingCommentsCount } from '../ctx.js';
 import { AREAS, areaLabel, areaPath, parentOf } from '../lexicon.js';
 import { formatDuration, qualityScore } from '../analyze.js';
-import { toggleLibrary, unblockVideo, unblockChannel, hiddenReason, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
+import { toggleLibrary, unblockVideo, unblockChannel, hiddenReason, isFavoriteChannel, updateLibraryItem, allTags, unfollowChannel, saveSearch, deleteSavedSearch } from '../state.js';
 import { attachTranscript, cleanTranscript } from '../analyze.js';
 import { blockMenu } from './blockmenu.js';
+import { favoriteButton } from './favorite.js';
 import { buildModel, coverage } from '../model.js';
 import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
@@ -294,6 +295,7 @@ export function mountLibrary(root) {
         h('div', { class: 'badges' },
           topAreas.map((a) => h('span', { class: 'badge' }, areaLabel(a))),
           (lib?.tags ?? []).map((t) => h('span', { class: 'badge tag' }, `#${t}`)),
+          !reason && isFavoriteChannel(ctx.state, v) && h('span', { class: 'badge fav', title: 'You marked this channel as a favourite' }, '★ favourite channel'),
           reason === 'channel' && h('span', { class: 'badge warn', title: 'You blocked this channel' }, 'channel blocked'),
           reason === 'video' && h('span', { class: 'badge warn', title: 'You hid this video' }, 'hidden'),
           !v.verified && h('span', { class: 'badge warn', title: 'Not yet checked against YouTube' }, 'unverified'),
@@ -309,7 +311,7 @@ export function mountLibrary(root) {
           ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'unblock-channel', onclick: () => { const e = ctx.state.blockedChannels.find((c) => (c.channelId && c.channelId === v.channelId) || c.key === (v.channelId || v.channel || '').toLowerCase() || (v.channel && c.name?.toLowerCase() === v.channel.toLowerCase())); if (e) unblockChannel(ctx.state, e.key); ctx.store.save(); rerender(); } }, 'Unblock channel')
           : reason === 'video'
             ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'unhide', onclick: () => { unblockVideo(ctx.state, v.id); ctx.store.save(); rerender(); } }, 'Unhide')
-            : blockMenu(v, { label: 'Hide', cls: 'btn small ghost', onChange: rerender })));
+            : [favoriteButton(v, { cls: 'btn small ghost', onChange: rerender }), blockMenu(v, { label: 'Hide', cls: 'btn small ghost', onChange: rerender })]));
   }
 
   function editor(v, lib) {

@@ -133,3 +133,22 @@ test('the guide for friends only mentions settings that exist, and the hash comm
   assert.match(r.stdout + r.stderr, /pbkdf2-sha256:\d+:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+/, r.stderr);
   for (const f of ['WINDOWS.md', 'EXTERNAL.md']) assert.ok(read(`deploy/${f}`).toString().includes('rebuild') || f === 'EXTERNAL.md');
 });
+
+test('the backup scripts: Windows line endings, they only write into the folder you chose, and the guide\'s commands match them', () => {
+  const backup = read('backup-docker.bat').toString(), schedule = read('schedule-backup.bat').toString(), guide = read('deploy/BACKUP.md').toString();
+  for (const [name, text] of [['backup-docker.bat', backup], ['schedule-backup.bat', schedule]]) assert.ok(!/(^|[^\r])\n/.test(text), `${name} uses CRLF`);
+  // the scheduled run never waits for a person
+  assert.match(backup, /if \/i "%MODE%"=="auto" \(\s+call :go >"%LOG%" 2>&1\s+exit \/b/);
+  assert.match(backup, /run --rm -T --no-deps -v "!DEST!:\/backup" --entrypoint python3 unfurl \/srv\/unfurl\/current\/serve\.py --backup \/backup/);
+  assert.ok(!/\b(del|erase|rmdir|rd)\b|compose[^\n]*\bdown\b|volume (rm|prune)|prune/i.test(backup), 'nothing destructive');
+  assert.deepEqual([...backup.matchAll(/^\s*copy [^\n]*/gm)].map((m) => m[0].trim()), ['copy /y deploy\\unfurl.env "!DEST!\\unfurl.env" >nul'], 'the only file it copies is the settings file, to the chosen folder');
+  assert.match(schedule, /StartWhenAvailable/, 'a missed run (PC off) happens when you are back');
+  assert.match(schedule, /'%~dp0backup-docker\.bat' -Argument 'auto'/);
+  // the two commands in the guide are the ones the script runs, and the thing they call exists in the server
+  assert.ok(guide.includes('--entrypoint python3 unfurl /srv/unfurl/current/serve.py --restore /backup/'), 'restore command');
+  const server = read('serve.py').toString();
+  for (const flag of ['--backup', '--restore', '--force', '--keep', '--small']) assert.ok(server.includes(`"${flag}"`), `${flag} exists`);
+  assert.match(read('deploy/run.sh').toString(), /current/, 'the supervisor keeps the live release under "current"');
+  assert.match(read('.gitignore').toString(), /deploy\/backup-folder\.txt/, 'where your backups go is never committed');
+  for (const f of ['README.md', 'deploy/README.md', 'deploy/WINDOWS.md']) assert.ok(read(f).toString().includes('BACKUP.md'), `${f} links to the guide`);
+});

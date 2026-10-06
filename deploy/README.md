@@ -1,7 +1,7 @@
 # Hosting Unfurl on a server (with automatic updates)
 
 > **On Windows?** See [WINDOWS.md](WINDOWS.md) for step-by-step instructions, from "just this PC" to "always on and updating itself".
-> **Sharing with friends outside your home network?** See [EXTERNAL.md](EXTERNAL.md).
+> **Sharing with friends outside your home network?** See [EXTERNAL.md](EXTERNAL.md). **Backing up to a cloud drive, and restoring?** See [BACKUP.md](BACKUP.md).
 
 The idea: the server **follows a git branch**. Whenever a new version is pushed to that branch, the server notices within a minute, tests it, switches to it, and checks it came up healthy. If anything is wrong it keeps (or goes back to) the version that was working. People with the page open see *“A new version of Unfurl is ready — Reload”*.
 
@@ -136,7 +136,7 @@ The updater runs whatever is on the followed branch, as the service account, wit
 
 ## Backups
 
-Back up the **data folder** (`/var/lib/unfurl`, or the `unfurl-data` volume). The app also keeps a daily backup of each profile inside it (`backups/`), restorable from **Settings → Your data**, but a copy on another disk protects you from losing the machine. Example nightly copy: `rsync -a /var/lib/unfurl/ backup-host:/backups/unfurl/`.
+Back up the **data folder** (`/var/lib/unfurl`, or the `unfurl-data` volume) and your settings file; `python3 serve.py --backup FOLDER` makes a dated zip of all of it ([BACKUP.md](BACKUP.md)). The app also keeps a daily backup of each profile inside it (`backups/`), restorable from **Settings → Your data**, but a copy on another disk protects you from losing the machine. Example nightly copy: `rsync -a /var/lib/unfurl/ backup-host:/backups/unfurl/`.
 
 ## Troubleshooting
 

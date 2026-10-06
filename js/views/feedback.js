@@ -6,6 +6,7 @@ import { h, fill } from '../dom.js';
 import { openModal, toast } from '../modal.js';
 import { ctx, rankNow } from '../ctx.js';
 import { logSession } from '../state.js';
+import { localDate } from '../model.js';
 import { AREAS, AREA_BY_ID, POSE_BY_ID, areaLabel, areaPath } from '../lexicon.js';
 
 const RATINGS = [['much', '😀', 'Much better'], ['some', '🙂', 'A little'], ['none', '😐', 'Not really']];
@@ -21,14 +22,17 @@ function fallbackAreas(video) {
   return picked.slice(0, 3).map((id) => ({ id, mode: 'tight' }));
 }
 
-/** @param {{onDone?: (how:'saved'|'dismissed')=>void}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo. */
-export function openFeedback(videoId, { onDone = null } = {}) {
+/**
+ * @param {{onDone?: (how:'saved'|'dismissed')=>void, date?: string}} [opts] onDone runs once the dialog is closed, e.g. to move on to the next part of a combo;
+ *   date logs the routine for an earlier day (the training log's “log a routine I did”).
+ */
+export function openFeedback(videoId, { onDone = null, date = null } = {}) {
   const video = ctx.state.videos[videoId];
   if (!video) return;
   const targeted = ctx.ui.featuredId === videoId ? ctx.ui.featuredAreas : [];
   const areas = (targeted.length ? targeted : fallbackAreas(video)).map((a) => ({ ...a }));
   const ratings = {};
-  let intensity = null, repeat = null;
+  let intensity = null, repeat = null, when = date || localDate();
 
   const body = h('div', { class: 'feedback' });
   let modal, finished = false;
@@ -50,6 +54,9 @@ export function openFeedback(videoId, { onDone = null } = {}) {
     const note = body.querySelector('textarea')?.value ?? '';
     fill(body, 
       h('p', { class: 'lead' }, h('strong', null, video.title)),
+      h('p', { class: 'hint' }, 'Saving adds this routine to your training log. Answering is optional, but the answers are what teach the app what works for you.'),
+      h('label', { class: 'note' }, h('span', null, 'When did you do it?'),
+        h('input', { type: 'date', id: 'feedback-date', value: when, max: localDate(), onchange: (e) => { when = e.target.value || localDate(); } })),
       h('h3', null, 'Did it help?'),
       areas.length
         ? areas.map((a) => h('div', { class: 'rate-row' },
@@ -66,7 +73,7 @@ export function openFeedback(videoId, { onDone = null } = {}) {
       group('Repeat', [['yes', 'Yes, sometime'], ['no', 'Never show again']], () => repeat, (v) => { repeat = v; }),
       h('label', { class: 'note' }, h('span', null, 'Notes (optional)'), h('textarea', { rows: 2, maxlength: 500, placeholder: 'e.g. pigeon pose was the one that finally released it' }, note)),
       h('div', { class: 'actions' },
-        h('button', { type: 'button', class: 'btn ghost', onclick: () => modal.close() }, 'Cancel'),
+        h('button', { type: 'button', class: 'btn ghost', onclick: () => modal.close() }, 'Don’t log it'),
         h('button', { type: 'button', class: 'btn primary', id: 'save-feedback', onclick: save }, 'Save')),
     );
     const ta = body.querySelector('textarea');
@@ -75,7 +82,7 @@ export function openFeedback(videoId, { onDone = null } = {}) {
 
   const save = () => {
     const note = body.querySelector('textarea')?.value ?? '';
-    logSession(ctx.state, { videoId, areas, ratings, intensity, repeat, note });
+    logSession(ctx.state, { videoId, areas, ratings, intensity, repeat, note, date: when });
     ctx.store.save();
     finished = true;      // the close below must not also report 'dismissed'
     modal.close();

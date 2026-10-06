@@ -11,7 +11,7 @@
 import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
 import { mergeVideo } from './youtube.js';
-import { localDate, channelKey, channelBlocker } from './model.js';
+import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
 
 export const SCHEMA = 2;
 export const MAX_VIDEOS = 2000;
@@ -23,6 +23,7 @@ export const DEFAULT_PREFS = {
   thoroughness: 'balanced',   // how wide a web search goes: quick | balanced | thorough | exhaustive (see THOROUGHNESS)
   autoLibrary: false,  // true: everything a search finds is added to your library automatically
   focus: [],           // your standing tight / weak spots: [{id, mode}]
+  weeklyGoal: 3,       // routines per week you aim for in the training log (0 = no goal)
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
   showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
 };
@@ -37,6 +38,7 @@ export function emptyState() {
     history: [],     // every routine you've done, with your "did it help?" answers
     blocked: [],     // video ids you never want to see again
     blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
+    favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     prefs: { ...DEFAULT_PREFS, trusted: [...DEFAULT_TRUSTED], focus: [] },
@@ -51,7 +53,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -138,6 +140,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.history)) s.history = p.history.filter((h) => isObj(h) && typeof h.videoId === 'string');
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
+    if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.following)) s.following = p.following;
     if (Array.isArray(p.savedSearches)) s.savedSearches = p.savedSearches.filter((x) => isObj(x) && typeof x.q === 'string');
     if (isObj(p.prefs)) s.prefs = { ...s.prefs, ...p.prefs };
@@ -319,6 +322,8 @@ export function unfollowChannel(state, channelId) { state.following = state.foll
 
 const newId = () => (globalThis.crypto?.randomUUID ? crypto.randomUUID() : `h${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`);
 
+const validDay = (d) => (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= localDate() ? d : null);
+
 /**
  * Record a finished routine and what you thought of it. A routine you've done is
  * part of your practice, so it joins your library.
@@ -328,9 +333,10 @@ export function logSession(state, entry) {
   const rec = {
     id: newId(),
     at: new Date().toISOString(),
-    date: entry.date ?? localDate(),
+    date: validDay(entry.date) ?? localDate(),   // a routine can be logged for an earlier day, never a future one
     videoId: entry.videoId,
     title: v?.title, channel: v?.channel,
+    durationSec: v?.durationSec ?? null,         // kept so the minutes in your training log don't change if the video does
     areas: entry.areas ?? [],
     ratings: entry.ratings ?? {},
     intensity: entry.intensity ?? null,
@@ -350,11 +356,36 @@ export function unblockVideo(state, id) { state.blocked = state.blocked.filter((
 export function blockChannel(state, video) {
   const key = channelKey(video);
   if (!key) return null;
-  let entry = state.blockedChannels.find((c) => c.key === key || (video.channelId && c.channelId === video.channelId));
-  if (!entry) { entry = { key, name: video.channel || key, ...(video.channelId ? { channelId: video.channelId } : {}) }; state.blockedChannels.push(entry); }
+  const entry = upsertChannel(state.blockedChannels, video, key);
+  state.favoriteChannels = state.favoriteChannels.filter(notChannel(video)); // a blocked channel can't also be a favourite
   return entry;
 }
+/** The list's entry for this video's channel, added if missing (a name-only entry learns the channel id once it is known). */
+function upsertChannel(list, video, key) {
+  const is = (c) => channelMatcher([c])(video);
+  let entry = list.find(is);
+  if (!entry) { entry = { key, name: video.channel || key, ...(video.channelId ? { channelId: video.channelId } : {}) }; list.push(entry); }
+  else if (video.channelId && !entry.channelId) entry.channelId = video.channelId;
+  return entry;
+}
+/** keeps the list entries that are NOT this video's channel */
+const notChannel = (video) => (entry) => !channelMatcher([entry])(video);
 export function unblockChannel(state, key) { state.blockedChannels = state.blockedChannels.filter((c) => c.key !== key); }
+
+/**
+ * Mark this video's channel as a favourite: its videos rank higher whenever they fit the request.
+ * Returns the entry, or null if the channel is unknown. Un-blocks the channel if it was blocked.
+ */
+export function favoriteChannel(state, video) {
+  const key = channelKey(video);
+  if (!key) return null;
+  const entry = upsertChannel(state.favoriteChannels, video, key);
+  state.blockedChannels = state.blockedChannels.filter(notChannel(video));
+  return entry;
+}
+export function unfavoriteChannel(state, key) { state.favoriteChannels = state.favoriteChannels.filter((c) => c.key !== key); }
+export const isFavoriteChannel = (state, video) => channelMatcher(state.favoriteChannels)(video);
+
 /** Why a video is hidden from suggestions: 'video', 'channel', or null. */
 export function hiddenReason(state, video) {
   if (state.blocked.includes(video.id)) return 'video';
@@ -395,6 +426,10 @@ export function mergeImport(state, incoming) {
   state.history.sort((a, b) => (a.at < b.at ? -1 : 1));
   state.blocked = [...new Set([...state.blocked, ...inc.blocked])];
   for (const c of inc.blockedChannels ?? []) if (!state.blockedChannels.some((x) => x.key === c.key)) state.blockedChannels.push(c);
+  for (const c of inc.favoriteChannels ?? []) if (!state.favoriteChannels.some((x) => x.key === c.key)) state.favoriteChannels.push(c);
+  // blocking wins over a favourite if the two copies disagree
+  const isBlocked = channelMatcher(state.blockedChannels);
+  state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));
   for (const f of inc.following) followChannel(state, f);
   for (const x of inc.savedSearches) if (!state.savedSearches.some((y) => y.name.toLowerCase() === x.name.toLowerCase())) state.savedSearches.push(x);
   for (const [k, q] of Object.entries(inc.queryLog)) if (!state.queryLog[k] || (q.count ?? 0) > (state.queryLog[k].count ?? 0)) state.queryLog[k] = q;

@@ -7,3 +7,7 @@ tests/e2e/shots/
 
 # server settings with passwords in them
 deploy/unfurl.env
+
+# where your backups go, and how the last one went (this PC only)
+deploy/backup-folder.txt
+deploy/backup-last.txt

@@ -126,7 +126,7 @@ export function rankNow() {
   }
   ui.ranked = rankCandidates({
     videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
   });
   return ui.ranked;
 }
@@ -140,7 +140,7 @@ export function entryFor(videoId) {
   const model = buildModel(ctx.state.history, ctx.state.videos);
   return rankCandidates({
     videos: [v], filters: { areas: ctx.ui.filters.areas, minMin: 0, maxMin: 999, styles: [] }, model, libraryIds: libraryIds(),
-    trusted: ctx.state.prefs.trusted, blocked: [], adventure: ctx.state.prefs.adventure,
+    trusted: ctx.state.prefs.trusted, blocked: [], favoriteChannels: ctx.state.favoriteChannels, adventure: ctx.state.prefs.adventure,
   })[0] ?? { video: v, score: 0, parts: {}, flags: { inLibrary: libraryIds().has(videoId), suggestion: v.source === 'suggestion' }, reasons: [] };
 }
 
@@ -463,7 +463,7 @@ export function buildCombos() {
   // rank with a loose minimum length: the parts are SHORTER than the whole session
   const cands = rankCandidates({
     videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
   });
   ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };
   return ui.combos;

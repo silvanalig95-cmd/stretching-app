@@ -32,3 +32,11 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 export const fmtViews = (n) => (n == null ? '' : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M views` : n >= 1e3 ? `${Math.round(n / 1e3)}K views` : `${n} views`);
 export const thumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+
+/** Hand the browser a text file to save. */
+export function download(filename, text, type = 'text/plain') {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = h('a', { href: url, download: filename });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}

@@ -45,7 +45,7 @@ The key is stored only on your computer (in your data folder, below) and only ev
   - **How hard to look**: *Quick / Balanced / Thorough / Exhaustive*. A search is a **wide net**: it runs several differently-worded YouTube searches, reads further pages when results are mostly familiar, learns new wording from the best hits, and keeps going in rounds until enough *strong fits* turn up (or the unit budget for that run is spent). Balanced typically weighs a few hundred videos for ~300 units; the setting caps what one search may cost.
   - **Build a combo** (offered when you pick two or more muscle areas): no single video usually covers them all, so it chains 2–3 short, well-fitting ones into one session that fits your time, shows how much of your list it covers versus the best single video, and plays them back to back.
 - **Searching your library** (Library tab): plain words find titles, teachers, chapters, poses, muscles, what viewers wrote, and your own tags and notes, with typo tolerance, synonyms ("glutes" ≈ "buttocks"), and suggestions as you type. Extra syntax: `"exact phrase"`, `-word` to exclude, `teacher:kassandra`, `pose:pigeon`, `tag:morning`, `for:hips`, `len:10-20` / `len:<15`. The line under the box shows how it understood you. Save a search you use often and it appears as a chip.
-- **Journal**: your history, what's working for you per muscle, and a 4-week map of which muscles you've been working.
+- **Journal**: your **training log** (this week against a goal, streaks, a 12-week chart, a calendar, achievements, per-muscle progress, log an earlier routine, CSV export), what's working for you per muscle, a 4-week map of which muscles you've been working, and your history.
 - **Settings**: the key, your standing tight/weak spots, how adventurous the app is, auto-add, backups.
 
 ## How it works
@@ -114,7 +114,7 @@ sudo deploy/install.sh --branch main --host unfurl.internal      # Linux + syste
 docker compose -f deploy/docker-compose.yml up -d --build        # or Docker
 ```
 
-Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**. On Windows: **[deploy/WINDOWS.md](deploy/WINDOWS.md)**. Letting friends use it from outside your network: **[deploy/EXTERNAL.md](deploy/EXTERNAL.md)**.
+Full guide, including HTTPS, private repositories, SSO and operations: **[deploy/README.md](deploy/README.md)**. On Windows: **[deploy/WINDOWS.md](deploy/WINDOWS.md)**. Letting friends use it from outside your network: **[deploy/EXTERNAL.md](deploy/EXTERNAL.md)**. Backing up to the cloud (what to include, Proton Drive, restoring): **[deploy/BACKUP.md](deploy/BACKUP.md)**.
 
 ## Honest limitations
 

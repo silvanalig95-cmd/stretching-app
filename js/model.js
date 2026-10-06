@@ -19,6 +19,8 @@ const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
 export const RATING_VALUE = { much: 1, some: 0.5, none: 0 };
 const INTENSITY_VALUE = { easy: -1, right: 0, hard: 1 };
 const W = { match: 0.42, quality: 0.18, learned: 0.22, novel: 0.2 };
+/** How much a favourite channel's video can gain (at most, and only when it fits the request fully): +22 %. */
+export const FAVORITE_BOOST = 0.22;
 
 // ---------------------------------------------------------------- random helpers
 
@@ -49,10 +51,10 @@ export function localDate(d = new Date()) {
 
 export const channelKey = (v) => (v.channelId || v.channel || '').toLowerCase();
 
-/** A test for "does this video come from a channel the person blocked?". Entries look like {key, name, channelId?}. */
-export function channelBlocker(blockedChannels = []) {
+/** A test for "is this video from one of these channels?" (the blocked list, the favourites list). Entries look like {key, name, channelId?}. */
+export function channelMatcher(channels = []) {
   const ids = new Set(), keys = new Set(), names = new Set();
-  for (const c of blockedChannels) {
+  for (const c of channels) {
     if (c.channelId) ids.add(c.channelId);
     if (c.key) keys.add(c.key);
     if (c.name) names.add(normName(c.name));
@@ -61,6 +63,7 @@ export function channelBlocker(blockedChannels = []) {
   // by id when YouTube gave one, else by the channel's name (the starter suggestions only know the name)
   return (v) => !!((v.channelId && ids.has(v.channelId)) || keys.has(channelKey(v)) || (v.channel && names.has(normName(v.channel))));
 }
+export const channelBlocker = channelMatcher;
 const normName = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 export function isTrusted(video, trusted = []) {
   const ch = normName(video.channel);
@@ -212,13 +215,14 @@ export function recencyPenalty(model, videoId, today = localDate()) {
  * @param {object} p.model           from buildModel
  */
 export function rankCandidates({
-  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], adventure = 0.35, today = localDate(), now = Date.now(),
+  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], adventure = 0.35, today = localDate(), now = Date.now(),
   textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
   libraryIds = null,   // Set of ids in the user's library
 }) {
   const selected = filters.areas ?? [];
   const blockedSet = new Set(blocked);
   const channelBlocked = channelBlocker(blockedChannels);
+  const isFavorite = channelMatcher(favoriteChannels);
   const useText = !!(filters.terms?.length && textScores);
   const out = [];
   for (const video of videos) {
@@ -257,12 +261,23 @@ export function rankCandidates({
       if (bias < -0.4 && lvl === 'advanced') score *= 1.06;
       if (bias < -0.4 && lvl === 'beginner') score *= 0.92;
     }
+    // A favourite channel gets a lift, but only as much as the video already fits what was asked for
+    // (its muscles, its length, the style): a poor fit from a favourite stays a poor fit.
+    const favorite = isFavorite(video);
+    let lift = 0;
+    if (favorite) {
+      const relevance = selected.length ? areaMatch : text ?? 1;
+      const styleOk = !filters.styles?.length || filters.styles.some((s) => (video.profile?.styles?.[s] ?? 0) >= 0.3);
+      lift = styleOk ? clamp((relevance - 0.2) / 0.3) * clamp((fit - 0.3) / 0.7) : 0;
+      score *= 1 + FAVORITE_BOOST * lift;
+    }
     score -= recencyPenalty(model, video.id, today);
 
     out.push({
       video, score,
-      parts: { match, quality, learned: learned.value, confidence: learned.confidence, novelty, fit },
+      parts: { match, quality, learned: learned.value, confidence: learned.confidence, novelty, fit, favorite: lift },
       flags: {
+        favorite,
         newChannel: !!chNew && !isTrusted(video, trusted),
         newVideo: !!vidNew,
         hiddenGem: isHiddenGem(video),
@@ -272,6 +287,7 @@ export function rankCandidates({
         suggestion: video.source === 'suggestion',
       },
       reasons: [
+        ...(lift >= 0.5 ? [`★ From “${video.channel}”, a channel you marked as a favourite`] : []),
         ...(text >= 0.5 ? [`Matches what you typed: “${filters.terms.join(' ')}”`] : []),
         ...learned.notes.map((t) => `📈 ${t}`),
         ...explainMatch(video, selected.map((s) => s.id)),

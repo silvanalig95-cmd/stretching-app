@@ -6,6 +6,8 @@ import { ctx, client, quotaInfo, describeFilters, setLength, cycleArea, applyPar
 import { STYLES, QUICK_PICKS, areaLabel, parentOf, areaPath } from '../lexicon.js';
 import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
+import { favoriteButton } from './favorite.js';
+import { streaks, goalProgress, DEFAULT_WEEKLY_GOAL } from '../progress.js';
 import { channelBlocker } from '../model.js';
 import { parseCommand, buildQueries, youtubeSearchUrl, youtubeWatchUrl } from '../query.js';
 import { mountPlayer } from '../player.js';
@@ -34,13 +36,28 @@ export function mountToday(root) {
     h('section', { class: 'hero' },
       h('h1', null, 'What do you need today?'),
       h('p', { class: 'sub' }, 'Say it in your own words, or tap muscles below. I’ll find, read up on, and rank routines for you.'),
-      commandBar()),
+      commandBar(),
+      h('p', { class: 'week-line', id: 'week-line' })),
     slots.filters,
     h('section', { id: 'results', 'aria-label': 'Routine' }, slots.log, slots.featured, slots.combo, slots.alts));
   Object.assign(ctx.hooks, { renderResults, renderFilters, renderLog });
   renderFilters();
+  weekLine();
   if (!ctx.ui.ranked.length && !ctx.ui.busy) { if (ctx.ui.featuredId) rankNow(); else suggestNow(); }
   renderResults();
+}
+
+/** One quiet line of motivation under the heading: this week against your goal, and your streak. */
+function weekLine() {
+  const { state } = ctx;
+  const el = document.getElementById('week-line') ?? h('p', { class: 'week-line', id: 'week-line' });
+  if (!state.history.length) { el.replaceChildren(); return el; }
+  const goal = state.prefs.weeklyGoal ?? DEFAULT_WEEKLY_GOAL;
+  const g = goalProgress(state.history, goal), s = streaks(state.history);
+  const bits = [goal ? `This week: ${g.done} of ${goal}${g.met ? ' ✓' : ''}` : `This week: ${g.done}`];
+  if (s.current >= 2) bits.push(`${s.current} days in a row`);
+  fill(el, bits.join(' · '), ' ', h('button', { class: 'link', type: 'button', onclick: () => ctx.hooks.navigate('journal') }, 'Training log'));
+  return el;
 }
 
 // ---------------------------------------------------------------- command + filters
@@ -152,6 +169,7 @@ export function renderFilters() {
 
 export function renderResults() {
   if (!slots.featured?.isConnected) return; // another tab is showing
+  weekLine();
   renderLog();
   renderFeatured();
   renderCombo();
@@ -287,6 +305,7 @@ function featuredInfo(entry) {
       ctx.ui.foundIds.has(v.id) && badge('✨ Just found', 'new'),
       f.newChannel && badge('New teacher for you', 'new', 'You haven’t done a routine from this channel yet'),
       f.hiddenGem && badge('Hidden gem', 'gem', 'Well liked relative to its views'),
+      f.favorite && badge('★ Favourite channel', 'fav', 'You marked this channel as a favourite'),
       f.trusted && badge('Trusted teacher', '', 'On your trusted list'),
       f.commentsRead && badge(`${ev.n} comments read`, '', 'Viewer comments were analysed for what it did for people'),
       !v.verified && badge('Details unverified', 'warn', 'Length and channel come from a guess; they’ll be checked when you add a YouTube key or play it')),
@@ -294,6 +313,7 @@ function featuredInfo(entry) {
       h('button', { class: 'btn primary', id: 'did-it', type: 'button', onclick: () => finishVideo(v.id) }, 'I did it ✓'),
       h('button', { class: 'btn', id: 'another', type: 'button', onclick: () => another() }, 'Another one ↻'),
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
+      favoriteButton(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
     reasonsBlock(entry, wanted),
@@ -372,5 +392,5 @@ function videoCard(r) {
     h('span', { class: 'badges' },
       inLibrary(ctx.state, v.id) && badge('In library', 'lib'), f.suggestion && !inLibrary(ctx.state, v.id) && badge('Suggested'),
       ctx.ui.foundIds.has(v.id) && badge('Just found', 'new'),
-      f.newChannel && badge('New teacher', 'new'), f.hiddenGem && badge('Hidden gem', 'gem')));
+      f.favorite && badge('★ Favourite', 'fav'), f.newChannel && badge('New teacher', 'new'), f.hiddenGem && badge('Hidden gem', 'gem')));
 }

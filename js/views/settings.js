@@ -1,17 +1,32 @@
 // Settings: YouTube key, how it searches, your standing tight/weak spots, and
 // your data (where it lives, backups, versions).
 
-import { h, fill } from '../dom.js';
+import { h, fill, download } from '../dom.js';
 import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
-import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel } from '../state.js';
+import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel, unfavoriteChannel } from '../state.js';
 import { verifyVideos, THOROUGHNESS } from '../youtube.js';
 import { ANALYSIS_VERSION } from '../analyze.js';
 import { parentOf, areaPath } from '../lexicon.js';
 import { areaPicker } from './areapicker.js';
 import { toast } from '../modal.js';
-import { localDate, channelBlocker } from '../model.js';
+import { localDate, channelBlocker, channelMatcher, FAVORITE_BOOST } from '../model.js';
 
 const HIDDEN_SHOWN = 40;
+
+/** Channels you love: their videos rank higher when they also fit the request. */
+function favoritesPanel() {
+  const { state, store } = ctx;
+  const redraw = () => { document.getElementById('favorites-panel')?.replaceWith(favoritesPanel()); };
+  const list = state.favoriteChannels;
+  const countFor = (c) => Object.values(state.videos).filter(channelMatcher([c])).length;
+  return h('section', { class: 'panel', id: 'favorites-panel' },
+    h('h2', null, 'Favourite channels'),
+    h('p', { class: 'hint' }, `Teachers you really enjoy. Their videos get up to ${Math.round(FAVORITE_BOOST * 100)}% more weight when ranking, but only as far as they also fit what you asked for (the muscles, the length, the style); a video that doesn’t fit gains nothing. Mark one with “☆ Favourite channel” on any video.`),
+    list.length ? h('ul', { class: 'backups', id: 'favorite-channels' }, list.map((c) => h('li', { 'data-channel': c.key },
+      h('span', null, '★ ', c.name, h('small', { class: 'muted' }, ` · ${countFor(c)} known video${countFor(c) === 1 ? '' : 's'}`)),
+      h('button', { class: 'btn small ghost', type: 'button', 'data-unfavorite': c.key, onclick: () => { unfavoriteChannel(state, c.key); store.save(); toast(`“${c.name}” is no longer a favourite.`, 'info'); redraw(); } }, 'Remove'))))
+      : h('p', { class: 'empty-note', id: 'favorites-empty' }, 'None yet. Press “☆ Favourite channel” next to a video from a teacher you like.'));
+}
 
 /** Everything you told the app never to suggest again, each with a way back. */
 function hiddenPanel() {
@@ -151,11 +166,7 @@ export function mountSettings(root) {
     h('p', { class: 'hint' }, 'Updating or replacing the app never touches this folder. When a new version changes how data is stored, it upgrades yours automatically and keeps a backup of the old format.'),
     backupsSlot = h('div', { id: 'backups-slot' }),
     h('div', { class: 'actions' },
-      h('button', { class: 'btn', id: 'export', type: 'button', onclick: () => {
-        const url = URL.createObjectURL(new Blob([exportData(state)], { type: 'application/json' }));
-        const a = h('a', { href: url, download: `unfurl-backup-${localDate()}.json` });
-        document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } }, 'Export backup'),
+      h('button', { class: 'btn', id: 'export', type: 'button', onclick: () => download(`unfurl-backup-${localDate()}.json`, exportData(state), 'application/json') }, 'Export backup'),
       h('button', { class: 'btn', type: 'button', disabled: store.readOnly, onclick: () => importInput.click() }, 'Import backup'), importInput,
       h('button', { class: 'btn', id: 'reanalyze', type: 'button', disabled: store.readOnly, onclick: () => { reindexAll(state); store.save(); toast(`Re-analysed ${Object.keys(state.videos).length} videos from their stored text and comments.`, 'success'); } }, 'Re-analyse everything'),
       verifyBtn,
@@ -193,6 +204,7 @@ export function mountSettings(root) {
         h('small', { class: 'hint' }, 'A small ranking boost, and used to flavour searches. Teachers you rate well earn trust automatically.')),
       state.following.length ? h('div', null, h('h3', null, 'Teachers you follow'),
         h('ul', { class: 'backups' }, state.following.map((f) => h('li', null, f.name, h('button', { class: 'btn small ghost', type: 'button', onclick: () => { unfollowChannel(state, f.channelId); store.save(); mountSettings(root); } }, 'Unfollow'))))) : null),
+    favoritesPanel(),
     hiddenPanel(),
     dataPanel);
   renderSpots();
