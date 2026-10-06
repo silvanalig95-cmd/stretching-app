@@ -468,3 +468,18 @@ test('a server can listen on port 80 and be reached without typing a port', asyn
     assert.equal((await raw(s.port, { path: '/', headers: { Host: '192.168.1.50', Authorization: basic('me', 'pw-pw-pw') } })).status, 200);
   } finally { s.stop(); }
 });
+
+test('a second copy on the same port refuses to start and says why (on Windows two programs could otherwise share a port silently)', async () => {
+  const first = await start();
+  try {
+    const second = await new Promise((resolve) => {
+      const proc = spawn('python3', [SERVE, '--port', String(first.port), '--no-open', '--data-dir', tmp('dup'), '--legacy-dir', tmp('legacy')], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let err = ''; proc.stderr.on('data', (d) => { err += d; });
+      proc.on('exit', (code) => resolve({ code, err }));
+    });
+    assert.notEqual(second.code, 0);
+    assert.match(second.err, /already being used by another program/);
+    assert.match(second.err, /Docker/);
+    assert.equal((await first.call({ path: '/api/ping' })).status, 200, 'the first copy is unharmed');
+  } finally { first.stop(); }
+});

@@ -12,6 +12,26 @@ Nothing here is exposed to the internet. Don't set up port forwarding on your ro
 
 > **Honest note:** the server itself is tested on Linux. The Windows batch files and Docker Desktop steps below are simple, but I could not run them on a real Windows machine, so if something doesn't behave as written, tell me the exact message and I'll fix it.
 
+## What is Docker, and why use it here?
+
+Think of **Docker Desktop** as a program that runs small, sealed boxes ("containers") on your PC. The Unfurl box holds a tiny Linux system with Unfurl already installed inside it, started from a recipe (the `Dockerfile` and `docker-compose.yml` in `C:\Unfurl`). Docker connects a "window" on the box (port 8765, and 80) to a window on your PC, which is how your browser reaches it.
+
+What that gets you: the box doesn't need Python, `start.bat` or any of the other `.bat` files, because everything it needs is inside; it **restarts by itself** when Windows starts; and the app inside **checks GitHub every minute and updates itself**, with testing and rollback, which the plain `.bat` route can't do.
+
+So there are **two alternative ways to run the same app: the `.bat` files (steps 1–2) or Docker (step 3). Pick one, and don't run both:** they'd both want the same port, and on Windows two programs can end up sharing a port in a confusing way. If you move to Docker, **undo the `.bat` autostart** (below).
+
+### Switching from the `.bat` route to Docker: undo the old autostart
+
+1. Close the black window the `.bat` file opened (this stops that old server).
+2. Delete the autostart file. In PowerShell:
+   ```powershell
+   Remove-Item "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\Unfurl.bat"
+   ```
+3. Check nothing else still listens on the port: `netstat -ano | findstr ":8765"`. Only Docker's own process (`com.docker.backend` / `wslrelay`) should show; you can look up a number from the last column in Task Manager → *Details* → *PID*. If a `python.exe` shows up, end it there.
+4. Check the Docker box is really serving (next section). Everything below assumes only Docker is running.
+
+---
+
 Jump to: [what to keep](#what-to-keep-and-what-you-can-delete) · [start automatically](#start-automatically-when-the-pc-turns-on) · [no `:8765` in the address](#addresses-without-a-port-number) · [using the PC's name instead of its number](#using-the-pcs-name-instead-of-its-number) · [troubleshooting](#when-something-doesnt-work)
 
 ---
@@ -192,5 +212,6 @@ Try `http://THEPCNAME/` (run `hostname` in PowerShell to see the name). Two sepa
 | "Address already in use" | Another copy is running (a step-2 window, or Docker). Close it, or change the port. |
 | A video says *Error 153* or won't play | Tell me; it depends on the address you use to open the app. Opening it as `localhost` on the PC itself is the reference that always works. |
 | Docker: `failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine ... cannot find the file specified` | Docker Desktop is installed but **not running**. Start it from the Start menu and wait until its window says *Engine running* (the whale icon in the tray stops animating). First time: accept the terms, skip the sign-in. If it complains about WSL or virtualization: open PowerShell **as administrator**, run `wsl --install`, restart the PC, and make sure virtualization is enabled in the BIOS/UEFI (Task Manager → Performance → CPU shows "Virtualization: Enabled"). Check with `docker info`, then re-run the `docker compose ... up -d --build` command. |
+| Browser says **"sent back an empty page"** (`NS_ERROR_NET_EMPTY_RESPONSE`, Chrome: `ERR_EMPTY_RESPONSE`) | Docker's connection point is there, but the app *inside* the box isn't answering (a green dot in Docker Desktop only means the box is on, not that the app works). In PowerShell: `cd C:\Unfurl`, then `docker compose -f deploy/docker-compose.yml ps` (should say `healthy`) and `docker compose -f deploy/docker-compose.yml logs --tail 40`. A line starting **`Refusing to listen`** means `deploy\unfurl.env` has no `UNFURL_AUTH=name:password` line (or it's empty): fix the file, then run `docker compose -f deploy/docker-compose.yml up -d --force-recreate` (a plain *restart* does not re-read the file). Anything else: send me the last lines. |
 | Docker: container keeps restarting | `docker compose -f deploy/docker-compose.yml logs --tail 50` and send me the last lines. |
 | After a restart the app isn't there | Docker Desktop isn't running yet (wait two minutes after signing in), or the container was stopped by hand: `docker compose -f deploy/docker-compose.yml up -d`. |

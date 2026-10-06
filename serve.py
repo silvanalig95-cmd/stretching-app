@@ -827,6 +827,17 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def port_in_use(host: str, port: int) -> bool:
+    """Is something already answering on this port? (On Windows two programs can quietly bind the very same port,
+    so the operating system's own "address in use" error can't be relied on to warn us.)"""
+    probe = {"0.0.0.0": "127.0.0.1", "": "127.0.0.1", "::": "::1"}.get(host, host)
+    try:
+        with socket.create_connection((probe, port), timeout=0.7):
+            return True
+    except OSError:
+        return False
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -943,6 +954,10 @@ def main(argv=None, env=None):
               f"folder under {c.data_dir / 'users'} and that file is no longer used. To keep it, copy profile.json, index.json and config.json "
               f"into {c.data_dir / 'users' / '<login name>'} (see deploy/README.md).", file=sys.stderr)
 
+    if port_in_use(c.host, c.port):
+        sys.exit(f"Port {c.port} is already being used by another program on this computer, so Unfurl can't start here.\n"
+                 "Is Unfurl already running (another window, the automatic start at sign-in, or Docker)? Run only one copy, "
+                 f"or choose another port (UNFURL_PORT / --port {c.port + 1}).")
     Handler.cfg = c
     Handler.usage = UsageMeter(c.data_dir / "usage.json")
     try:
