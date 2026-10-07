@@ -406,6 +406,10 @@ details.add-menu[open] > summary { margin-bottom: 12px; }
 .badge.kind { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .badge.kind.unsure { font-style: italic; font-weight: 500; }
 .badge.kind.fixed { box-shadow: inset 0 0 0 1px var(--accent); }
+.badge.voice { background: var(--warm-soft); color: var(--warm); font-weight: 600; }
+.badge.voice.unsure { font-style: italic; font-weight: 500; }
+.badge.voice.fixed { box-shadow: inset 0 0 0 1px var(--warm); }
+#voice-filter .hint { display: block; margin-top: 6px; max-width: 56ch; }
 .traits { margin: 2px 0 8px; }
 .a-kind { margin: 0 0 4px; font-size: 1.02rem; } .a-evidence { margin: 0 0 6px; padding-left: 1.2rem; color: var(--muted); font-size: .92rem; } .a-traits { margin: 4px 0; font-weight: 500; }
 .style-fix { margin-top: 8px; flex-wrap: wrap; } .style-fix select { max-width: 100%; min-width: 0; }

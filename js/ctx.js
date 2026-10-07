@@ -13,13 +13,14 @@ import { attachComments, analyzeVideoText, attachTranscript, cleanTranscript, re
 import { buildReport } from './report.js';
 import { SearchIndex } from './index.js';
 import { areaLabel } from './lexicon.js';
+import { voiceText } from './teacher.js';
 
 export const ctx = {
   store: null,
   hooks: { renderResults() {}, renderFilters() {}, renderLog() {}, toast(msg) { console.log(msg); }, navigate() {} },
   ui: {
     tab: 'today',
-    filters: { areas: [], minMin: 10, maxMin: 25, styles: [], hints: [], terms: [], source: 'all' },
+    filters: { areas: [], minMin: 10, maxMin: 25, styles: [], hints: [], terms: [], source: 'all', voice: '' },
     command: '',
     ranked: [],            // ranked candidates for the current filters
     featuredId: null,
@@ -69,6 +70,7 @@ export function initFilters() {
   const { prefs } = ctx.state;
   ctx.ui.filters.minMin = prefs.minMin;
   ctx.ui.filters.maxMin = prefs.maxMin;
+  ctx.ui.filters.voice = prefs.voice === 'female' || prefs.voice === 'male' ? prefs.voice : '';   // a standing wish for a female or male teacher
 }
 
 /** "Pick from: Morning": the ids in that collection (null when the request is not limited to one). */
@@ -84,6 +86,7 @@ export function describeFilters(f = ctx.ui.filters) {
   if (f.terms?.length) parts.push(`“${f.terms.join(' ')}”`);
   parts.push(f.minMin == null && f.maxMin == null ? 'any length' : `${f.minMin ?? 0}–${f.maxMin ?? '∞'} min`);
   if (f.styles.length) parts.push(f.styles.join(', '));
+  if (f.voice) parts.push(voiceText(f.voice).toLowerCase());
   if (f.source === 'library') parts.push('my library only');
   if (typeof f.source === 'string' && f.source.startsWith('collection:')) parts.push(`from “${ctx.state.collections.find((c) => `collection:${c.id}` === f.source)?.name ?? 'a collection'}”`);
   return parts.join(' · ');
@@ -116,6 +119,7 @@ export function applyParsed(parsed) {
     f.terms = [...parsed.terms];
   }
   f.hints = parsed.hints;
+  if (parsed.voice) f.voice = parsed.voice;   // typed "a female teacher": for this search (the standing choice is the chips)
   if (parsed.minMin != null) setLength(parsed.minMin, parsed.maxMin);
 }
 
@@ -134,7 +138,7 @@ export function rankNow() {
   }
   ui.ranked = rankCandidates({
     videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(), collectionIds: sourceCollection(ui.filters),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, adventure: state.prefs.adventure,
   });
   return ui.ranked;
 }
@@ -270,7 +274,7 @@ async function verifySuggestions(api) {
 
 export async function growLibrary(areaIds) {
   const prev = { ...ctx.ui.filters, areas: ctx.ui.filters.areas.map((a) => ({ ...a })) };
-  ctx.ui.filters = { areas: areaIds.map((id) => ({ id, mode: 'tight' })), minMin: null, maxMin: null, styles: [], hints: [], terms: [], source: 'all' };
+  ctx.ui.filters = { areas: areaIds.map((id) => ({ id, mode: 'tight' })), minMin: null, maxMin: null, styles: [], hints: [], terms: [], source: 'all', voice: '' };
   const api = client();
   if (!api) { ctx.ui.filters = prev; throw new Error('Add a YouTube key in Settings first.'); }
   ctx.ui.log = [];
@@ -474,7 +478,7 @@ export function aimAtNeglected(n = 2) {
 // ---------------------------------------------------------------- combos
 
 /** What a combo search depended on: if any of it changes, the old combos no longer answer the question. */
-export const comboKey = (f) => JSON.stringify([f.areas, f.minMin, f.maxMin, f.styles, f.source]);
+export const comboKey = (f) => JSON.stringify([f.areas, f.minMin, f.maxMin, f.styles, f.source, f.voice ?? '']);
 
 /** Look for sequences of videos that together cover all the chosen muscles in the chosen time. */
 export function buildCombos() {
@@ -485,7 +489,7 @@ export function buildCombos() {
   // rank with a loose minimum length: the parts are SHORTER than the whole session
   const cands = rankCandidates({
     videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(), collectionIds: sourceCollection(f),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, adventure: state.prefs.adventure,
   });
   ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };
   return ui.combos;

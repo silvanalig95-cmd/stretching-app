@@ -12,6 +12,8 @@ import { skeletonFeatured, skeletonGrid, emptyArt } from './placeholders.js';
 import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
+import { voiceBadge, voiceMenu } from './voice.js';
+import { VOICE_CHOICES } from '../teacher.js';
 import { notesBlock } from './notes.js';
 import { didTodayButton } from './quicklog.js';
 import { streaks, goalProgress, DEFAULT_WEEKLY_GOAL } from '../progress.js';
@@ -155,7 +157,10 @@ export function renderFilters() {
           return h('div', null, h('div', { class: 'chips' }, STYLE_LIST.filter((s) => s.main).map(toggle)),
             h('details', { class: 'more-styles', id: 'more-styles', open: more.some((s) => f.styles.includes(s.id)) },
               h('summary', null, 'More styles (Hatha, Ashtanga, Wall Pilates, foam rolling, tai chi …)'), h('div', { class: 'chips' }, more.map(toggle))));
-        })())),
+        })()),
+      h('div', { id: 'voice-filter' }, h('div', { class: 'label' }, 'Teacher (optional)'),
+        h('div', { class: 'chips', role: 'group', 'aria-label': 'Teacher' }, VOICE_CHOICES.map((c) => chip(c.label, (f.voice || '') === c.id, () => { f.voice = c.id; prefs.voice = c.id; ctx.store.save(); again(); }, { aria: c.label }))),
+        h('small', { class: 'hint' }, 'Read from what the video and its viewers say, or from what you tell the app (“Teacher ▾” on a video). Where nobody knows, it is still offered, after the ones that fit.'))),
     h('div', { class: 'row' },
       h('label', { class: 'field inline-field' }, h('span', null, 'Pick from'),
         h('select', { id: 'scope', onchange: (e) => { f.source = e.target.value; again(); } },
@@ -315,7 +320,7 @@ function featuredInfo(entry) {
       v.channel ? h('span', { class: 'channel' }, v.channel) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
       h('span', null, lengthText(v)), fmtViews(v.views) && h('span', null, fmtViews(v.views)), likePct && h('span', null, likePct)),
     h('div', { class: 'badges' },
-      styleBadge(v),
+      styleBadge(v), voiceBadge(v),
       saved && badge('✓ In your library', 'lib'),
       f.suggestion && !saved && badge('Suggested', '', 'A recommended starting point; add it to your library if you like it'),
       ctx.ui.foundIds.has(v.id) && badge('✨ Just found', 'new'),
@@ -333,6 +338,7 @@ function featuredInfo(entry) {
       h('button', { class: 'btn ghost', id: 'lib-toggle', type: 'button', 'aria-pressed': saved, onclick: () => { toggleLibrary(state, v.id); ctx.store.save(); renderFeaturedInfo(); renderAlts(); } }, saved ? '✓ In library' : '＋ Add to library'),
       favoriteButton(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       collectionMenu(v, { cls: 'btn ghost', onChange: () => { renderFeaturedInfo(); renderAlts(); } }),
+      voiceMenu(v, { cls: 'btn ghost', onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
     notesBlock(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
@@ -412,7 +418,7 @@ function videoCard(r) {
     h('span', { class: 'vtitle' }, v.title),
     h('span', { class: 'vmeta' }, v.channel || 'unknown channel', ' · fit ', `${Math.round((r.parts.match ?? 0) * 100)}%`),
     h('span', { class: 'badges' },
-      styleBadge(v),
+      styleBadge(v), voiceBadge(v),
       inLibrary(ctx.state, v.id) && badge('In library', 'lib'), f.suggestion && !inLibrary(ctx.state, v.id) && badge('Suggested'),
       ctx.ui.foundIds.has(v.id) && badge('Just found', 'new'),
       f.favorite && badge('★ Favourite', 'fav'), f.newChannel && badge('New teacher', 'new'), f.hiddenGem && badge('Hidden gem', 'gem')));

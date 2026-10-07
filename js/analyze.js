@@ -8,6 +8,7 @@
 
 import { classifyStyle, withFix, stylesWithFix } from './style.js';
 import { buildTimeline } from './timeline.js';
+import { guessVoice } from './teacher.js';
 import {
   AREA_TERMS, POSE_TERMS, DIFFICULTY_TERMS, BENEFIT_TERMS,
   POSE_BY_ID, AREA_BY_ID, NEG_RE, POS_RE, PACE_RE, BENEFITS, normalize, scan,
@@ -20,7 +21,7 @@ const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 // Bump this whenever the analysis changes in a way that alters profiles (lexicon,
 // weights, parsing). On load the app re-runs the analysis over everything it has
 // stored, so improvements apply retroactively without re-fetching anything.
-export const ANALYSIS_VERSION = 5;
+export const ANALYSIS_VERSION = 6;
 
 // How much we trust each kind of evidence.
 export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75, mine: 0.8 };
@@ -294,12 +295,15 @@ export function analyzeVideoText(video) {
   const kind = video.styleFix ? withFix(found.kind, video.styleFix) : found.kind;
   const traits = found.traits;
   const timeline = buildTimeline({ chapters, transcriptTimeline: spoken?.timeline, comments: video.comments, durationSec: video.durationSec });
+  // who teaches, when the words say so outright or viewers agree (see teacher.js); a channel you marked is looked up separately
+  const voice = guessVoice({ channel: video.channel, description, comments: video.comments });
   return {
     sources,
     areas: combineSources(sources),
     poses,
     chapters: chapters.slice(0, 40),
     styles, kind, traits,
+    ...(voice ? { voice } : {}),
     level,
     ...(timeline && timeline.source !== 'chapters' ? { timeline } : {}),   // a chapter list is already stored as `chapters`
     ...(spoken ? { transcript: { words: spoken.words, lines: spoken.lines, timeline: spoken.timeline } } : {}),

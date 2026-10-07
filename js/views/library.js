@@ -16,6 +16,8 @@ import { SearchIndex } from '../index.js';
 import { toast } from '../modal.js';
 import { analyzePanel } from './analyze.js';
 import { styleBadge } from './stylebadge.js';
+import { voiceBadge, voiceMenu } from './voice.js';
+import { voiceResolver, voiceFit } from '../teacher.js';
 import { STYLE_LIST } from '../style.js';
 import { collectionMenu, collectionBar, orderButtons } from './collections.js';
 import { emptyBlock } from './placeholders.js';
@@ -24,7 +26,7 @@ const LEN = { '': null, short: [0, 10], mid: [10, 20], long: [20, 30], xl: [30, 
 const TABS = [['mine', 'My library'], ['discovered', 'Discovered'], ['suggestions', 'Suggestions']];
 
 export function mountLibrary(root) {
-  const lf = (ctx.ui.lib ??= { tab: 'mine', q: '', area: '', len: '', tag: '', style: '', collection: '', sort: 'auto', status: '', show: 30 });
+  const lf = (ctx.ui.lib ??= { tab: 'mine', q: '', area: '', len: '', tag: '', style: '', voice: '', collection: '', sort: 'auto', status: '', show: 30 });
   const listSlot = h('div', { id: 'lib-list' });
   const covSlot = h('details', { id: 'coverage', class: 'panel' });
   const tabsSlot = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Library sections' });
@@ -168,6 +170,7 @@ export function mountLibrary(root) {
     h('label', { class: 'field grow' }, h('span', null, 'Search'), search, suggestList),
     sel('lib-area', 'Muscle', [['', 'Any'], ...AREAS.map((a) => [a.id, areaPath(a.id)])], 'area'),
     sel('lib-style', 'Style', [['', 'Any'], ...STYLE_LIST.map((x) => [x.id, x.name])], 'style'),
+    sel('lib-voice', 'Teacher', [['', 'Any'], ['female', 'Female'], ['male', 'Male'], ['unknown', 'Not known yet']], 'voice'),
     sel('lib-len', 'Length', [['', 'Any'], ['short', 'Under 10'], ['mid', '10–20'], ['long', '20–30'], ['xl', '30+']], 'len'),
     sel('lib-status', 'Show', [['', 'Available'], ['new', 'Not done yet'], ['done', 'Done before'], ['blocked', 'Hidden by me'], ['broken', 'Unavailable']], 'status'),
     sel('lib-sort', 'Sort', [['auto', 'Best match'], ['quality', 'Best quality'], ['fit', 'Best for muscle'], ['helpful', 'Most helpful to me'], ['new', 'Newest added'], ['short', 'Shortest'], ['long', 'Longest']], 'sort'));
@@ -250,6 +253,7 @@ export function mountLibrary(root) {
     fill(tagSlot, lf.tab === 'mine' && tags.length ? h('div', { class: 'chips tagbar' }, h('span', { class: 'label inline' }, 'Tags'),
       tags.map((t) => h('button', { type: 'button', class: `chip${lf.tag === t ? ' on' : ''}`, 'aria-pressed': lf.tag === t, onclick: () => { lf.tag = lf.tag === t ? '' : t; lf.show = 30; renderList(); } }, t))) : '');
 
+    const voiceOf = lf.voice ? voiceResolver({ marks: ctx.state.teacherVoices, videos: Object.values(ctx.state.videos) }) : null;
     const picked = lf.tab === 'mine' ? ctx.state.collections.find((c) => c.id === lf.collection) ?? null : null;
     let list = buckets()[lf.tab].filter((v) => {
       const isBlocked = !!hiddenReason(ctx.state, v);
@@ -263,6 +267,7 @@ export function mountLibrary(root) {
       if (picked && !picked.videoIds.includes(v.id)) return false;
       if (lf.area && (v.profile?.areas?.[lf.area] ?? 0) < 0.45) return false;
       if (lf.style && (v.profile?.styles?.[lf.style] ?? 0) < 0.3) return false;
+      if (voiceOf) { const who = voiceOf(v); if (lf.voice === 'unknown' ? who : voiceFit(lf.voice, who) !== 'yes' || !who) return false; }   // Female / Male: only teachers known to fit; “Not known yet”: the ones still to be marked
       if (range) { const m = (v.durationSec ?? 0) / 60; if (v.durationSec == null || m < range[0] || m >= range[1]) return false; }
       return true;
     });
@@ -306,7 +311,7 @@ export function mountLibrary(root) {
         h('p', { class: 'meta' }, v.channel || 'channel unknown', fmtViews(v.views) && ` · ${fmtViews(v.views)}`,
           done ? ` · done ${done}×${help != null ? `, ${Math.round(help * 100)}% helpful` : ''}` : ''),
         h('div', { class: 'badges' },
-          styleBadge(v),
+          styleBadge(v), voiceBadge(v),
           topAreas.map((a) => h('span', { class: 'badge' }, areaLabel(a))),
           (lib?.tags ?? []).map((t) => h('span', { class: 'badge tag' }, `#${t}`)),
           !reason && isFavoriteChannel(ctx.state, v) && h('span', { class: 'badge fav', title: 'You marked this channel as a favourite' }, '★ favourite channel'),
@@ -322,6 +327,7 @@ export function mountLibrary(root) {
         didTodayButton(v, { cls: 'btn small', onChange: rerender }),
         h('button', { class: 'btn small', type: 'button', 'data-action': 'toggle-library', onclick: () => { toggleLibrary(ctx.state, v.id); ctx.store.save(); rerender(); } }, lib ? 'Remove' : '＋ Library'),
         collectionMenu(v, { onChange: () => { coll.redraw(); renderList(); } }),
+        voiceMenu(v, { onChange: () => renderList() }),
         lf.tab === 'mine' && lf.collection ? orderButtons(v, lf.collection, { onChange: () => renderList() }) : null,
         lib ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'edit', onclick: () => { editing = editing === v.id ? null : v.id; renderList(); } }, 'Tags & note') : null,
         reason === 'channel'

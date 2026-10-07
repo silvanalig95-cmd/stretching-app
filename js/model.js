@@ -13,6 +13,8 @@
 
 import { POSE_BY_ID, AREA_BY_ID, parentOf } from './lexicon.js';
 import { qualityScore, isHiddenGem, explainMatch } from './analyze.js';
+import { channelKey, channelMatcher, channelBlocker, normName } from './channel.js';
+import { voiceResolver, voiceFit, voiceText } from './teacher.js';
 
 const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
 
@@ -49,22 +51,8 @@ export function localDate(d = new Date()) {
 
 // ---------------------------------------------------------------- identity helpers
 
-export const channelKey = (v) => (v.channelId || v.channel || '').toLowerCase();
-
-/** A test for "is this video from one of these channels?" (the blocked list, the favourites list). Entries look like {key, name, channelId?}. */
-export function channelMatcher(channels = []) {
-  const ids = new Set(), keys = new Set(), names = new Set();
-  for (const c of channels) {
-    if (c.channelId) ids.add(c.channelId);
-    if (c.key) keys.add(c.key);
-    if (c.name) names.add(normName(c.name));
-  }
-  if (!ids.size && !keys.size && !names.size) return () => false;
-  // by id when YouTube gave one, else by the channel's name (the starter suggestions only know the name)
-  return (v) => !!((v.channelId && ids.has(v.channelId)) || keys.has(channelKey(v)) || (v.channel && names.has(normName(v.channel))));
-}
-export const channelBlocker = channelMatcher;
-const normName = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+// (channel identity lives in channel.js, so other modules can use it without importing the ranking)
+export { channelKey, channelMatcher, channelBlocker, normName } from './channel.js';
 export function isTrusted(video, trusted = []) {
   const ch = normName(video.channel);
   return !!ch && trusted.some((t) => { const n = normName(t); return n && (ch.includes(n) || n.includes(ch)); });
@@ -215,7 +203,7 @@ export function recencyPenalty(model, videoId, today = localDate()) {
  * @param {object} p.model           from buildModel
  */
 export function rankCandidates({
-  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], adventure = 0.35, today = localDate(), now = Date.now(),
+  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], teacherVoices = [], adventure = 0.35, today = localDate(), now = Date.now(),
   textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
   libraryIds = null,   // Set of ids in the user's library
   collectionIds = null, // Set of ids in the collection the person picked ("Morning"): nothing else is considered
@@ -224,6 +212,9 @@ export function rankCandidates({
   const blockedSet = new Set(blocked);
   const channelBlocked = channelBlocker(blockedChannels);
   const isFavorite = channelMatcher(favoriteChannels);
+  // "a female / male teacher": a teacher known to be the other one is left out; one nobody knows about only ranks after the ones that fit
+  const wantVoice = filters.voice === 'female' || filters.voice === 'male' ? filters.voice : '';
+  const voiceOf = wantVoice ? voiceResolver({ marks: teacherVoices, videos }) : null;
   const useText = !!(filters.terms?.length && textScores);
   const out = [];
   for (const video of videos) {
@@ -232,6 +223,9 @@ export function rankCandidates({
     if (filters.source === 'library' && !inLib) continue;
     if (filters.source === 'discovered' && inLib) continue;
     if (collectionIds && !collectionIds.has(video.id)) continue;
+    const voice = voiceOf ? voiceOf(video) : null;
+    const voiceKnown = voiceOf ? voiceFit(wantVoice, voice) : 'yes';
+    if (voiceKnown === 'no') continue;
     const fit = lengthFit(video, filters.minMin ?? 0, filters.maxMin ?? 999);
     if (fit === 0) continue;
     const areaMatch = matchScore(video, selected);
@@ -250,6 +244,7 @@ export function rankCandidates({
     const nw = adventure * W.novel;
     let score = (W.match * match + W.quality * quality + W.learned * learned.value + nw * novelty) / (W.match + W.quality + W.learned + nw);
     score *= 0.4 + 0.6 * fit;
+    if (voiceKnown === 'unknown') score *= 0.7;
     if (filters.styles?.length) {
       const has = filters.styles.some((s) => (video.profile?.styles?.[s] ?? 0) >= 0.3);
       if (!has) score *= 0.45;
@@ -289,6 +284,7 @@ export function rankCandidates({
         suggestion: video.source === 'suggestion',
       },
       reasons: [
+        ...(voiceOf && voice ? [`${voiceText(voice.gender)}${voice.certainty === 'sure' ? '' : '?'}, as you asked`] : []),
         ...(lift >= 0.5 ? [`★ From “${video.channel}”, a channel you marked as a favourite`] : []),
         ...(text >= 0.5 ? [`Matches what you typed: “${filters.terms.join(' ')}”`] : []),
         ...learned.notes.map((t) => `📈 ${t}`),

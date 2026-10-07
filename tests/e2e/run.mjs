@@ -106,6 +106,7 @@ async function newPage(browser, server, { colorScheme = 'light', viewport = { wi
 
 const U = (page, fn, arg) => page.evaluate(fn, arg);
 const featuredId = (page) => U(page, () => window.__unfurl.ui.featuredId);
+const featuredChannel = (page) => U(page, () => window.__unfurl.state.videos[window.__unfurl.ui.featuredId]?.channel);
 const waitFeatured = (page) => page.waitForSelector('.featured h2', { timeout: 8000 });
 const shot = (page, name) => page.screenshot({ path: path.join(SHOTS, `${name}.png`), fullPage: true });
 
@@ -377,6 +378,53 @@ if (want(1)) {
     await page.click('[data-unfavorite]');
     ok(await page.locator('#favorites-empty').count() === 1, 'removed again');
     eq(await U(page, () => window.__unfurl.state.favoriteChannels.length), 0);
+    await goto(page, 'today');
+  });
+
+  await step('teacher: ask for a female or male teacher, tell the app who teaches on a channel, and it shows on the card, in Today, in the Library and in Settings', async () => {
+    await waitFeatured(page);
+    const id = await featuredId(page);
+    const channel = await U(page, (i) => window.__unfurl.state.videos[i].channel, id);
+    ok(channel, 'the featured video has a known channel');
+    // say who teaches: a man (it applies to the whole channel, and beats what the app would have read or known)
+    await page.click('.featured details[data-menu=voice] summary');
+    await page.click('.featured details[data-menu=voice] [data-voice=male]');
+    eq(await U(page, () => window.__unfurl.state.teacherVoices.map((c) => [c.name, c.voice])), [[channel, 'male']]);
+    eq((await page.locator('.featured .badge.voice').innerText()).trim(), 'Male teacher');
+    ok((await page.locator('.featured details[data-menu=voice] summary').innerText()).includes('man'), 'the menu shows the answer');
+    await shot(page, '38-teacher-marked');
+    // ask for a female teacher: that channel is left out; others are still offered
+    await page.click('#voice-filter .chip:has-text("Female teacher")');
+    eq(await U(page, () => [window.__unfurl.state.prefs.voice, window.__unfurl.ui.filters.voice]), ['female', 'female'], 'remembered, and in use');
+    await page.click('#find');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy, null, { timeout: 15000 });
+    ok(await U(page, (ch) => window.__unfurl.ui.ranked.length > 0 && window.__unfurl.ui.ranked.every((r) => r.video.channel !== ch), channel), 'the channel marked as male is not offered, others are');
+    ok((await featuredChannel(page)) !== channel, 'and the pick is from another teacher');
+    // typing it works too, and reads back in words
+    await page.fill('#command', 'tight hips, 15 min, a male teacher');
+    await page.press('#command', 'Enter');
+    await page.waitForFunction(() => !window.__unfurl.ui.busy && window.__unfurl.ui.filters.voice === 'male');
+    ok((await page.locator('#cmd-note').innerText()).includes('male teacher'), 'understood, in words');
+    ok(await U(page, () => window.__unfurl.ui.ranked.length > 0 && window.__unfurl.ui.ranked.every((r) => r.video.channel !== 'Yoga With Adriene')), 'a well-known woman is left out when a man is asked for');
+    // back to no preference
+    await page.click('#voice-filter .chip:has-text("Any teacher")');
+    eq(await U(page, () => [window.__unfurl.state.prefs.voice, window.__unfurl.ui.filters.voice]), ['', '']);
+    // the Library: Female shows only teachers known to be women; "Not known yet" shows the ones still to be marked
+    await goto(page, 'library');
+    await page.click('.tab:has-text("Suggestions")');
+    await page.selectOption('#lib-voice', 'female');
+    ok(await page.locator('#lib-list .row-card').count() > 0, 'known women teach some of the suggestions');
+    ok(await page.locator('#lib-list .row-card:not(:has(.badge.voice))').count() === 0, 'every row shows its teacher');
+    ok((await page.locator('#lib-list .badge.voice').allInnerTexts()).every((t) => t.trim() === 'Female teacher'), 'and all of them are women');
+    await page.selectOption('#lib-voice', 'unknown');
+    ok(await page.locator('#lib-list .row-card').count() > 0 && await page.locator('#lib-list .badge.voice').count() === 0, 'the rest: nobody knows yet');
+    await page.selectOption('#lib-voice', '');
+    // Settings lists what you told the app, and takes it back
+    await goto(page, 'settings');
+    ok(await page.locator('#teacher-marks li', { hasText: channel }).count() === 1, 'listed in Settings');
+    await page.click('[data-unmark]');
+    ok(await page.locator('#voices-empty').count() === 1, 'removed again');
+    eq(await U(page, () => window.__unfurl.state.teacherVoices.length), 0);
     await goto(page, 'today');
   });
 

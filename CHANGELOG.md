@@ -10,6 +10,12 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.9.0
+
+**A female or male teacher.** Today has a “Teacher” choice next to Style (Any · Female · Male; it is remembered), the Library has a Teacher filter (Female · Male · Not known yet), and typing it works too (“15 min tight hips with a female teacher”, “male instructor”). A teacher known to be the other one is left out; a teacher nobody knows about is still offered, only after the ones that fit, so a fresh start never ends up empty.
+
+YouTube doesn’t say who is teaching, so the app answers from what is written down, best evidence first, and it never guesses from a name: **what you tell it** (“Teacher ▾” on a video: a woman, a man, or both; it applies to the whole channel and always wins; Settings lists them and takes them back), a **short list of well-known teachers**, what the **video’s own description** says outright (“she/her”, “female yoga teacher”, “husband and wife”), and what **viewers** say about the teacher in comments (“her voice”, “love him”, “thank you ma’am”) when they clearly agree, with the evidence in the badge’s tooltip. A reading that is only a guess is shown with a “?”. Analysis moved to v6 (stored text is re-read once on load).
+
 ## 0.8.0
 
 **Olympus.** The app is now called Olympus (it was Atlas, and Unfurl before that), with a new mark: the mountain of the gods, its summit in front of the sun and wrapped in layers of cloud, in the app’s own green. It is the tab icon and the one in the header. Technical names (`UNFURL_*` settings, the data folder, Docker volumes, the `X-Unfurl` header) keep their old spelling so nothing that exists has to move.

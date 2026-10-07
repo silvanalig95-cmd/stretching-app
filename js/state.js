@@ -10,6 +10,7 @@
 
 import { SUGGESTIONS, SUGGESTIONS_VERSION } from '../data/suggestions.js';
 import { analyzeVideoText, reanalyze, ANALYSIS_VERSION } from './analyze.js';
+import { VOICES } from './teacher.js';
 import { mergeVideo } from './youtube.js';
 import { STYLE_BY_ID } from './style.js';
 import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
@@ -28,6 +29,7 @@ export const DEFAULT_PREFS = {
   weeklyGoal: 3,       // routines per week you aim for in the training log (0 = no goal)
   enrichTop: 3,        // read comments for this many top picks that haven't been read yet
   showSpecific: false, // show the specific muscle chips (lower abs, psoas, knees...) in the pickers
+  voice: '',           // a standing wish: 'female' or 'male' teacher ('' = no preference)
   bestQuality: true,   // ask YouTube for the highest picture quality when a video plays (it may not obey; see js/player.js)
 };
 
@@ -42,6 +44,7 @@ export function emptyState() {
     blocked: [],     // video ids you never want to see again
     blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
+    teacherVoices: [], // who teaches on a channel, as you told the app: [{key, name, channelId?, voice: 'female'|'male'|'mixed'}]
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     collections: [], // your own groups of library videos ("Morning", "After a run"): [{id, name, videoIds[], createdAt}]
@@ -58,7 +61,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -153,6 +156,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.blocked)) s.blocked = p.blocked;
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
+    if (Array.isArray(p.teacherVoices)) s.teacherVoices = p.teacherVoices.filter((c) => isObj(c) && typeof c.key === 'string' && VOICES.includes(c.voice)).slice(0, MAX_TEACHER_MARKS);
     s.collections = cleanCollections(p.collections);
     if (isObj(p.styleFixes)) s.styleFixes = Object.fromEntries(Object.entries(p.styleFixes).filter(([k, v]) => typeof k === 'string' && STYLE_BY_ID[v]));
     if (Array.isArray(p.following)) s.following = p.following;
@@ -559,6 +563,25 @@ export function favoriteChannel(state, video) {
 export function unfavoriteChannel(state, key) { state.favoriteChannels = state.favoriteChannels.filter((c) => c.key !== key); }
 export const isFavoriteChannel = (state, video) => channelMatcher(state.favoriteChannels)(video);
 
+export const MAX_TEACHER_MARKS = 500;
+/**
+ * Tell the app who teaches on this video's channel: 'female', 'male' or 'mixed' (both, or several teachers).
+ * `null` takes the mark away again. It applies to the whole channel. Returns the entry, or null when there is none.
+ */
+export function markTeacher(state, video, voice) {
+  const key = channelKey(video);
+  if (!key) return null;
+  state.teacherVoices = state.teacherVoices.filter(notChannel(video));
+  if (!VOICES.includes(voice)) return null;
+  if (state.teacherVoices.length >= MAX_TEACHER_MARKS) state.teacherVoices.shift();
+  const entry = { key, name: video.channel || key, ...(video.channelId ? { channelId: video.channelId } : {}), voice };
+  state.teacherVoices.push(entry);
+  return entry;
+}
+export function unmarkTeacher(state, key) { state.teacherVoices = state.teacherVoices.filter((c) => c.key !== key); }
+/** What you told the app about this video's teacher: 'female' | 'male' | 'mixed' | null. */
+export const markedVoice = (state, video) => state.teacherVoices.find((c) => channelMatcher([c])(video))?.voice ?? null;
+
 /** Why a video is hidden from suggestions: 'video', 'channel', or null. */
 export function hiddenReason(state, video) {
   if (state.blocked.includes(video.id)) return 'video';
@@ -604,6 +627,7 @@ export function mergeImport(state, incoming) {
   state.blocked = [...new Set([...state.blocked, ...inc.blocked])];
   for (const c of inc.blockedChannels ?? []) if (!state.blockedChannels.some((x) => x.key === c.key)) state.blockedChannels.push(c);
   for (const c of inc.favoriteChannels ?? []) if (!state.favoriteChannels.some((x) => x.key === c.key)) state.favoriteChannels.push(c);
+  for (const c of inc.teacherVoices ?? []) if (!state.teacherVoices.some((x) => x.key === c.key) && state.teacherVoices.length < MAX_TEACHER_MARKS) state.teacherVoices.push(c);
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);
   state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));

@@ -37,13 +37,23 @@ const WEAK_CUES = /\b(weak|weakness|weaker|strengthen|stronger|strength|activate
 const TIGHT_CUES = /\b(tight|tightness|stiff|stiffness|sore|tense|achy|aching|knotted|knots|stretch|release|loosen|relieve)\b/;
 const HINT_WORDS = ['morning', 'evening', 'bedtime', 'beginner', 'beginners', 'advanced', 'desk', 'office', 'runner', 'runners', 'running', 'seniors', 'gentle', 'sciatica', 'posture'];
 
+// "female teacher", "male yoga instructor", "a woman's voice"? (no: only a teacher word counts, so "yoga for women" stays a topic)
+const VOICE_PHRASE = /\b(female|woman|women|lady|ladies|male|man|men|guy)\s+(?:yoga\s+|pilates\s+|fitness\s+|stretching\s+)?(?:teacher|instructor|trainer|coach|voice)s?\b/g;
+const VOICE_BY = /\b(?:taught|led|guided|run|presented)\s+by\s+(?:a\s+|an\s+)?(female|woman|women|lady|male|man|men|guy)\b/g;
+const FEMALE_WORD = /^(female|woman|women|lady|ladies)$/;
+function voiceIn(raw) {
+  const found = new Set();
+  for (const re of [VOICE_PHRASE, VOICE_BY]) for (const m of raw.matchAll(re)) found.add(FEMALE_WORD.test(m[1]) ? 'female' : 'male');
+  return found.size === 1 ? [...found][0] : '';   // asking for both is asking for neither
+}
+
 /**
  * Free text -> filters. "20-30 min, tight hips and weak glutes, yin" works.
  * Anything it can't place is ignored, and `understood` says whether it found something.
  */
 export function parseCommand(text) {
   const raw = String(text ?? '').toLowerCase();
-  const out = { areas: [], minMin: null, maxMin: null, styles: [], hints: [], terms: [], understood: false };
+  const out = { areas: [], minMin: null, maxMin: null, styles: [], hints: [], terms: [], voice: '', understood: false };
 
   // --- length
   const num = '(\\d{1,3})';
@@ -87,13 +97,16 @@ export function parseCommand(text) {
   const styleText = raw.replace(new RegExp(WEAK_CUES.source, 'g'), (w) => (w === 'strength' ? 'strength' : ' '));
   for (const { entry } of scan(STYLE_TERMS, styleText)) if (styleMap[entry.id] && !out.styles.includes(entry.id)) out.styles.push(entry.id);
 
+  // --- a female or male teacher ("with a female teacher", "male instructor", "taught by a woman")
+  out.voice = voiceIn(raw);
+
   // --- extra words that make searches better
   const words = new Set(normalize(raw).split(' '));
   out.hints = HINT_WORDS.filter((w) => words.has(w));
   if (out.hints.some((h) => ['bedtime', 'evening'].includes(h)) && !out.styles.includes('restorative')) out.styles.push('restorative');
 
   // --- whatever is left over ("pigeon", a teacher's name, "sphinx") is searched for as free text
-  let rest = ` ${normalize(raw)} `;
+  let rest = ` ${normalize(raw.replace(VOICE_PHRASE, ' ').replace(VOICE_BY, ' '))} `;
   for (const compiled of [AREA_TERMS, COMMAND_ONLY_TERMS, STYLE_TERMS]) {
     for (const m of scan(compiled, raw)) rest = rest.replace(new RegExp(`\\b${m.phrase}s?\\b`, 'g'), ' ');
   }
@@ -102,7 +115,7 @@ export function parseCommand(text) {
   out.terms = [...new Set(leftover)].slice(0, 6);
 
   const namedPose = scan(POSE_TERMS, raw).length > 0;
-  out.understood = !!(out.areas.length || out.minMin != null || out.styles.length || out.hints.length || namedPose);
+  out.understood = !!(out.areas.length || out.minMin != null || out.styles.length || out.hints.length || out.voice || namedPose);
   return out;
 }
 

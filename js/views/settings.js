@@ -3,7 +3,8 @@
 
 import { h, fill, download } from '../dom.js';
 import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
-import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel, unfavoriteChannel } from '../state.js';
+import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel, unfavoriteChannel, unmarkTeacher } from '../state.js';
+import { voiceText } from '../teacher.js';
 import { verifyVideos, THOROUGHNESS } from '../youtube.js';
 import { ANALYSIS_VERSION } from '../analyze.js';
 import { parentOf, areaPath } from '../lexicon.js';
@@ -27,6 +28,21 @@ function favoritesPanel() {
       h('span', null, '★ ', c.name, h('small', { class: 'muted' }, ` · ${countFor(c)} known video${countFor(c) === 1 ? '' : 's'}`)),
       h('button', { class: 'btn small ghost', type: 'button', 'data-unfavorite': c.key, onclick: () => { unfavoriteChannel(state, c.key); store.save(); toast(`“${c.name}” is no longer a favourite.`, 'info'); redraw(); } }, 'Remove'))))
       : h('p', { class: 'empty-note', id: 'favorites-empty' }, 'None yet. Press “☆ Favourite channel” next to a video from a teacher you like.'));
+}
+
+/** Who teaches on the channels you told the app about ("Teacher ▾" on a video), each with a way back to the app's own reading. */
+function voicesPanel() {
+  const { state, store } = ctx;
+  const redraw = () => { document.getElementById('voices-panel')?.replaceWith(voicesPanel()); };
+  const list = state.teacherVoices;
+  const countFor = (c) => Object.values(state.videos).filter(channelMatcher([c])).length;
+  return h('section', { class: 'panel', id: 'voices-panel' },
+    h('h2', null, 'Teachers you told me about'),
+    h('p', { class: 'hint' }, 'For “Female teacher” / “Male teacher” on Today and in the Library. Videos and viewers rarely say who teaches, so the app reads what it can and you correct it here: use “Teacher ▾” on any video. What you say always wins, and applies to the whole channel.'),
+    list.length ? h('ul', { class: 'backups', id: 'teacher-marks' }, list.map((c) => h('li', { 'data-channel': c.key },
+      h('span', null, c.name, h('small', { class: 'muted' }, ` · ${voiceText(c.voice).toLowerCase()} · ${countFor(c)} known video${countFor(c) === 1 ? '' : 's'}`)),
+      h('button', { class: 'btn small ghost', type: 'button', 'data-unmark': c.key, onclick: () => { unmarkTeacher(state, c.key); store.save(); toast(`Back to my own reading for “${c.name}”.`, 'info'); redraw(); } }, 'Remove'))))
+      : h('p', { class: 'empty-note', id: 'voices-empty' }, 'Nothing yet. Use “Teacher ▾” next to a video to say whether a woman or a man teaches there.'));
 }
 
 /** Everything you told the app never to suggest again, each with a way back. */
@@ -213,6 +229,7 @@ export function mountSettings(root) {
         h('small', { class: 'hint' }, 'Sent once, when a video starts playing. YouTube decides in the end: it looks at how big the player is, your connection and your own choice, and its embedded player may ignore the request. Under the player you can see what you actually get.')),
       h('p', { class: 'hint' }, 'To fix the quality for good: start a video, open the ⚙ in the player, choose Quality and pick the highest number (1080p or more). YouTube remembers that for this page. A bigger player helps too: “Focus view” makes it as large as the screen allows. Videos that were only uploaded in 720p can’t go higher.')),
     favoritesPanel(),
+    voicesPanel(),
     hiddenPanel(),
     dataPanel);
   renderSpots();
