@@ -9,6 +9,7 @@
 // it only ranks after the teachers that are known to match. Pure functions: no DOM, no network.
 
 import { channelKey, channelMatcher, normName } from './channel.js';
+import { CATALOGUE } from '../data/teachers.js';
 
 /** What can be asked for (the empty one means "no preference"). */
 export const VOICE_CHOICES = [
@@ -19,17 +20,18 @@ export const VOICE_CHOICES = [
 export const VOICES = ['female', 'male', 'mixed'];
 const TEXT = { female: 'Female teacher', male: 'Male teacher', mixed: 'Several teachers' };
 export const voiceText = (gender) => TEXT[gender] ?? '';
-const SOURCE_TEXT = { you: 'You marked this channel', known: 'A well-known teacher', channel: 'Read from this channel’s videos', video: 'Read from this video' };
+const SOURCE_TEXT = { you: 'You marked this channel', known: 'From the app’s teachers list', channel: 'Read from this channel’s videos', video: 'Read from this video' };
 
 /**
- * Teachers whose own channels say plainly who they are. A short list on purpose: it is only here so the filter does
- * something useful on a fresh start, and anything you mark yourself overrides it.
+ * Teachers in the app's own list (data/teachers.js) for whom a source said who teaches: channel name, compared without spaces or
+ * capitals -> {gender, certainty, evidence}. 'sure' where two research passes agreed (or it is a very well-known teacher), else 'probable'.
+ * Anything you mark yourself overrides it.
  */
-export const KNOWN_VOICES = {
-  yogawithadriene: 'female', yogawithkassandra: 'female', sarahbethyoga: 'female', madymorrison: 'female',
-  carenbaginski: 'female', lesleyfightmaster: 'female',
-  traviseliot: 'male', timsenesi: 'male', bobandbrad: 'male',
-};
+const KNOWN = new Map(CATALOGUE.filter((t) => VOICES.includes(t.voice)).map((t) => [normName(t.name), {
+  gender: t.voice, certainty: t.voiceBy === 'sure' ? 'sure' : 'probable', evidence: t.voiceSource || 'the app’s teachers list',
+}]));
+/** The same list as plain data: normalised channel name -> 'female' | 'male' | 'mixed'. */
+export const KNOWN_VOICES = Object.fromEntries([...KNOWN].map(([k, v]) => [k, v.gender]));
 
 // ---------------------------------------------------------------- what the words say
 
@@ -129,8 +131,8 @@ export function voiceResolver({ marks = [], videos = [] } = {}) {
     if (!markFor.has(key)) markFor.set(key, matchers.find(([is]) => is(video)) ?? null);
     const mark = markFor.get(key);
     if (mark) return { gender: mark[1], certainty: 'sure', source: 'you', evidence: SOURCE_TEXT.you };
-    const known = KNOWN_VOICES[normName(video.channel)];
-    if (known) return { gender: known, certainty: 'sure', source: 'known', evidence: SOURCE_TEXT.known };
+    const known = KNOWN.get(normName(video.channel));
+    if (known) return { gender: known.gender, certainty: known.certainty, source: 'known', evidence: known.evidence };
     const own = video.profile?.voice ?? null;
     const t = tally.get(key);
     if (t && t.n >= 2) {
@@ -153,6 +155,7 @@ export function voiceFit(wanted, voice) {
 export function voiceNote(voice) {
   if (!voice?.gender) return '';
   const base = voiceText(voice.gender);
-  if (voice.source === 'you' || voice.source === 'known') return `${base} · ${SOURCE_TEXT[voice.source]}`;
+  if (voice.source === 'you') return `${base} · ${SOURCE_TEXT.you}`;
+  if (voice.source === 'known' && voice.certainty === 'sure') return `${base} · ${SOURCE_TEXT.known}`;
   return `${base}${voice.certainty === 'sure' ? '' : ' (a guess)'} · ${SOURCE_TEXT[voice.source] ?? 'Read from the text'}: ${voice.evidence}`;
 }

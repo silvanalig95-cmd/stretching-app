@@ -428,6 +428,44 @@ if (want(1)) {
     await goto(page, 'today');
   });
 
+  await step('Teachers: browse a list of teachers, filter it by who teaches, style and words, correct one, favourite one; adding their videos needs a YouTube key', async () => {
+    await goto(page, 'teachers');
+    await page.waitForSelector('.t-card');
+    const counts = async () => (await page.locator('#t-count').innerText()).match(/^(\d+) of (\d+) teachers$/).slice(1).map(Number);
+    const [shown, total] = await counts();
+    ok(total >= 150 && shown === total, `the list is there: ${shown} of ${total}`);
+    await shot(page, '39-teachers');
+    await page.selectOption('#t-voice', 'male');
+    const [men] = await counts();
+    ok(men > 5 && men < total, `${men} men`);
+    ok((await page.locator('.t-card .badge.voice').allInnerTexts()).every((t) => /Male teacher|Several teachers/.test(t)), 'every card says who teaches');
+    await page.selectOption('#t-voice', '');
+    await page.selectOption('#t-style', 'yin');
+    const [yin] = await counts();
+    ok(yin > 3 && yin < total, `${yin} yin teachers`);
+    await page.selectOption('#t-style', '');
+    await page.fill('#t-q', 'adriene');
+    eq(await counts(), [1, total]);
+    const card = page.locator('.t-card[data-teacher*="Adriene"]');
+    eq((await card.locator('.badge.voice').innerText()).trim(), 'Female teacher', 'a well-known teacher, no question mark');
+    ok((await card.locator('a:has-text("On YouTube")').getAttribute('href')).startsWith('https://www.youtube.com/'), 'a link out');
+    ok(await card.locator('[data-action=add-teacher]').isDisabled(), 'adding their videos needs a key, and says so');
+    // correct it: it applies to that channel everywhere
+    await card.locator('details[data-menu=voice] summary').click();
+    await card.locator('details[data-menu=voice] [data-voice=mixed]').click();
+    eq((await page.locator('.t-card[data-teacher*="Adriene"] .badge.voice').innerText()).trim(), 'Several teachers');
+    // favourite it
+    await page.locator('.t-card[data-teacher*="Adriene"] [data-action=favorite-channel]').click();
+    eq(await U(page, () => window.__unfurl.state.favoriteChannels.map((c) => c.name.toLowerCase().includes('adriene'))), [true]);
+    await goto(page, 'settings');
+    ok(await page.locator('#teacher-marks li', { hasText: 'Adriene' }).count() === 1, 'listed in Settings');
+    await page.click('[data-unmark]');
+    await page.click('[data-unfavorite]');
+    eq(await U(page, () => [window.__unfurl.state.teacherVoices.length, window.__unfurl.state.favoriteChannels.length]), [0, 0]);
+    await U(page, () => { window.__unfurl.ui.teachers = undefined; });
+    await goto(page, 'today');
+  });
+
   await step('finishing a video opens the feedback dialog; answers are logged, learned from, and the video joins the library', async () => {
     await page.click('#another');
     const id = await featuredId(page);
@@ -1597,7 +1635,7 @@ if (want(6)) {
   const page = await newPage(browser, server);
 
   await step('the Strength tab, workouts and sessions are gone; your stretching history, goal and everything else stay', async () => {
-    eq(await page.locator('nav a').allInnerTexts(), ['Today', 'Library', 'Journal', 'Settings'], 'four tabs, as before');
+    eq(await page.locator('nav a').allInnerTexts(), ['Today', 'Library', 'Teachers', 'Journal', 'Settings'], 'five tabs: the Teachers list was added; no Strength tab, as before');
     const s = await U(page, () => { const st = window.__unfurl.state; return { ids: st.history.map((h) => h.id), strength: 'strength' in st, goal: st.prefs.weeklyGoal, prefs: Object.keys(st.prefs).filter((k) => k.startsWith('strength')), cat: st.history.map((h) => 'category' in h) }; });
     eq(s.ids, ['m1'], 'only the stretching entry is left');
     eq(s.strength, false); eq(s.goal, 3); eq(s.prefs, []); eq(s.cat, [false]);

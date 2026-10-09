@@ -496,6 +496,18 @@ details.menu .menu-items button[aria-checked="true"] { font-weight: 600; }
 .empty-art .ea-spark { fill: none; stroke: var(--warm); stroke-width: 2.2; stroke-linecap: round; } .empty-art .ea-badge { fill: var(--accent); } .empty-art .ea-tick { fill: none; stroke: var(--accent-ink); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
 .card.empty { text-align: center; } .card.empty ul { text-align: left; display: inline-block; }
 
+/* ---- teachers */
+.t-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.t-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; box-shadow: var(--shadow-sm); transition: box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.t-card:hover { box-shadow: var(--shadow); border-color: var(--line-strong); }
+.t-card h3 { margin: 0; font-size: 1.05rem; }
+.t-card .badges { margin: 2px 0 4px; }
+.t-card .hint { margin: 0; }
+.t-note { margin: 0; color: var(--ink); font-size: var(--fs-sm); }
+.t-card .row-actions { margin-top: auto; padding-top: 8px; }
+#t-about { margin-top: 12px; } #t-about p { margin-top: 8px; max-width: 72ch; }
+@media (max-width: 600px) { .t-list { grid-template-columns: 1fr; } }
+
 /* ---- polish: one look for fields, tabs, panels, lists, follow-along controls */
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; vertical-align: -.15em; }
@@ -564,8 +576,8 @@ footer p { margin: 0 0 .25rem; }
   .brand { font-size: 1.1rem; }
   #nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; border-radius: 0; gap: 4px; padding: 6px 10px calc(6px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -4px 16px rgba(20, 30, 25, .07); }
   #nav a { flex: 1; text-align: center; padding: .6rem .25rem; font-size: .88rem; border-radius: 12px; }
-  #nav a:hover { background: transparent; }
-  #nav a[aria-current] { box-shadow: none; }
+  #nav a:hover:not([aria-current]) { background: transparent; }
+  #nav a[aria-current], #nav a[aria-current]:hover { background: var(--accent); color: var(--accent-ink); box-shadow: none; }   /* (a tap leaves the finger "hovering": the current tab must not go blank) */
   main { padding-bottom: 104px; }
   footer { padding-bottom: 96px; }
   #toast-root { bottom: 76px; }

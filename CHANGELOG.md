@@ -10,6 +10,14 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.10.0
+
+**Teachers.** A new page with a starting list of 188 YouTube teachers for yoga, stretching, mobility, rehab and Pilates: what each one teaches, who it suits, and where a source said so, whether a woman or a man teaches. Filter it by words, style, what it is good for, level and who teaches; open them on YouTube; add their videos (with a YouTube key); mark favourites; correct who teaches with “Teacher ▾”.
+
+The list was put together from six research passes over web search results. YouTube’s own pages, Reddit and the roundup articles could not be opened, so the list is a map, not a guarantee: names can differ slightly from the exact YouTube title, most entries have no @handle (the link then searches for the name), and the descriptions are short. Who teaches is filled in only where a source stated it with a pronoun or a role, never from a name; one source gives a reading with a “?”, two agreeing sources (or a very well-known teacher) are shown without one. Entries that were only brand pages, kids’ content or names that could not be tied to a real channel were left out.
+
+The list also makes searches more varied: the teachers named in searches now come from it, narrowed toward the voice, style and muscles you asked for (never a known man when you asked for a woman, and the other way round). The five-tab menu fits a phone as a bar at the bottom.
+
 ## 0.9.0
 
 **A female or male teacher.** Today has a “Teacher” choice next to Style (Any · Female · Male; it is remembered), the Library has a Teacher filter (Female · Male · Not known yet), and typing it works too (“15 min tight hips with a female teacher”, “male instructor”). A teacher known to be the other one is left out; a teacher nobody knows about is still offered, only after the ones that fit, so a fresh start never ends up empty.

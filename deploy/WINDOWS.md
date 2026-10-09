@@ -173,7 +173,7 @@ The ZIP contains no `unfurl.env`, so yours is never overwritten.)
 
 **Checking that an update arrived** (any one of these):
 
-1. **The footer of the app** shows `Olympus 0.9.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
+1. **The footer of the app** shows `Olympus 0.10.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
 2. **Settings → Your data → Versions** shows the same build.
 3. <http://localhost/healthz> shows `"build": "…"` (12 characters, starting with the same 7).
 4. **The log:** `docker compose -f deploy/docker-compose.yml logs --tail 20` shows a line like `update to 1a2b3c4d5e6f is live and healthy`. A refused update says `NOT updating to …`, and one that didn't start says `putting … back`.

@@ -60,7 +60,7 @@ The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates i
 
 ## How to tell which version is running
 
-The footer of the app shows the build (`Olympus 0.9.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
+The footer of the app shows the build (`Olympus 0.10.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 

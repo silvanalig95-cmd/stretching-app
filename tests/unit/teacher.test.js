@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { textVoice, commentVoice, guessVoice, voiceResolver, voiceFit, voiceNote, voiceText, KNOWN_VOICES } from '../../js/teacher.js';
 import { channelKey } from '../../js/channel.js';
+import { CATALOGUE } from '../../data/teachers.js';
 import * as model from '../../js/model.js';
 import { freshState, splitState, loadState, markTeacher, markedVoice, unmarkTeacher, mergeImport, MAX_TEACHER_MARKS } from '../../js/state.js';
 import { analyzeVideoText, ANALYSIS_VERSION } from '../../js/analyze.js';
@@ -84,11 +85,16 @@ test('what you said wins, then well-known teachers, then the channel\'s other vi
   assert.equal(voiceResolver()(null), null);
 });
 
-test('the known list is short, spelled the way names are compared, and never overrides a person', () => {
-  assert.ok(Object.keys(KNOWN_VOICES).length <= 12, 'a starting point, not a database');
+test('well-known teachers come from the app\'s teachers list, spelled the way names are compared, and never override a person', () => {
+  assert.ok(Object.keys(KNOWN_VOICES).length >= 40, 'a useful start');
   for (const k of Object.keys(KNOWN_VOICES)) assert.match(k, /^[a-z0-9]+$/, `${k} is compared without spaces or capitals`);
   const v = { id: 'k', channel: 'Travis Eliot', channelId: 'UC_t' };
-  assert.equal(voiceResolver({ videos: [v] })(v).gender, 'male');
+  const got = voiceResolver({ videos: [v] })(v);
+  assert.deepEqual([got.gender, got.source, got.certainty], ['male', 'known', 'sure']);
+  const single = CATALOGUE.find((t) => t.voice && t.voiceBy === 'probable');
+  const r = voiceResolver({ videos: [] })({ id: 'p', channel: single.name });
+  assert.deepEqual([r.gender, r.certainty], [single.voice, 'probable'], 'a single source gives a probable reading, shown with a ?');
+  assert.match(voiceNote(r), /a guess.*teachers list/);
 });
 
 test('fit: no preference always fits, a mixed teaching team fits either, unknown is neither yes nor no', () => {

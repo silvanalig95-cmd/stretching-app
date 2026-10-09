@@ -6,11 +6,12 @@ import { h } from './dom.js';
 import { toast } from './modal.js';
 import { mountToday, unmountToday } from './views/today.js';
 import { mountLibrary } from './views/library.js';
+import { mountTeachers } from './views/teachers.js';
 import { mountJournal } from './views/journal.js';
 import { mountSettings } from './views/settings.js';
 import { APP_NAME } from './brand.js';
 
-const TABS = [['today', 'Today', mountToday], ['library', 'Library', mountLibrary], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
+const TABS = [['today', 'Today', mountToday], ['library', 'Library', mountLibrary], ['teachers', 'Teachers', mountTeachers], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
 let mounted = null;
 
 function show(tab) {
