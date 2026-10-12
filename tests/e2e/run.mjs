@@ -668,7 +668,7 @@ if (want(1)) {
 
   await step('embedding refused (error 150): shows a YouTube link and never suggests it again', async () => {
     await U(page, () => { const r = window.__unfurl.ui.ranked.find((x) => x.video.id !== window.__unfurl.ui.featuredId); window.__errorIds[r.video.id] = 150; window.__bad = r.video.id; });
-    for (let i = 0; i < 12 && (await featuredId(page)) !== (await U(page, () => window.__bad)); i++) await page.click('#another');
+    await U(page, () => window.__unfurl.play(window.__bad));   // (which video "Another one" reaches depends on the day: go straight to it)
     ok((await featuredId(page)) === (await U(page, () => window.__bad)), 'reached the bad video');
     await page.waitForSelector('.player-problem a[href*="youtube.com/watch"]');
     ok(await page.locator('.player-problem', { hasText: 'embedded' }).count() === 1, 'explains why');
@@ -1445,6 +1445,8 @@ if (want(4)) {
     const id = await featuredId(page);
     await U(page, () => window.__players.at(-1).__end());
     await page.waitForSelector('[role=dialog]');
+    // (today's pick may be a video with no standout muscle: then add one to rate, as a person would)
+    if (!(await page.locator('.rate-row').count())) await page.selectOption('.add-area select', 'hamstrings');
     await page.click('.rate-row .choice:has-text("A little")');
     await page.click('#save-feedback');
     await page.waitForFunction(() => window.__unfurl.state.history.length === 1);
