@@ -508,6 +508,16 @@ details.menu .menu-items button[aria-checked="true"] { font-weight: 600; }
 #t-about { margin-top: 12px; } #t-about p { margin-top: 8px; max-width: 72ch; }
 @media (max-width: 600px) { .t-list { grid-template-columns: 1fr; } }
 
+/* ---- the AI helper */
+.ai-block { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-2); }
+.ai-block h3 { margin: 0 0 4px; font-size: 1rem; } .ai-block p { margin: 0 0 6px; }
+.ai-cautions { margin: 4px 0 8px; padding-left: 1.2rem; color: var(--warm); font-size: var(--fs-sm); list-style: none; padding-left: 0; }
+.ai-library { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+details.menu.busy > summary { opacity: .75; pointer-events: none; }
+#ai-panel .key-form { margin: 10px 0 4px; }
+.ai-model { margin: 12px 0 6px; } .ai-model .inline-field { flex-wrap: wrap; } .ai-model select { max-width: 100%; min-width: 0; text-overflow: ellipsis; } .ai-links { margin: 6px 0 0; font-size: var(--fs-sm); color: var(--muted); }
+#ai-panel details.steps { margin-top: 8px; }
+
 /* ---- polish: one look for fields, tabs, panels, lists, follow-along controls */
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
 input[type=checkbox], input[type=radio] { accent-color: var(--accent); width: 1.05rem; height: 1.05rem; vertical-align: -.15em; }

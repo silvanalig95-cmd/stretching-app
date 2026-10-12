@@ -305,7 +305,7 @@ export async function discover({ client, filters, state, rng, progress = () => {
       const rel = SearchIndex.fromVideos(Object.fromEntries(videos.map((v) => [v.id, v])), state.library).relevance(filters.terms, {});
       if (rel.size) textScores = rel;
     }
-    return rankCandidates({ videos, filters, model, textScores, libraryIds, trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, adventure: state.prefs.adventure });
+    return rankCandidates({ videos, filters, model, textScores, libraryIds, trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, adventure: state.prefs.adventure });
   };
   const isStrong = (r) => r.parts.match >= 0.65 && r.parts.fit >= 0.99 && r.parts.quality >= 0.45;
 
@@ -326,7 +326,7 @@ export async function discover({ client, filters, state, rng, progress = () => {
   // ---- rounds
   for (let round = 1; round <= o.maxRounds && !stop; round++) {
     report.rounds = round;
-    const base = buildQueries(filters, { queryLog: log, rng, n: o.queries, knownTeachers, adventure: state.prefs.adventure });
+    const base = buildQueries(filters, { queryLog: log, rng, n: o.queries, knownTeachers, extraTeachers: state.myTeachers ?? [], adventure: state.prefs.adventure });
     const seen = new Set();
     const queries = [...expansion, ...base].filter((q) => (seen.has(q.key) ? false : seen.add(q.key)));
 

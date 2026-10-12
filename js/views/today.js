@@ -13,6 +13,8 @@ import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
 import { voiceBadge, voiceMenu } from './voice.js';
+import { aiMenu, aiReadingBlock } from './aiblock.js';
+import { readStoredVideo, removeReading } from '../aiwork.js';
 import { VOICE_CHOICES } from '../teacher.js';
 import { notesBlock } from './notes.js';
 import { didTodayButton } from './quicklog.js';
@@ -339,8 +341,10 @@ function featuredInfo(entry) {
       favoriteButton(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       collectionMenu(v, { cls: 'btn ghost', onChange: () => { renderFeaturedInfo(); renderAlts(); } }),
       voiceMenu(v, { cls: 'btn ghost', onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
+      aiMenu(v, { read: (mode) => readStoredVideo(v.id, { mode }), onDone: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
       blockMenu(v, { onChange: () => { rankNow(); if (ctx.state.blocked.includes(v.id) || channelBlocker(ctx.state.blockedChannels)(v)) another(); else { renderFeaturedInfo(); renderAlts(); } } }),
       h('a', { class: 'btn ghost', href: youtubeWatchUrl(v.id), target: '_blank', rel: 'noopener noreferrer' }, 'YouTube ↗')),
+    aiReadingBlock(v, { onRemove: () => { removeReading(v.id); rankNow(); renderFeaturedInfo(); renderAlts(); } }),
     notesBlock(v, { onChange: () => { rankNow(); renderFeaturedInfo(); renderAlts(); } }),
     reasonsBlock(entry, wanted),
     quotes.length ? h('div', { class: 'quotes' }, h('h3', null, 'What viewers say'),
@@ -386,7 +390,7 @@ async function readComments(id, btn) {
 function emptyState() {
   const { filters } = ctx.ui;
   const rng = mulberry32((Math.random() * 2 ** 32) >>> 0);
-  const queries = buildQueries(filters, { queryLog: ctx.state.queryLog, rng, n: 3 }).map((q) => q.q);
+  const queries = buildQueries(filters, { queryLog: ctx.state.queryLog, rng, n: 3, extraTeachers: ctx.state.myTeachers ?? [] }).map((q) => q.q);
   return h('div', { class: 'card empty' },
     emptyArt('search'),
     h('h2', null, 'Nothing in your library fits that yet'),

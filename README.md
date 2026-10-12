@@ -56,6 +56,7 @@ The key is stored only on your computer (in your data folder, below) and only ev
   - **Build a combo** (offered when you pick two or more muscle areas): no single video usually covers them all, so it chains 2–3 short, well-fitting ones into one session that fits your time, shows how much of your list it covers versus the best single video, and plays them back to back.
 - **Searching your library** (Library tab): plain words find titles, teachers, chapters, poses, muscles, what viewers wrote, and your own tags and notes, with typo tolerance, synonyms ("glutes" ≈ "buttocks"), and suggestions as you type. Extra syntax: `"exact phrase"`, `-word` to exclude, `teacher:kassandra`, `pose:pigeon`, `tag:morning`, `for:hips`, `len:10-20` / `len:<15`. The line under the box shows how it understood you. Save a search you use often and it appears as a chip.
 - **Journal**: your **training log** (this week against a goal, streaks, a 12-week chart, a calendar, achievements, per-muscle progress, a one-click “✓ Did today” on any video, log things without a video or for an earlier day, CSV export), what's working for you per muscle, a 4-week map of which muscles you've been working, and your history.
+- **AI helper (optional, Gemini).** With a free Google AI key (Settings → AI helper; <https://aistudio.google.com/apikey>, about 2 minutes), **✨ Ask Gemini ▾** on a video lets Gemini *watch* it and tell the app its sections (a Follow-along timeline even without chapters), poses, kind, level and muscles, or just read its text. The Library can ask it about many videos a few at a time, and Teachers has **✨ Find more with Gemini**, which searches the web for teachers that are not in the list (shown as unchecked suggestions you can keep). What it says is checked against what the app knows, labelled as Gemini’s, never overrides what you set, and can be removed. The key stays on the server; only public things are sent to Google (never your history, notes or library); the free tier lets Google use submitted content. Off until you add a key. See `CHANGELOG.md` 0.11.0 for the details.
 - **Settings**: the key, your standing tight/weak spots, how adventurous the app is, auto-add, backups.
 
 ## What kind of routine is it?
@@ -135,11 +136,12 @@ Full guide, including HTTPS, private repositories, SSO and operations: **[deploy
 ## Honest limitations
 
 - **English only** for now (search and text analysis).
-- The "intelligence" is transparent keyword and heuristic analysis (anatomy tables in `js/lexicon.js`), not a language model. It can be fooled by clickbait titles; the comment evidence and your own ratings are what correct it. Comments are noisy; small sample sizes are labelled "early signal".
+- By default the "intelligence" is transparent keyword and heuristic analysis (anatomy tables in `js/lexicon.js`), not a language model; the optional Gemini helper adds a second, opinionated reader that can be wrong (and that the app checks and labels). It can be fooled by clickbait titles; the comment evidence and your own ratings are what correct it. Comments are noisy; small sample sizes are labelled "early signal".
 - The suggested starter videos came from web search results, not the YouTube API, so their channel names and lengths are best guesses until verified. The app checks them against YouTube the first time you search with a key, fixes them, and hides any that no longer exist; the player also corrects a video's length when you open it.
 - **Sources**: YouTube only, through its official API. Reddit and other forums, Vimeo, Instagram etc. are not included: they have no reliable open API for this (Reddit now needs its own credentials; the rest are not searchable for exercise content).
 - Muscle tags are inferred, not medically reviewed. **This isn't medical advice**: stop if something hurts, and see a professional for persistent pain, numbness or sciatica.
-- Uses only the official YouTube Data API and embedded player. It doesn't scrape YouTube or download video.
+- Uses only the official YouTube Data API and embedded player. It doesn't scrape YouTube or download video. (With the optional Gemini helper, Google’s own Gemini API fetches and watches the public video itself.)
+- The Gemini helper was developed against a stand-in for Google’s API (docs-based request and response shapes), not against a live key. Google’s model names and free-tier limits change; the app lists the models your key can use and reports whatever Google says.
 
 ## Development
 
@@ -149,7 +151,7 @@ npm i && npm run test:e2e   # real Chromium + real server (needs Playwright)
 npm run bench      # timings with a synthetic 2,000-video library (the most the app keeps); tests/unit/perf.test.js guards them
 ```
 
-YouTube is never contacted by the tests: `tests/helpers/fake-youtube.js` is a stand-in for the Data API with the real response and error shapes, and the e2e test stubs the embedded player.
+YouTube is never contacted by the tests: `tests/helpers/fake-youtube.js` is a stand-in for the Data API with the real response and error shapes, and the e2e test stubs the embedded player. Likewise `tests/helpers/fake-gemini.js` stands in for Google’s Gemini API (it checks the key the way Google does, pages the model list, and returns what a test queues).
 
 ```
 index.html, css/       the app shell
@@ -162,6 +164,7 @@ js/index.js            local BM25 search index
 js/state.js            data shape, upgrades between versions, library rules
 js/store.js            saving/loading (server files or browser storage), backups
 js/report.js           the readable analysis behind "Look at a video first"
+js/ai.js, js/aiwork.js, js/gemini.js   the optional Gemini helper: prompts + strict answer reading, what it does with your data, the server calls
 js/views/              Today, Library, Journal, Settings, feedback dialog
 serve.py               server (static files, saving to disk, logins, shared YouTube key, --selftest)
 deploy/                hosting kit: update.sh (self-update + rollback), run.sh (supervisor), install.sh, Dockerfile, systemd unit

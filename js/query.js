@@ -5,7 +5,7 @@
 // phrasings/teachers/sort orders it hasn't tried yet.
 
 import { AREA_TERMS, COMMAND_ONLY_TERMS, STYLE_TERMS, POSE_TERMS, POSE_BY_ID, AREA_BY_ID, normalize, scan } from './lexicon.js';
-import { teacherPool } from './catalogue.js';
+import { teacherPool, CATALOGUE } from './catalogue.js';
 import { STOP_WORDS } from './index.js';
 
 // ---------------------------------------------------------------- video URLs
@@ -163,7 +163,7 @@ export function termsAsSearchText(terms) {
  * @param {{queryLog:object, rng:()=>number, n?:number, teachers?:{name:string}[], knownTeachers?:Set<string>, adventure?:number}} ctx
  */
 export function buildQueries(filters, ctx) {
-  const { queryLog = {}, rng, n = 2, teachers = teacherPool(filters), knownTeachers = new Set(), adventure = 0.35 } = ctx;   // the teachers list, narrowed toward the voice, style and muscles asked for
+  const { queryLog = {}, rng, n = 2, extraTeachers = [], teachers = teacherPool(filters, [...CATALOGUE, ...extraTeachers]), knownTeachers = new Set(), adventure = 0.35 } = ctx;   // the teachers list, narrowed toward the voice, style and muscles asked for
   const terms = termsAsSearchText(filters.terms ?? []);
   // With free-text terms and no muscles ("pigeon pose"), search for the terms alone rather than defaulting to full body.
   const areas = filters.areas?.length ? filters.areas : terms ? [] : [{ id: 'full_body', mode: 'tight' }];

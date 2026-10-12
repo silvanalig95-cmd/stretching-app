@@ -310,6 +310,32 @@ export function withFix(kind, styleId) {
   return { ...(kind ?? {}), discipline: s.discipline, type: s.id !== s.discipline ? s.id : null, id: s.id, label: s.name, confidence: 1, certainty: 'you said', fixed: true, alternatives: kind?.alternatives ?? [], evidence: ['you corrected it'] };
 }
 
+/**
+ * What Gemini said after watching the video: believed in proportion to how sure it said it was (a correction you made always wins,
+ * and the caller only uses this when it is at least as sure as the words around the video were).
+ * @param {object|null} kind  the app's own reading
+ * @param {{id:string, confidence:number, evidence?:string[]}} ai
+ */
+export function withAi(kind, ai) {
+  const s = STYLE_BY_ID[ai?.id];
+  if (!s) return kind;
+  const confidence = Math.min(1, Math.max(0, Number(ai.confidence) || 0));
+  return { ...(kind ?? {}), discipline: s.discipline, type: s.id !== s.discipline ? s.id : null, id: s.id, label: s.name, confidence,
+    certainty: confidence >= 0.7 ? 'clearly' : confidence >= 0.45 ? 'probably' : 'possibly', ai: true, alternatives: kind?.alternatives ?? [],
+    evidence: (ai.evidence?.length ? ai.evidence : ['its own reading of the video']).map((e) => `Gemini: ${e}`) };
+}
+
+/** The style scores with Gemini's reading added (never lowered). */
+export function stylesWithAi(styles, ai) {
+  const s = STYLE_BY_ID[ai?.id];
+  if (!s) return styles ?? {};
+  const out = { ...(styles ?? {}) };
+  const c = Math.min(1, Math.max(0, Number(ai.confidence) || 0));
+  out[s.id] = Math.max(out[s.id] ?? 0, c);
+  if (s.discipline !== s.id) out[s.discipline] = Math.max(out[s.discipline] ?? 0, 0.85 * c);
+  return out;
+}
+
 /** The style scores as the rest of the app should see them once a correction is applied. */
 export function stylesWithFix(styles, styleId) {
   const s = STYLE_BY_ID[styleId];

@@ -23,6 +23,7 @@ WHERE THE DATA LIVES
     profile.json   your library, history, ratings, preferences (small, precious)
     index.json     everything the app has discovered and analysed (rebuildable)
     config.json    your API key (private, mode 600)
+    ai.json        your Gemini key for the optional AI helper, if you saved one (private, mode 600; never sent back to the browser)
     backups/       rolling daily backups of profile.json + one before every
                    data-format upgrade
   With several users, each gets their own folder under users/.
@@ -42,6 +43,10 @@ SETTINGS (environment variables; every one has a command-line flag too)
   UNFURL_YOUTUBE_KEY      a YouTube Data API key kept ON THE SERVER; browsers never see it
   UNFURL_YOUTUBE_KEY_FILE same, read from a file
   UNFURL_USER_DAILY_UNITS per-user daily cap on the shared key, in quota units (default 3000)
+  UNFURL_GEMINI_KEY       a Gemini API key for the optional AI helper, kept ON THE SERVER (a person's own key in Settings wins)
+  UNFURL_GEMINI_KEY_FILE  same, read from a file
+  UNFURL_GEMINI_MODEL     the Gemini model to use (default gemini-flash-latest; people can pick another in Settings)
+  UNFURL_USER_DAILY_AI_CALLS  per-user daily cap on AI-helper requests (default 60; 0 = no cap)
   UNFURL_BUILD            a label for this build (default: the git commit)
   UNFURL_POLL_SECONDS     how often open pages check for a new version (default 60)
   Passwords may be plain text or hashed: run  python3 serve.py --hash-password
@@ -84,7 +89,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode, unquote, quote
 
-APP_VERSION = "0.10.0"
+APP_VERSION = "0.11.0"
 ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
@@ -96,6 +101,13 @@ FILES = {"/api/profile": "profile.json", "/api/index": "index.json", "/api/confi
 BACKUP_NAME = re.compile(r"^profile-[A-Za-z0-9._-]+\.json$")
 YT_UPSTREAM = "https://www.googleapis.com/youtube/v3"
 YT_COST = {"search": 100, "videos": 1, "commentThreads": 1, "channels": 1, "playlistItems": 1, "playlists": 1}
+GEMINI_UPSTREAM = "https://generativelanguage.googleapis.com"
+GEMINI_KEY = re.compile(r"^[A-Za-z0-9_.\-]{20,300}$")             # what Google keys look like; Google's own answer is the real test
+GEMINI_MODEL = re.compile(r"^gemini-[a-z0-9][a-z0-9.\-]{1,60}$")   # names are checked, never trusted: they become part of a URL
+GEMINI_DEFAULT_MODEL = "gemini-flash-latest"                        # an alias Google keeps pointing at its newest fast model
+GEMINI_MAX_TEXT = 60_000      # characters of instructions or of question
+GEMINI_MAX_TOKENS = 16_000
+VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 LOGIN_FAILS_BEFORE_LOCK = 5
 LOGIN_LOCK_SECONDS = 60
 
@@ -128,6 +140,10 @@ class Config:
         self.yt_key = ""
         self.yt_upstream = YT_UPSTREAM
         self.user_daily_units = 3000
+        self.gemini_key = ""            # a Gemini key kept on the server (optional); a person's own key in ai.json wins
+        self.gemini_upstream = GEMINI_UPSTREAM
+        self.gemini_model = GEMINI_DEFAULT_MODEL
+        self.user_daily_ai_calls = 60
         self.build = ""
         self.poll_seconds = 60
         self.open_browser = True
@@ -225,6 +241,15 @@ def build_config(args, env) -> Config:
     c.yt_key = (Path(kf).expanduser().read_text("utf-8").strip() if kf else env.get("UNFURL_YOUTUBE_KEY", "")).strip()
     c.yt_upstream = env.get("UNFURL_YT_UPSTREAM", YT_UPSTREAM).rstrip("/")
     c.user_daily_units = int(env.get("UNFURL_USER_DAILY_UNITS", c.user_daily_units))
+    gf = env.get("UNFURL_GEMINI_KEY_FILE")
+    c.gemini_key = (Path(gf).expanduser().read_text("utf-8").strip() if gf else env.get("UNFURL_GEMINI_KEY", "")).strip()
+    c.gemini_upstream = env.get("UNFURL_GEMINI_BASE", GEMINI_UPSTREAM).rstrip("/")
+    gm = env.get("UNFURL_GEMINI_MODEL", "").strip()
+    if gm:
+        if not GEMINI_MODEL.fullmatch(gm):
+            sys.exit(f"UNFURL_GEMINI_MODEL={gm!r} doesn't look like a Gemini model name (for example {GEMINI_DEFAULT_MODEL}).")
+        c.gemini_model = gm
+    c.user_daily_ai_calls = int(env.get("UNFURL_USER_DAILY_AI_CALLS", c.user_daily_ai_calls))
     c.build = env.get("UNFURL_BUILD") or git_build()
     c.poll_seconds = int(env.get("UNFURL_POLL_SECONDS", c.poll_seconds))
     c.open_browser = not args.no_open
@@ -415,10 +440,10 @@ def adopt_root_data(c: Config) -> str:
         return ""
     dest.mkdir(parents=True, exist_ok=True)
     copied = []
-    for f in ("profile.json", "index.json", "config.json"):
+    for f in ("profile.json", "index.json", "config.json", "ai.json"):
         src = c.data_dir / f
         if src.exists() and not (dest / f).exists():
-            atomic_write(dest / f, src.read_bytes(), private=(f == "config.json"))
+            atomic_write(dest / f, src.read_bytes(), private=(f in ("config.json", "ai.json")))
             copied.append(f)
     return f"Gave the existing data ({', '.join(copied)}) to {name} (copied into {dest}; the originals were left in place)." if copied else ""
 
@@ -470,12 +495,28 @@ class UsageMeter:
             if self.used.get(key, 0) + units > cap:
                 return False
             self.used[key] = self.used.get(key, 0) + units
-            if self.path:
-                try:
-                    atomic_write(Path(self.path), json.dumps({"day": self.day, "used": self.used}).encode())
-                except OSError:
-                    pass  # counting is best effort; never fail a request over it
+            self._save()
             return True
+
+    def spent(self, user):
+        with self.lock:
+            return self.used.get(user or "", 0) if self.day == self.today() else 0
+
+    def refund(self, user, units):
+        """Give units back (a request that never got an answer shouldn't use up the day's allowance)."""
+        with self.lock:
+            if self.day != self.today():
+                return
+            key = user or ""
+            self.used[key] = max(0, self.used.get(key, 0) - units)
+            self._save()
+
+    def _save(self):
+        if self.path:
+            try:
+                atomic_write(Path(self.path), json.dumps({"day": self.day, "used": self.used}).encode())
+            except OSError:
+                pass  # counting is best effort; never fail a request over it
 
 
 # ---------------------------------------------------------------- HTTP
@@ -483,6 +524,7 @@ class UsageMeter:
 class Handler(SimpleHTTPRequestHandler):
     cfg: Config
     usage = UsageMeter()   # replaced in main() with one that lives in the data folder
+    ai_usage = UsageMeter()   # the same, for AI-helper requests (ai-usage.json)
     failures = {}   # ip -> [count, locked_until, window_start]
     auth_cache = {}  # sha256(Authorization header) -> (name, valid_until); only successful logins
 
@@ -736,6 +778,15 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/yt/") and method == "GET":
             return self._youtube_proxy(path[len("/api/yt/"):])
 
+        if path == "/api/gemini/status" and method == "GET":
+            return self._json(HTTPStatus.OK, self._gemini_status())
+        if path == "/api/gemini/settings" and method == "PUT":
+            return self._gemini_settings()
+        if path == "/api/gemini/models" and method == "GET":
+            return self._gemini_models()
+        if path == "/api/gemini/generate" and method == "POST":
+            return self._gemini_generate()
+
         d.mkdir(parents=True, exist_ok=True)
         if path == "/api/legacy" and method == "GET":  # a version-1 state.json, if one is waiting to be migrated
             f = d / "state.json"
@@ -841,6 +892,198 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't save ({e.strerror or e})"})
         return self._json(HTTPStatus.OK, {"ok": True, "rev": profile_rev(raw) if name == "profile.json" else None})
 
+    # ---- the optional AI helper: the browser asks, the server holds the Gemini key and makes the call
+    def _gemini_pick(self):
+        """(key, where it came from, model) for this person. Their own key wins over the one on the server."""
+        c = self.cfg
+        mine = read_ai_file(self.data_dir)
+        own = mine.get("key") if isinstance(mine.get("key"), str) and GEMINI_KEY.match(mine["key"]) else ""
+        model = mine.get("model") if isinstance(mine.get("model"), str) and GEMINI_MODEL.match(mine["model"]) else c.gemini_model
+        if own:
+            return own, "own", model
+        if c.gemini_key:
+            return c.gemini_key, "server", model
+        return "", None, model
+
+    def _gemini_status(self):
+        c = self.cfg
+        key, source, model = self._gemini_pick()
+        mine = read_ai_file(self.data_dir)
+        own = mine.get("key", "")
+        return {"ready": bool(key), "source": source, "model": model, "chosenModel": mine.get("model", "") if isinstance(mine.get("model"), str) else "",
+                "ownKey": f"…{own[-4:]}" if isinstance(own, str) and GEMINI_KEY.match(own) else "",   # a hint that one is saved; the key itself never leaves the server
+                "dailyCap": c.user_daily_ai_calls, "usedToday": self.ai_usage.spent(self.user)}
+
+    def _gemini_settings(self):
+        d = self.data_dir
+        try:
+            body = json.loads(self._body() or b"{}")
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "not JSON"})
+        cur = read_ai_file(d)
+        if "key" in body:
+            k = body["key"].strip() if isinstance(body["key"], str) else body["key"]
+            if k in ("", None):
+                cur.pop("key", None)
+            elif isinstance(k, str) and GEMINI_KEY.match(k):
+                cur["key"] = k
+            else:
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "That doesn't look like a Gemini API key (a long run of letters, digits, - and _)."})
+        if "model" in body:
+            if isinstance(body["model"], str) and GEMINI_MODEL.match(body["model"]):
+                cur["model"] = body["model"]
+            elif body["model"] in ("", None):
+                cur.pop("model", None)
+            else:
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "unknown model"})
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            with write_lock:
+                atomic_write(d / "ai.json", json.dumps(cur).encode(), private=True)
+        except OSError as e:
+            return self._json(HTTPStatus.INSUFFICIENT_STORAGE, {"error": f"couldn't save ({e.strerror or e})"})
+        return self._json(HTTPStatus.OK, self._gemini_status())
+
+    def _gemini_fail(self, status, doc, key, source, give_back=lambda: None):
+        """Turn Google's refusal into something a person can act on (and never echo the key)."""
+        err = doc.get("error") if isinstance(doc.get("error"), dict) else {}
+        msg = str(err.get("message", "")).replace(key, "…")[:300]
+        low = (msg + " " + str(err.get("status", ""))).lower()
+        where = " saved on the server." if source == "server" else ". Check the one you saved in Settings."
+        if status in (401, 403) or "api key not valid" in low or "api_key_invalid" in low:
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "invalid_key", "message": "Google did not accept the Gemini API key" + where + (f" (Google says: {msg})" if msg and "api key" not in low else "")})
+        if status == 404:
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "model", "message": "Google doesn't know that model. Choose another in Settings (the list comes from Google)."})
+        if status == 429 or status >= 500:
+            give_back()
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "busy", "message": "Gemini is busy, or its free allowance is used up for the moment (a rate limit). Try again in a minute, or tomorrow if it was the daily limit." + (f" Google says: {msg}" if msg else "")})
+        return self._json(HTTPStatus.BAD_GATEWAY, {"error": "rejected", "message": msg or f"Gemini refused the request (HTTP {status})."})
+
+    def _gemini_call(self, url, key, payload=None):
+        """One call to Google. Returns (status, parsed JSON or {}) or None when Google can't be reached."""
+        data = json.dumps(payload).encode() if payload is not None else None
+        req = urllib.request.Request(url, data=data, method="POST" if payload is not None else "GET",
+                                     headers={"content-type": "application/json", "x-goog-api-key": key, "User-Agent": f"Unfurl/{APP_VERSION}"})
+        try:
+            with urllib.request.urlopen(req, timeout=300) as resp:   # a long video takes a while
+                status, raw = resp.status, resp.read()
+        except urllib.error.HTTPError as e:
+            status, raw = e.code, e.read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return None
+        try:
+            doc = json.loads(raw)
+        except ValueError:
+            doc = {}
+        return status, (doc if isinstance(doc, dict) else {})
+
+    def _gemini_models(self):
+        """The models this key may use, straight from Google (names change; asking is more reliable than a list written into the app)."""
+        c = self.cfg
+        key, source, _ = self._gemini_pick()
+        if not key:
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "no_key", "message": "Add a Gemini API key first."})
+        found, token = [], ""
+        for _ in range(6):
+            url = f"{c.gemini_upstream}/v1beta/models?pageSize=200" + (f"&pageToken={quote(token, safe='')}" if token else "")
+            res = self._gemini_call(url, key)
+            if res is None:
+                return self._json(HTTPStatus.BAD_GATEWAY, {"error": "unreachable", "message": "The server couldn't reach Google. Check its internet connection and try again."})
+            status, doc = res
+            if status != 200:
+                return self._gemini_fail(status, doc, key, source)
+            for m in doc.get("models", []) if isinstance(doc.get("models"), list) else []:
+                if not isinstance(m, dict):
+                    continue
+                name = str(m.get("name", "")).removeprefix("models/")
+                methods = m.get("supportedGenerationMethods") if isinstance(m.get("supportedGenerationMethods"), list) else []
+                if GEMINI_MODEL.match(name) and "generateContent" in methods:
+                    found.append({"id": name, "displayName": str(m.get("displayName", ""))[:80]})
+            token = doc.get("nextPageToken") if isinstance(doc.get("nextPageToken"), str) else ""
+            if not token:
+                break
+        return self._json(HTTPStatus.OK, {"models": sorted(found, key=lambda m: m["id"])})
+
+    def _gemini_generate(self):
+        """One question, one answer. The page sends instructions, a question, optionally a YouTube video id for Gemini to
+        watch, and whether to ground the answer in Google Search; the model, the key, the video link, the size limits and the
+        daily cap are the server's business, so this can't be used to send anything but a YouTube video to Google."""
+        c = self.cfg
+        key, source, model = self._gemini_pick()
+        if not key:
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "no_key", "message": "The AI helper needs a Gemini API key. Add yours in Settings."})
+        try:
+            body = json.loads(self._body() or b"{}")
+        except ValueError:
+            body = None
+        body = body if isinstance(body, dict) else {}
+        system, prompt, video = body.get("system", ""), body.get("prompt", ""), body.get("video")
+        search, as_json, max_tokens, low_res = body.get("search", False), body.get("json", True), body.get("maxTokens", 8000), body.get("lowRes", True)
+        if not (isinstance(system, str) and isinstance(prompt, str) and prompt.strip() and len(system) <= GEMINI_MAX_TEXT and len(prompt) <= GEMINI_MAX_TEXT
+                and (video is None or (isinstance(video, str) and VIDEO_ID.match(video)))
+                and all(isinstance(x, bool) for x in (search, as_json, low_res))
+                and isinstance(max_tokens, int) and not isinstance(max_tokens, bool)):
+            return self._json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "message": "That request was malformed or too large."})
+        max_tokens = max(256, min(GEMINI_MAX_TOKENS, max_tokens))
+        cap = c.user_daily_ai_calls
+        if cap > 0 and not self.ai_usage.charge(self.user, 1, cap):
+            return self._json(HTTPStatus.TOO_MANY_REQUESTS, {"error": "daily_cap", "message": f"You have used today's {cap} AI-helper requests on this server. It resets tomorrow (US Pacific time)."})
+
+        def give_back():
+            if cap > 0:
+                self.ai_usage.refund(self.user, 1)
+
+        parts = ([{"file_data": {"file_uri": f"https://www.youtube.com/watch?v={video}"}}] if video else []) + [{"text": prompt}]
+        config = {"temperature": 0.2, "maxOutputTokens": max_tokens}
+        if as_json and not search:   # (JSON mode and Google Search together are not reliable, so a grounded answer is plain text the page parses)
+            config["responseMimeType"] = "application/json"
+        if video and low_res:        # fewer tokens per frame: a yoga class needs the poses, not fine detail
+            config["mediaResolution"] = "MEDIA_RESOLUTION_LOW"
+        payload = {"contents": [{"role": "user", "parts": parts}], "generationConfig": config}
+        if system.strip():
+            payload["systemInstruction"] = {"parts": [{"text": system}]}
+        if search:
+            payload["tools"] = [{"google_search": {}}]
+        url = f"{c.gemini_upstream}/v1beta/models/{model}:generateContent"
+        res = self._gemini_call(url, key, payload)
+        if res is not None and res[0] == 400 and "mediaresolution" in json.dumps(res[1]).lower().replace("_", ""):
+            config.pop("mediaResolution", None)    # an older or newer model that doesn't take it: ask again without
+            res = self._gemini_call(url, key, payload)
+        if res is None:
+            give_back()
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "unreachable", "message": "The server couldn't reach Google. Check its internet connection and try again."})
+        status, doc = res
+        if status != 200:
+            return self._gemini_fail(status, doc, key, source, give_back)
+        fb = doc.get("promptFeedback") if isinstance(doc.get("promptFeedback"), dict) else {}
+        if fb.get("blockReason"):
+            return self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "refused", "message": f"Gemini declined to look at that ({fb['blockReason']})."})
+        cands = doc.get("candidates") if isinstance(doc.get("candidates"), list) else []
+        cand = cands[0] if cands and isinstance(cands[0], dict) else {}
+        finish = cand.get("finishReason") if isinstance(cand.get("finishReason"), str) else ""
+        content = cand.get("content") if isinstance(cand.get("content"), dict) else {}
+        text = "".join(p.get("text", "") for p in content.get("parts", []) if isinstance(p, dict) and isinstance(p.get("text"), str) and not p.get("thought")) if isinstance(content.get("parts"), list) else ""
+        if finish in ("SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"):
+            return self._json(HTTPStatus.UNPROCESSABLE_ENTITY, {"error": "refused", "message": f"Gemini declined to answer that ({finish.lower()})."})
+        if not text.strip():
+            if finish == "MAX_TOKENS":
+                return self._json(HTTPStatus.BAD_GATEWAY, {"error": "too_long", "message": "The answer was cut off before it began (the model used its whole allowance thinking). Try again or choose another model."})
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "empty", "message": "Gemini sent back no answer. Try again."})
+        if finish == "MAX_TOKENS" and as_json and not search:
+            return self._json(HTTPStatus.BAD_GATEWAY, {"error": "too_long", "message": "The answer was cut off. Try a shorter video or another model."})
+        gm = cand.get("groundingMetadata") if isinstance(cand.get("groundingMetadata"), dict) else {}
+        sources = []
+        for ch in gm.get("groundingChunks", []) if isinstance(gm.get("groundingChunks"), list) else []:
+            web = ch.get("web") if isinstance(ch, dict) and isinstance(ch.get("web"), dict) else {}
+            if isinstance(web.get("uri"), str) and web["uri"].startswith("http"):
+                sources.append({"uri": web["uri"][:500], "title": str(web.get("title", ""))[:200]})
+        queries = [q[:200] for q in gm.get("webSearchQueries", []) if isinstance(q, str)][:10] if isinstance(gm.get("webSearchQueries"), list) else []
+        u = doc.get("usageMetadata") if isinstance(doc.get("usageMetadata"), dict) else {}
+        return self._json(HTTPStatus.OK, {"ok": True, "text": text, "model": doc.get("modelVersion", model), "finishReason": finish, "sources": sources, "queries": queries,
+                                          "usage": {k: u.get(k) for k in ("promptTokenCount", "candidatesTokenCount", "totalTokenCount") if isinstance(u.get(k), int)}})
+
     def _youtube_proxy(self, endpoint):
         """Forward a YouTube Data API call using the server's key, so browsers never hold it."""
         c = self.cfg
@@ -870,6 +1113,15 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+
+def read_ai_file(d: Path) -> dict:
+    """A person's AI-helper settings (their own Gemini key, their model choice). Missing or damaged = none."""
+    try:
+        doc = json.loads((Path(d) / "ai.json").read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def port_in_use(host: str, port: int) -> bool:
@@ -963,7 +1215,7 @@ def selftest() -> int:
 
 ARCHIVE_NAME = re.compile(r"^unfurl-backup-\d{4}-\d{2}-\d{2}\.zip$")
 _USER = r"users/[a-z0-9_-][a-z0-9._-]{0,63}/"
-RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
+RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage|ai|ai-usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
 USER_FOLDER = re.compile(r"^[a-z0-9_-][a-z0-9._-]{0,63}$")
 RECENT_COPIES = 3            # of the app's own rolling profile backups, per person, that go into the archive
 MAX_RESTORE_BYTES = 4 << 30
@@ -975,7 +1227,7 @@ def backup_sources(data_dir: Path, small: bool = False):
     found = []
 
     def folder(path: Path, prefix: str):
-        for name in ("profile.json", "config.json", "usage.json") + (() if small else ("index.json",)):
+        for name in ("profile.json", "config.json", "ai.json", "usage.json", "ai-usage.json") + (() if small else ("index.json",)):
             f = path / name
             if f.is_file() and not f.is_symlink():
                 found.append((prefix + name, f))
@@ -1152,6 +1404,7 @@ def main(argv=None, env=None):
                  f"or choose another port (UNFURL_PORT / --port {c.port + 1}).")
     Handler.cfg = c
     Handler.usage = UsageMeter(c.data_dir / "usage.json")
+    Handler.ai_usage = UsageMeter(c.data_dir / "ai-usage.json")
     try:
         httpd = Server((c.host, c.port), Handler)
     except OSError as e:

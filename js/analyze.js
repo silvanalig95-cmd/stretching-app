@@ -6,7 +6,7 @@
 // with a "noisy-OR": each source says "I'm X% sure this video works area A",
 // and several agreeing sources make the final number higher than any one.
 
-import { classifyStyle, withFix, stylesWithFix } from './style.js';
+import { classifyStyle, withFix, stylesWithFix, withAi, stylesWithAi } from './style.js';
 import { buildTimeline } from './timeline.js';
 import { guessVoice } from './teacher.js';
 import {
@@ -24,7 +24,7 @@ const sat = (x, k) => 1 - Math.exp(-k * x); // saturating 0..1
 export const ANALYSIS_VERSION = 6;
 
 // How much we trust each kind of evidence.
-export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75, mine: 0.8 };
+export const SOURCE_WEIGHT = { title: 0.85, desc: 0.6, tags: 0.4, chapters: 0.65, poses: 0.6, comments: 0.7, transcript: 0.75, mine: 0.8, ai: 0.7 };
 
 // ---------------------------------------------------------------- small parsers
 
@@ -274,6 +274,9 @@ export function analyzeVideoText(video) {
   // What the person wrote themselves (note, tags, what they said after doing it).
   const mine = video.mine ? mineEvidence(video.mine) : null;
   if (mine) for (const [id, n] of Object.entries(mine.poseCounts)) poseCounts[id] = (poseCounts[id] ?? 0) + n;
+  // What Gemini made of the video, if it was asked (see ai.js): its sections name the poses it saw, its areas count as one more source.
+  const ai = video.ai && typeof video.ai === 'object' && video.ai.v === 1 ? video.ai : null;
+  if (ai) for (const sec of ai.sections ?? []) countPoses(scan(POSE_TERMS, String(sec.label ?? '')), poseCounts);
 
   const sources = {
     title: noisyOrByArea(scan(AREA_TERMS, title)),
@@ -283,18 +286,21 @@ export function analyzeVideoText(video) {
     poses: poseEvidence(poseCounts),
     ...(spoken ? { transcript: spoken.areas } : {}),
     ...(mine ? { mine: mine.areas } : {}),
+    ...(ai && ai.areas && Object.keys(ai.areas).length ? { ai: ai.areas } : {}),
   };
   const poses = Object.entries(poseCounts).map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count);
-  const level = detectLevel(title, description);
+  const level = detectLevel(title, description) ?? (['beginner', 'intermediate', 'advanced'].includes(ai?.level) ? ai.level : null);
   // What kind of routine this is, and how it feels to do (see style.js). Read from the words around the video, never the footage.
   const found = classifyStyle({
     title, channel: video.channel, tags: video.tags, description, chapters, poses, transcript: video.transcript, comments: video.comments, durationSec: video.durationSec, level,
   });
   // a correction the person made ("this is really Pilates") travels on the video record, so every re-analysis keeps it
-  const styles = video.styleFix ? stylesWithFix(found.styles, video.styleFix) : found.styles;
-  const kind = video.styleFix ? withFix(found.kind, video.styleFix) : found.kind;
-  const traits = found.traits;
-  const timeline = buildTimeline({ chapters, transcriptTimeline: spoken?.timeline, comments: video.comments, durationSec: video.durationSec });
+  // Gemini's reading of the kind of routine counts when it is at least as sure as the words were; a correction you made always wins
+  const useAi = !video.styleFix && ai?.kind && ai.kind.confidence >= Math.min(0.85, found.kind?.confidence ?? 0);
+  const styles = video.styleFix ? stylesWithFix(found.styles, video.styleFix) : useAi ? stylesWithAi(found.styles, ai.kind) : found.styles;
+  const kind = video.styleFix ? withFix(found.kind, video.styleFix) : useAi ? withAi(found.kind, ai.kind) : found.kind;
+  const traits = ai ? { ...found.traits, pace: found.traits.pace && found.traits.pace !== 'steady' ? found.traits.pace : ai.pace ?? found.traits.pace ?? null, props: found.traits.props?.length || found.traits.noProps ? found.traits.props : (ai.props ?? []).slice(0, 5) } : found.traits;
+  const timeline = buildTimeline({ chapters, aiSections: ai?.sections ?? [], transcriptTimeline: spoken?.timeline, comments: video.comments, durationSec: video.durationSec });
   // who teaches, when the words say so outright or viewers agree (see teacher.js); a channel you marked is looked up separately
   const voice = guessVoice({ channel: video.channel, description, comments: video.comments });
   return {

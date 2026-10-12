@@ -6,7 +6,7 @@ Only **two things** are worth keeping. Everything else is downloaded or rebuilt 
 
 | What | Where it is | What it holds |
 |---|---|---|
-| **The data folder** | Docker: the `unfurl-data` volume (not a normal folder, see below). Windows without Docker: `%APPDATA%\Unfurl`. Linux server: `/var/lib/unfurl` (or `~/.local/share/unfurl`). | For every person: `profile.json` (library, history, ratings, favourites, blocks, weekly goal: **the precious one**), `config.json` (their YouTube key), `index.json` (what the app discovered and analysed: rebuildable, but re-fetching costs YouTube quota). With several logins each person has their own folder under `users/`. |
+| **The data folder** | Docker: the `unfurl-data` volume (not a normal folder, see below). Windows without Docker: `%APPDATA%\Unfurl`. Linux server: `/var/lib/unfurl` (or `~/.local/share/unfurl`). | For every person: `profile.json` (library, history, ratings, favourites, blocks, weekly goal: **the precious one**), `config.json` (their YouTube key), `ai.json` (their Gemini key, if they added one), `index.json` (what the app discovered and analysed: rebuildable, but re-fetching costs YouTube quota). With several logins each person has their own folder under `users/`. |
 | **Your settings file** | `deploy\unfurl.env` in the app folder | The logins, host names, the shared YouTube key, the update branch. Without it you would have to recreate those. |
 
 Not needed: the app folder itself (re-download it), the `unfurl-app` volume (it re-downloads), Docker's images.
@@ -31,7 +31,7 @@ Options, if you want them: in `backup-docker.bat`, at the end of the line that r
 
 ### Privacy
 
-The zip contains **everyone's** libraries and YouTube keys, and `unfurl.env` contains the logins. Proton Drive is end-to-end encrypted, so that is fine there. If you ever use a cloud that is not, don't copy it there as it is: encrypt the folder, or delete the `copy … unfurl.env` lines from `backup-docker.bat`. If you share Olympus with friends, tell them their data is part of your backup.
+The zip contains **everyone's** libraries and YouTube and Gemini keys, and `unfurl.env` contains the logins. Proton Drive is end-to-end encrypted, so that is fine there. If you ever use a cloud that is not, don't copy it there as it is: encrypt the folder, or delete the `copy … unfurl.env` lines from `backup-docker.bat`. If you share Olympus with friends, tell them their data is part of your backup.
 
 ## Getting it back (the server broke, or you have a new PC)
 

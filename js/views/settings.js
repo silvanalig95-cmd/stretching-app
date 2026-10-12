@@ -5,6 +5,7 @@ import { h, fill, download } from '../dom.js';
 import { ctx, client, quotaInfo, cycleArea } from '../ctx.js';
 import { exportData, mergeImport, reindexAll, SCHEMA, unfollowChannel, unblockVideo, unblockChannel, unfavoriteChannel, unmarkTeacher } from '../state.js';
 import { voiceText } from '../teacher.js';
+import { aiPanel } from './settings-ai.js';
 import { verifyVideos, THOROUGHNESS } from '../youtube.js';
 import { ANALYSIS_VERSION } from '../analyze.js';
 import { parentOf, areaPath } from '../lexicon.js';
@@ -205,6 +206,8 @@ export function mountSettings(root) {
       keyStatus, steps,
       h('div', { class: 'quota' }, h('span', null, `Today: ${qi.used.toLocaleString()} of ${qi.limit.toLocaleString()} units used`),
         (() => { const b = h('span', { class: 'bar' }, h('i')); b.firstChild.style.width = `${Math.min(100, (qi.used / qi.limit) * 100)}%`; return b; })())),
+
+    aiPanel(),
 
     h('section', { class: 'panel' },
       h('h2', null, 'My body'),

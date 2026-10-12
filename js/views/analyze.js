@@ -2,7 +2,9 @@
 // whether to keep it. Nothing is stored until you press Add.
 
 import { h, fill, thumb, fmtViews } from '../dom.js';
-import { ctx, play, analyzeLink, commitAnalysis, addTranscriptToAnalysis } from '../ctx.js';
+import { ctx, play, analyzeLink, commitAnalysis, addTranscriptToAnalysis, setAiOnAnalysis } from '../ctx.js';
+import { askAboutVideo } from '../aiwork.js';
+import { aiMenu, aiReadingBlock } from './aiblock.js';
 import { toast } from '../modal.js';
 import { areaLabel } from '../lexicon.js';
 import { youtubeWatchUrl } from '../query.js';
@@ -101,6 +103,8 @@ function reportCard({ video, report: r, notes }, { onChange }) {
 
     transcriptSection(r, onChange),
 
+    aiSection(video, onChange),
+
     section('How it fits you', h('ul', { class: 'a-fit' }, fitLines.map((l) => h('li', null, l)))),
 
     h('p', { class: 'a-limits' }, [...notes, ...r.limits].join(' ')),
@@ -151,4 +155,12 @@ function kindSection(r, video, onChange) {
     traits?.hold || traits?.guidance ? h('p', { class: 'hint' }, [traits.hold ? `Holds: ${traits.hold.label}.` : '', traits.guidance ? `Teacher ${traits.guidance.label} (about ${traits.guidance.wpm} words a minute).` : ''].filter(Boolean).join(' ')) : null,
     r.teacherUsually ? h('p', { class: 'hint' }, `This teacher usually does: ${r.teacherUsually.label.toLowerCase()} (${r.teacherUsually.n} of ${r.teacherUsually.of} of their other videos here).`) : null,
     styleEditor(video, { onChange }));
+}
+
+/** Gemini's part of the report: ask it to watch the video or read its text, and show what it said. */
+function aiSection(video, onChange) {
+  const menu = aiMenu(video, { cls: 'btn', read: async (mode) => { const ai = await askAboutVideo(video, { mode }); setAiOnAnalysis(ai); return ai; }, onDone: onChange });
+  const reading = aiReadingBlock(video, { onRemove: () => { setAiOnAnalysis(null); onChange(); } });
+  if (!menu && !reading) return null;
+  return section('Ask Gemini', reading ?? h('p', { class: 'hint' }, 'Gemini can watch the video itself (sections, poses, the kind of routine) or read what is known about it. It is optional, and nothing is sent until you press the button.'), h('div', { class: 'actions' }, menu));
 }

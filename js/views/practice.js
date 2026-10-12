@@ -10,7 +10,7 @@ import { WatchTracker, speedChoices, clock } from '../practice.js';
 import { sections, sectionIndexAt, timelineOf } from '../timeline.js';
 import { qualityLabel, belowBest } from '../player.js';
 
-const SOURCE_TEXT = { chapters: 'The sections come from the video’s chapter list.', transcript: 'The sections come from what the teacher says (the transcript you added).', comments: 'The video has no chapter list, so these times come from viewers’ comments. They are approximate.' };
+const SOURCE_TEXT = { chapters: 'The sections come from the video’s chapter list.', ai: 'The sections are Gemini’s reading of the video itself (an estimate: check them against what you see).', transcript: 'The sections come from what the teacher says (the transcript you added).', comments: 'The video has no chapter list, so these times come from viewers’ comments. They are approximate.' };
 
 /**
  * @param {{id:string}} video

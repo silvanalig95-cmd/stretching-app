@@ -12,6 +12,10 @@ import { voiceFor, voiceBadge, voiceMenu } from './voice.js';
 import { favoriteButton } from './favorite.js';
 import { toast } from '../modal.js';
 import { emptyBlock } from './placeholders.js';
+import { aiGate } from './aiblock.js';
+import { suggestTeachers, keepTeacher, dropTeacher } from '../aiwork.js';
+import { levelText as lvl } from '../catalogue.js';
+import { voiceText as voiceTextOf } from '../teacher.js';
 
 const PAGE = 36;
 const youtubeUrl = (t) => (t.handle ? `https://www.youtube.com/${t.handle}` : `https://www.youtube.com/results?search_query=${encodeURIComponent(`${t.name} yoga stretching`)}`);
@@ -20,6 +24,9 @@ export function mountTeachers(root) {
   const { state } = ctx;
   const f = (ctx.ui.teachers ??= { q: '', style: '', voice: '', focus: '', level: '', sort: 'name', show: PAGE });
   const listSlot = h('div', { id: 't-list' });
+  const aiSlot = h('div', { id: 't-ai' });
+  let searching = false;   // Gemini is looking: the button says so, whatever else is redrawn meanwhile
+  const all = () => [...CATALOGUE, ...(state.myTeachers ?? [])];
   const countEl = h('p', { class: 'hint', id: 't-count', 'aria-live': 'polite' });
 
   const sel = (id, label, opts, key) => h('label', { class: 'field' }, h('span', null, label),
@@ -42,6 +49,7 @@ export function mountTeachers(root) {
     const bits = [levelText(t.level) !== 'All levels' ? levelText(t.level) : '', lengthText(t.length), sizeText(t.size)].filter(Boolean);
     const focus = (t.focus ?? []).map((x) => FOCUS_LABELS[x]).filter(Boolean);
     const hasKey = !!ctx.hasKey;
+    const mine = t.by === 'gemini';
     const add = h('button', { class: 'btn small', type: 'button', 'data-action': 'add-teacher', disabled: !hasKey,
       title: hasKey ? 'Look up this teacher on YouTube and add their videos to “Discovered” (uses part of today’s free YouTube allowance)' : 'Needs a YouTube key (Settings)',
       onclick: async () => {
@@ -55,20 +63,58 @@ export function mountTeachers(root) {
       } }, '＋ Add their videos');
     return h('article', { class: 't-card', 'data-teacher': t.name },
       h('h3', null, t.name),
-      h('div', { class: 'badges' }, voiceBadge(as), styles.map((s) => h('span', { class: 'badge kind' }, s)), bits.map((b) => h('span', { class: 'badge' }, b))),
+      h('div', { class: 'badges' }, voiceBadge(as), mine && h('span', { class: 'badge warn', title: 'Found by Gemini searching the web and kept by you. Not checked: open the YouTube link to see for yourself.' }, 'Found by Gemini · unchecked'), styles.map((s) => h('span', { class: 'badge kind' }, s)), bits.map((b) => h('span', { class: 'badge' }, b))),
       t.note ? h('p', { class: 't-note' }, t.note) : null,
       focus.length ? h('p', { class: 'hint' }, `Good for: ${focus.join(', ')}`) : null,
       have ? h('p', { class: 'hint' }, `${have} of their videos ${have === 1 ? 'is' : 'are'} already known to the app.`) : null,
       h('div', { class: 'row-actions' },
         h('a', { class: 'btn small ghost', href: youtubeUrl(t), target: '_blank', rel: 'noopener noreferrer' }, 'On YouTube ↗'),
+        mine && t.source ? h('a', { class: 'btn small ghost', href: t.source, target: '_blank', rel: 'noopener noreferrer', title: 'The page Gemini found it on' }, 'Source ↗') : null,
+        mine ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'drop-teacher', onclick: () => { dropTeacher(t.name); toast(`Removed “${t.name}” from your list.`, 'info'); draw(); } }, 'Remove') : null,
         add, favoriteButton(as, { cls: 'btn small ghost', onChange: () => draw() }), voiceMenu(as, { onChange: () => draw() })));
   };
 
+  /** "Find more with Gemini": a web search by Gemini for teachers that are not in the list yet, checked and shown as unverified. */
+  function drawAi() {
+    const gate = aiGate();
+    if (!gate) { fill(aiSlot); return; }
+    if (gate === 'setup') { fill(aiSlot, h('p', { class: 'hint', id: 't-ai-setup' }, '✨ Gemini can search the web for more teachers. ', h('a', { href: '#settings', onclick: (e) => { e.preventDefault(); ctx.hooks.navigate('settings'); } }, 'Set up the AI helper'), ' (free) to use it.')); return; }
+    const sug = ctx.ui.teacherSuggest;
+    const asked = [f.style && STYLE_BY_ID[f.style]?.name, f.focus && FOCUS_LABELS[f.focus], f.voice === 'female' || f.voice === 'male' ? `${f.voice} teachers` : null].filter(Boolean);
+    const go = h('button', { class: 'btn', type: 'button', id: 't-ai-find', disabled: searching, onclick: async () => {
+      searching = true; drawAi();
+      try {
+        const known = all().map((t) => t.name);
+        const res = await suggestTeachers({ styles: f.style ? [f.style] : [], focus: f.focus ? [f.focus] : [], voice: f.voice === 'female' || f.voice === 'male' ? f.voice : '' });
+        ctx.ui.teacherSuggest = { ...res, teachers: res.teachers.filter((t) => !known.some((n) => n.toLowerCase() === t.name.toLowerCase())) };
+        toast(res.teachers.length ? `Gemini suggests ${res.teachers.length} teachers. Check them before you trust them.` : 'Gemini found nobody new for that.', res.teachers.length ? 'success' : 'info');
+      } catch (e) { toast(e.message, 'error', 9000); }
+      searching = false; drawAi();
+    } }, searching ? '✨ Gemini is searching… (about half a minute)' : '✨ Find more with Gemini');
+    fill(aiSlot, h('section', { class: 'panel', id: 't-ai-panel' },
+      h('div', { class: 'actions' }, go, h('small', { class: 'hint' }, asked.length ? `Asks for teachers matching: ${asked.join(' · ')}.` : 'Uses the filters above if you set any (style, good for, teacher).')),
+      sug ? h('div', { class: 'ai-suggestions', id: 't-ai-results' },
+        h('p', { class: 'hint' }, 'From an AI searching the web: names and details are unchecked, and a voice is only given where a page said so. Open each one on YouTube to see for yourself.'),
+        sug.teachers.length ? h('div', { class: 't-list' }, sug.teachers.map((t) => h('article', { class: 't-card', 'data-suggestion': t.name },
+          h('h3', null, t.name),
+          h('div', { class: 'badges' }, t.voice && h('span', { class: 'badge voice unsure', title: t.voiceSource }, `${voiceTextOf(t.voice)}?`), t.styles.map((s) => h('span', { class: 'badge kind' }, STYLE_BY_ID[s]?.name ?? s)), lvl(t.level) && t.level !== 'all' ? h('span', { class: 'badge' }, lvl(t.level)) : null),
+          t.note ? h('p', { class: 't-note' }, t.note) : null,
+          t.voiceSource ? h('p', { class: 'hint' }, `Why “${voiceTextOf(t.voice)?.toLowerCase()}”: ${t.voiceSource}`) : null,
+          h('div', { class: 'row-actions' },
+            h('a', { class: 'btn small ghost', href: youtubeUrl(t), target: '_blank', rel: 'noopener noreferrer' }, 'On YouTube ↗'),
+            t.source ? h('a', { class: 'btn small ghost', href: t.source, target: '_blank', rel: 'noopener noreferrer' }, 'Where it was found ↗') : null,
+            h('button', { class: 'btn small primary', type: 'button', 'data-action': 'keep-teacher', onclick: () => { keepTeacher(t); sug.teachers = sug.teachers.filter((x) => x !== t); toast(`Kept “${t.name}” in your list (unchecked).`, 'success'); drawAi(); draw(); } }, 'Keep'),
+            h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'dismiss-teacher', onclick: () => { sug.teachers = sug.teachers.filter((x) => x !== t); drawAi(); } }, 'Dismiss'))))) : h('p', { class: 'hint' }, 'Nothing new this time.'),
+        sug.sources?.length ? h('details', { class: 'tips' }, h('summary', null, `Pages Gemini used (${sug.sources.length})`),
+          h('ul', null, sug.sources.slice(0, 12).map((x) => h('li', null, h('a', { href: x.uri, target: '_blank', rel: 'noopener noreferrer' }, x.title || x.uri))))) : null) : null));
+  }
+
   function draw() {
+    drawAi();   // (what it will ask for follows the filters)
     const counts = new Map();
     for (const v of Object.values(state.videos)) { const k = normName(v.channel); if (k) counts.set(k, (counts.get(k) ?? 0) + 1); }
-    const list = searchCatalogue(f, (t) => voiceFor({ channel: t.name, id: '' }));
-    fill(countEl, `${list.length} of ${CATALOGUE.length} teachers`);
+    const list = searchCatalogue(f, (t) => voiceFor({ channel: t.name, id: '' }), all());
+    fill(countEl, `${list.length} of ${all().length} teachers`);
     fill(listSlot,
       list.length
         ? h('div', { class: 't-list' }, list.slice(0, f.show).map((t) => card(t, counts.get(normName(t.name)) ?? 0)))
@@ -83,6 +129,6 @@ export function mountTeachers(root) {
     h('section', { class: 'panel' }, controls,
       h('details', { class: 'tips', id: 't-about' }, h('summary', null, 'How was this list made, and how far can it be trusted?'),
         h('p', { class: 'hint' }, `It was put together in ${new Date(CATALOGUE_DATE).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })} from web search results, because YouTube’s own pages weren’t readable then. So names can differ slightly from the exact YouTube title, most entries have no @handle (the YouTube link then searches for the name), and the descriptions are short. Whether a woman or a man teaches is only filled in where a source said so with a pronoun or a role, never from a name; a “?” marks a reading from a single source. Anything you set yourself with “Teacher ▾” wins. It is a map, not a guarantee.`))),
-    countEl, listSlot);
+    aiSlot, countEl, listSlot);
   draw();
 }

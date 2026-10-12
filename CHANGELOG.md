@@ -10,6 +10,20 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.11.0
+
+**An optional AI helper (Gemini).** If you add a free Google AI key (Settings → AI helper), Google’s Gemini can help the app learn about videos and teachers. Nothing happens until you press one of its buttons, and without a key the app works exactly as before.
+
+- **✨ Ask Gemini ▾** (on Today, and in “Look at a video first”): *Watch the video* sends Gemini the video’s public YouTube link, and it answers with the routine’s sections (so “Follow along” works even for a video with no chapter list), the poses, the kind of routine and how hard it is, the muscle areas it works, and any cautions. *Read its text only* is quicker and cheaper: it reads the title, description, chapters, comments and transcript the app already holds, but cannot give a timeline.
+- **Library → add menu → “Let Gemini read my videos”**: a few at a time (25 watched, or 60 read), with a Stop button; it stops by itself when Google says it is busy or the day’s allowance is used up.
+- **Teachers → “✨ Find more with Gemini”**: Gemini searches the web (Google Search) for teachers that are not in the list, shown as unchecked suggestions with the pages it used. A voice (woman / man) is kept only where a page said so, and is marked as a guess. “Keep” adds one to your list; “Remove” takes it out again.
+- **Its answers are treated as data, never as truth.** Only muscle areas and styles the app knows are accepted, times are held inside the video, anything else is dropped, and an answer that says nothing usable is refused. A reading only *adds* to what the words say: it never overrides a kind you set yourself, and a real chapter list always beats Gemini’s sections. Each reading is shown as Gemini’s, with an estimate warning, and has a “Remove this reading” button that restores the previous analysis.
+- **Privacy.** The key is kept on the server (a private file in your data folder, or `UNFURL_GEMINI_KEY` / `UNFURL_GEMINI_KEY_FILE` for one shared key), never in the page, and never in the backup you export from Settings. Only public things are sent: a video’s link, its public title, description and comments, a transcript you pasted. Never your history, ratings, notes, tags or library. On Google’s free tier, Google may use what is submitted to improve its products (the paid tier does not): the Settings panel says so.
+- **Models.** The app asks Google which models your key can use and picks a current Flash model by itself (or pick one in Settings). Free-tier limits (requests a day, and about 8 hours of YouTube video a day) are Google’s and change; when one is reached the app says so. A per-person daily cap (`UNFURL_USER_DAILY_AI_CALLS`, default 60) protects a shared server key.
+- **Be aware: this was tested against a stand-in for Google’s API, not the real thing** (no key or network was available while it was built). Request and response shapes follow Google’s published documentation. If Google answers in a way this version doesn’t expect, the app says what went wrong instead of guessing; please report it.
+
+The backup made by `serve.py --backup` (and `backup-docker.bat`) now includes each person’s Gemini key, like it already did for YouTube keys.
+
 ## 0.10.0
 
 **Teachers.** A new page with a starting list of 188 YouTube teachers for yoga, stretching, mobility, rehab and Pilates: what each one teaches, who it suits, and where a source said so, whether a woman or a man teaches. Filter it by words, style, what it is good for, level and who teaches; open them on YouTube; add their videos (with a YouTube key); mark favourites; correct who teaches with “Teacher ▾”.

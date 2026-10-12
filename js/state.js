@@ -45,6 +45,7 @@ export function emptyState() {
     blockedChannels: [],  // channels you never want to see again: [{key, name, channelId?}]
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     teacherVoices: [], // who teaches on a channel, as you told the app: [{key, name, channelId?, voice: 'female'|'male'|'mixed'}]
+    myTeachers: [],   // teachers you kept from Gemini's suggestions: entries like the built-in teachers list, marked by: 'gemini'
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     collections: [], // your own groups of library videos ("Morning", "After a run"): [{id, name, videoIds[], createdAt}]
@@ -61,7 +62,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -157,6 +158,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.blockedChannels)) s.blockedChannels = p.blockedChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.teacherVoices)) s.teacherVoices = p.teacherVoices.filter((c) => isObj(c) && typeof c.key === 'string' && VOICES.includes(c.voice)).slice(0, MAX_TEACHER_MARKS);
+    if (Array.isArray(p.myTeachers)) s.myTeachers = p.myTeachers.filter((t) => isObj(t) && typeof t.name === 'string' && t.name.trim() && Array.isArray(t.styles)).slice(0, 200);
     s.collections = cleanCollections(p.collections);
     if (isObj(p.styleFixes)) s.styleFixes = Object.fromEntries(Object.entries(p.styleFixes).filter(([k, v]) => typeof k === 'string' && STYLE_BY_ID[v]));
     if (Array.isArray(p.following)) s.following = p.following;
@@ -628,6 +630,7 @@ export function mergeImport(state, incoming) {
   for (const c of inc.blockedChannels ?? []) if (!state.blockedChannels.some((x) => x.key === c.key)) state.blockedChannels.push(c);
   for (const c of inc.favoriteChannels ?? []) if (!state.favoriteChannels.some((x) => x.key === c.key)) state.favoriteChannels.push(c);
   for (const c of inc.teacherVoices ?? []) if (!state.teacherVoices.some((x) => x.key === c.key) && state.teacherVoices.length < MAX_TEACHER_MARKS) state.teacherVoices.push(c);
+  for (const t of inc.myTeachers ?? []) if (!state.myTeachers.some((x) => x.name.toLowerCase() === t.name.toLowerCase()) && state.myTeachers.length < 200) state.myTeachers.push(t);
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);
   state.favoriteChannels = state.favoriteChannels.filter((c) => !isBlocked({ channelId: c.channelId, channel: c.name }) && !state.blockedChannels.some((b) => b.key === c.key));

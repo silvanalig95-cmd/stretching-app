@@ -138,7 +138,7 @@ export function rankNow() {
   }
   ui.ranked = rankCandidates({
     videos: Object.values(state.videos), filters: ui.filters, model, textScores, libraryIds: libraryIds(), collectionIds: sourceCollection(ui.filters),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, adventure: state.prefs.adventure,
   });
   return ui.ranked;
 }
@@ -329,6 +329,17 @@ export async function analyzeLink(text, { progress = () => {} } = {}) {
   return { video, report: buildReport(video, { state: ctx.state, subscribers }), notes };
 }
 
+/** Put (or, with null, take away) a Gemini reading on the analysis currently on screen. Nothing is stored until it is added to the library. */
+export function setAiOnAnalysis(ai) {
+  const a = ctx.ui.analysis;
+  if (!a) return null;
+  const { ai: _old, ...rest } = a.video;
+  void _old;
+  a.video = reanalyze(ai ? { ...rest, ai } : rest);
+  a.report = buildReport(a.video, { state: ctx.state, subscribers: a.video.subscribers ?? null });
+  return a;
+}
+
 /** Re-do the analysis currently on screen with a pasted transcript (empty text removes it). Nothing is stored. */
 export function addTranscriptToAnalysis(raw) {
   const a = ctx.ui.analysis;
@@ -489,7 +500,7 @@ export function buildCombos() {
   // rank with a loose minimum length: the parts are SHORTER than the whole session
   const cands = rankCandidates({
     videos: Object.values(state.videos), filters: { ...f, minMin: 3, maxMin: hi, terms: [] }, model, libraryIds: libraryIds(), collectionIds: sourceCollection(f),
-    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, adventure: state.prefs.adventure,
+    trusted: state.prefs.trusted, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, adventure: state.prefs.adventure,
   });
   ui.combos = { ...composeCombos(cands, f, { minTotal: f.minMin ?? 10, maxTotal: hi }), key: comboKey(f) };
   return ui.combos;

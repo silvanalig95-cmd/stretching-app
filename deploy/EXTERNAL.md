@@ -22,7 +22,7 @@ Each login gets its own library, history, ratings and settings, completely separ
 3. Apply: `docker compose -f deploy/docker-compose.yml up -d --force-recreate`.
 4. Check: log in as yourself (your library is still there), then in a private/incognito window as a friend (empty library).
 
-**Their YouTube searches.** Either each friend pastes their own free YouTube key in Settings (their own 10,000 units a day), or you put your key on the server (`UNFURL_YOUTUBE_KEY=…`, see below) and they need nothing. With a shared key every person is capped (`UNFURL_USER_DAILY_UNITS`, default 3000 a day, about 10–30 web searches) so no one friend can use up everyone's allowance; with 10,000 units a day in total, 3 friends at 3000 each is about the limit. Reading comments and importing playlists costs units too.
+**Their YouTube searches.** Either each friend pastes their own free YouTube key in Settings (their own 10,000 units a day), or you put your key on the server (`UNFURL_YOUTUBE_KEY=…`, see below) and they need nothing. With a shared key every person is capped (`UNFURL_USER_DAILY_UNITS`, default 3000 a day, about 10–30 web searches) so no one friend can use up everyone's allowance; with 10,000 units a day in total, 3 friends at 3000 each is about the limit. Reading comments and importing playlists costs units too. The optional **AI helper (Gemini)** works the same way: a shared server key (`UNFURL_GEMINI_KEY`, capped per person by `UNFURL_USER_DAILY_AI_CALLS`, default 60 requests a day) or each friend's own free key in Settings. Google's free tier has its own daily and per-minute limits and lets Google use what is submitted, so tell friends before you put a key on the server that they can use.
 
 ## 2. Pick how they reach it
 

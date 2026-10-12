@@ -29,8 +29,8 @@ test('no visible text still carries the old name; only technical names keep it',
   }
 });
 
-test('the Strength section and the AI coach are gone: no files, no tab, no endpoints', () => {
-  for (const gone of ['js/strength', 'js/llm.js', 'js/views/strength.js', 'js/views/guides.js', 'js/views/settings-ai.js', 'tests/helpers/fake-anthropic.js']) assert.ok(!fs.existsSync(path.join(ROOT, gone)), `${gone} should be gone`);
+test('the Strength section and the old Claude-based coach are gone: no files, no tab, no endpoints (the optional Gemini helper is a different thing)', () => {
+  for (const gone of ['js/strength', 'js/llm.js', 'js/views/strength.js', 'js/views/guides.js', 'tests/helpers/fake-anthropic.js']) assert.ok(!fs.existsSync(path.join(ROOT, gone)), `${gone} should be gone`);
   assert.deepEqual([...read('js/app.js').matchAll(/\['(\w+)', '(\w+)', mount/g)].map((m) => m[2]), ['Today', 'Library', 'Teachers', 'Journal', 'Settings']);
   const server = read('serve.py');
   for (const word of ['/api/llm', 'ANTHROPIC', 'llm.json']) assert.ok(!server.includes(word), `serve.py still mentions ${word}`);

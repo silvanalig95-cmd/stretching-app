@@ -17,6 +17,7 @@ import { toast } from '../modal.js';
 import { analyzePanel } from './analyze.js';
 import { styleBadge } from './stylebadge.js';
 import { voiceBadge, voiceMenu } from './voice.js';
+import { aiLibrarySection } from './aiblock.js';
 import { voiceResolver, voiceFit } from '../teacher.js';
 import { STYLE_LIST } from '../style.js';
 import { collectionMenu, collectionBar, orderButtons } from './collections.js';
@@ -374,7 +375,7 @@ export function mountLibrary(root) {
       h('div', null, h('h3', null, 'Let the app go looking'), growBtn,
         h('p', { class: 'hint' }, ctx.hasKey ? 'Searches for the muscle areas your library covers least, using your search thoroughness setting. Finds go to Discovered; promote the ones you like.' : 'Needs a free YouTube key (Settings).'),
         missBtn,
-        h('p', { class: 'hint' }, 'What viewers say in the comments is where most of the muscle evidence comes from. Imports read them automatically; this catches up on anything that has none yet (1 quota unit per video, up to 300 a press, your library first).'))),
+        h('p', { class: 'hint' }, 'What viewers say in the comments is where most of the muscle evidence comes from. Imports read them automatically; this catches up on anything that has none yet (1 quota unit per video, up to 300 a press, your library first).'), aiLibrarySection({ onDone: () => rerender() }))),
     analyzePanel({ onChange: () => rerender() }));
 
   fill(root,

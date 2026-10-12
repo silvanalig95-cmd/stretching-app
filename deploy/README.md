@@ -60,7 +60,7 @@ The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates i
 
 ## How to tell which version is running
 
-The footer of the app shows the build (`Olympus 0.10.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
+The footer of the app shows the build (`Olympus 0.11.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 
@@ -112,6 +112,10 @@ server {
 ## YouTube access for everyone
 
 Searching YouTube needs a free API key. Either each person pastes their own in **Settings** (their own 10,000 units a day), or you keep **one key on the server** (`UNFURL_YOUTUBE_KEY` or `UNFURL_YOUTUBE_KEY_FILE`) and nobody needs one: the browser never sees it, and each person is capped (`UNFURL_USER_DAILY_UNITS`, default 3,000 of the key's 10,000 a day, counted in Pacific time like YouTube's own day and remembered across restarts). A person who pastes their own key uses that instead.
+
+## AI helper (Gemini) for everyone
+
+Optional. Each person can paste their own free Google AI key in **Settings → AI helper**, or you keep **one key on the server** (`UNFURL_GEMINI_KEY` or `UNFURL_GEMINI_KEY_FILE`; keys come from <https://aistudio.google.com/apikey>) and nobody needs one: the browser never sees it, and each person is capped at `UNFURL_USER_DAILY_AI_CALLS` requests a day (default 60, counted in Pacific time and remembered across restarts). `UNFURL_GEMINI_MODEL` pins a model; without it the server asks Google which models the key can use and picks a current Flash one. A person's own key is used instead of the shared one. Only public data (a video's link, its public text) is sent to Google, never anyone's history, notes or library. On Google's free tier, Google may use submitted content to improve its products; if that matters, put a paid key on the server. The container needs outbound HTTPS to `generativelanguage.googleapis.com`.
 
 ## Private repository
 

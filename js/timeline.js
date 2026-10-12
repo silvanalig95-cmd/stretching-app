@@ -2,8 +2,9 @@
 //
 // There is no way to look at the footage, so the order comes from the words around it, best source first:
 //   1. the chapter list in the description ("2:10 Pigeon pose")
-//   2. what the teacher says, when a transcript with times was added (the first time each pose is named)
-//   3. viewers' comments that name a time ("12:30 pigeon is where it clicked")
+//   2. what Gemini saw, when it was asked to watch the video (an estimate, but of the real footage)
+//   3. what the teacher says, when a transcript with times was added (the first time each pose is named)
+//   4. viewers' comments that name a time ("12:30 pigeon is where it clicked")
 // Pure functions: no DOM, no network.
 
 import { scan, POSE_TERMS, POSE_BY_ID } from './lexicon.js';
@@ -36,11 +37,12 @@ export function commentMoments(comments, durationSec = null) {
 
 /**
  * The best ordered list of sections there is for a video, or null.
- * @param {{chapters?:{t:number,label:string}[], transcriptTimeline?:{id:string,t:number}[], comments?:any[], durationSec?:number|null}} src
- * @returns {{source:'chapters'|'transcript'|'comments', items:{t:number,label:string,poseId:string|null,count?:number}[]}|null}
+ * @param {{chapters?:{t:number,label:string}[], aiSections?:{t:number,label:string}[], transcriptTimeline?:{id:string,t:number}[], comments?:any[], durationSec?:number|null}} src
+ * @returns {{source:'chapters'|'ai'|'transcript'|'comments', items:{t:number,label:string,poseId:string|null,count?:number}[]}|null}
  */
-export function buildTimeline({ chapters = [], transcriptTimeline = [], comments = [], durationSec = null } = {}) {
+export function buildTimeline({ chapters = [], aiSections = [], transcriptTimeline = [], comments = [], durationSec = null } = {}) {
   if (chapters.length >= 3) return { source: 'chapters', items: chapters.slice(0, 40).map((c) => ({ t: c.t, label: c.label, poseId: firstPose(c.label) })) };
+  if (aiSections.length >= 3) return { source: 'ai', items: aiSections.slice(0, 40).map((c) => ({ t: c.t, label: c.label, poseId: firstPose(c.label) })) };
   if (transcriptTimeline.length >= 3) return { source: 'transcript', items: transcriptTimeline.slice(0, 30).map(({ id, t }) => ({ t, label: POSE_BY_ID[id]?.label ?? id, poseId: id })) };
   const moments = commentMoments(comments, durationSec);
   if (moments.length >= 2) return { source: 'comments', items: moments };

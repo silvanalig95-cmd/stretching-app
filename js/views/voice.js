@@ -11,8 +11,8 @@ let cache = null;   // the resolver, reused for a moment: a page of cards asks a
 /** Who teaches this video: {gender, certainty, source, evidence} or null. */
 export function voiceFor(video) {
   const { state } = ctx;
-  if (!cache || cache.marks !== state.teacherVoices || cache.videos !== state.videos || Date.now() - cache.at > 1500) {
-    cache = { at: Date.now(), marks: state.teacherVoices, videos: state.videos, of: voiceResolver({ marks: state.teacherVoices, videos: Object.values(state.videos) }) };
+  if (!cache || cache.marks !== state.teacherVoices || cache.mine !== state.myTeachers || cache.videos !== state.videos || Date.now() - cache.at > 1500) {
+    cache = { at: Date.now(), marks: state.teacherVoices, mine: state.myTeachers, videos: state.videos, of: voiceResolver({ marks: state.teacherVoices, videos: Object.values(state.videos), teachers: state.myTeachers }) };
   }
   return cache.of(video);
 }

@@ -203,7 +203,7 @@ export function recencyPenalty(model, videoId, today = localDate()) {
  * @param {object} p.model           from buildModel
  */
 export function rankCandidates({
-  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], teacherVoices = [], adventure = 0.35, today = localDate(), now = Date.now(),
+  videos, filters, model, trusted = [], blocked = [], blockedChannels = [], favoriteChannels = [], teacherVoices = [], myTeachers = [], adventure = 0.35, today = localDate(), now = Date.now(),
   textScores = null,   // Map id -> 0..1 relevance of the free-text terms the user typed (from the search index)
   libraryIds = null,   // Set of ids in the user's library
   collectionIds = null, // Set of ids in the collection the person picked ("Morning"): nothing else is considered
@@ -214,7 +214,7 @@ export function rankCandidates({
   const isFavorite = channelMatcher(favoriteChannels);
   // "a female / male teacher": a teacher known to be the other one is left out; one nobody knows about only ranks after the ones that fit
   const wantVoice = filters.voice === 'female' || filters.voice === 'male' ? filters.voice : '';
-  const voiceOf = wantVoice ? voiceResolver({ marks: teacherVoices, videos }) : null;
+  const voiceOf = wantVoice ? voiceResolver({ marks: teacherVoices, videos, teachers: myTeachers }) : null;
   const useText = !!(filters.terms?.length && textScores);
   const out = [];
   for (const video of videos) {

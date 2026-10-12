@@ -11,6 +11,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { handle as fakeApi, fault, VIDEOS, GONE, chId, PLAYLIST_ID } from '../helpers/fake-youtube.js';
+import { fakeGemini } from '../helpers/fake-gemini.js';
 import { APP_NAME } from '../../js/brand.js';
 
 const require = createRequire(import.meta.url);
@@ -32,9 +33,9 @@ const ok = (cond, msg) => { if (!cond) throw new Error(msg); };
 
 const freePort = () => new Promise((res) => { const s = net.createServer().listen(0, () => { const p = s.address().port; s.close(() => res(p)); }); });
 
-async function startServer({ dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-')), legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-')) } = {}) {
+async function startServer({ dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-')), legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-legacy-')), env = {} } = {}) {
   const port = await freePort();
-  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', legacyDir], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const proc = spawn('python3', [path.join(ROOT, 'serve.py'), '--port', String(port), '--no-open', '--data-dir', dataDir, '--legacy-dir', legacyDir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
   let log = '';
   proc.stdout.on('data', (d) => { log += d; });
   proc.stderr.on('data', (d) => { log += d; });
@@ -94,9 +95,10 @@ async function newPage(browser, server, { colorScheme = 'light', viewport = { wi
   await context.route('https://www.youtube.com/oembed**', (route) => route.fulfill({ headers: CORS, contentType: 'application/json', body: JSON.stringify({ title: 'Pasted video about hips', author_name: 'Some Teacher' }) }));
   const page = await context.newPage();
   page.on('pageerror', (e) => consoleProblems.push(`pageerror: ${e.message}`));
-  // A 400/403 from the (fake) API is expected when a test deliberately uses a bad key or exhausts the quota.
+  // A 400/403 from the (fake) API is expected when a test deliberately uses a bad key or exhausts the quota (and the 502/422 the server
+  // gives when a test makes the fake Gemini refuse or answer nonsense).
   // (Connection resets/refusals only happen when a test restarts the server on purpose, to mimic a deployed update.)
-  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: (the server responded with a status of (400|403)|net::ERR_CONNECTION_(RESET|REFUSED))/.test(m.text())) consoleProblems.push(`console.error: ${m.text()}`); });
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource: (the server responded with a status of (400|403|422|502)|net::ERR_CONNECTION_(RESET|REFUSED))/.test(m.text())) consoleProblems.push(`console.error: ${m.text()}`); });
   page.on('dialog', (d) => d.accept()); // confirm() prompts
   page.apiCalls = apiCalls; page.context_ = context;
   await page.goto(server.url);
@@ -1657,6 +1659,183 @@ if (want(6)) {
 
   await page.context_.close();
   server.stop();
+}
+
+// ================================================================== World 7: the AI helper (Gemini), against a fake Google
+console.log('\nWorld 7: the AI helper (Gemini) — key kept on the server, watch a video, find teachers (against a fake Google)');
+if (want(7)) {
+  const KEY = 'AIzaSy-E2E-ONLY-0123456789abcdefWXYZ00';   // not a real key
+  const gem = await fakeGemini({ keys: [KEY] });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-gemini-'));
+  const server = await startServer({ dataDir, env: { UNFURL_GEMINI_BASE: gem.url } });
+  const page = await newPage(browser, server);
+  const generate = () => gem.seen.filter((r) => r.method === 'POST' && /:generateContent$/.test(r.path));
+
+  await step('with no key the helper is offered as "set it up", never as a working button, and nothing is sent to Google', async () => {
+    await waitFeatured(page);
+    ok(await page.locator('#ai-setup').count() === 1, 'a link to set it up');
+    eq(await page.locator('details[data-menu=ai]').count(), 0, 'no Ask Gemini menu yet');
+    eq(gem.seen.length, 0, 'Google has heard nothing');
+    await page.click('#ai-setup');
+    await page.waitForSelector('#ai-key');
+    ok((await page.locator('#ai-panel').innerText()).includes('Nothing happens until you press one of its buttons'), 'says it only acts when asked');
+  });
+
+  await step('a wrong key is refused with Google’s reason and nothing is kept; the right key is saved on the server only', async () => {
+    await page.fill('#ai-key', 'AIzaSy-WRONG-0123456789abcdefghijklmnop');
+    await page.click('#ai-save');
+    await page.waitForFunction(() => document.getElementById('ai-status')?.textContent.startsWith('✗'));
+    ok((await page.locator('#ai-status').innerText()).toLowerCase().includes('key'), await page.locator('#ai-status').innerText());
+    eq(await page.locator('#ai-own').count(), 0, 'no key is shown as saved');
+    await page.fill('#ai-key', KEY);
+    await page.click('#ai-save');
+    await page.waitForSelector('#ai-own');
+    ok((await page.locator('#ai-own').innerText()).includes('…YZ00'), 'only the last characters are shown');
+    eq(await page.inputValue('#ai-key'), '', 'the box is emptied');
+    // the key is nowhere in the page, its storage, or the profile data; it is on the server in a private file
+    const inPage = await U(page, (k) => document.documentElement.outerHTML.includes(k) || JSON.stringify({ ...localStorage }).includes(k) || JSON.stringify({ ...sessionStorage }).includes(k) || JSON.stringify(window.__unfurl.state).includes(k), KEY);
+    eq(inPage, false, 'the key never reaches the page');
+    for (const f of fs.readdirSync(dataDir).filter((n) => n !== 'ai.json' && fs.statSync(path.join(dataDir, n)).isFile())) ok(!fs.readFileSync(path.join(dataDir, f), 'utf8').includes(KEY), `${f} holds no key`);
+    ok(readJson(dataDir, 'ai.json').key === KEY, 'kept on the server');
+    eq(fs.statSync(path.join(dataDir, 'ai.json')).mode & 0o077, 0, 'readable by the owner only');
+  });
+
+  await step('the model is chosen automatically from what Google lists, and can be changed', async () => {
+    await page.click('#ai-list');
+    await page.waitForFunction(() => /models found/.test(document.getElementById('ai-status')?.textContent ?? ''));
+    const opts = await page.locator('#ai-model option').allInnerTexts();
+    ok(opts[0].startsWith('Choose automatically'), opts[0]);
+    ok(opts.some((o) => o.includes('gemini-3.1-flash-lite')) && !opts.some((o) => /embedding|text-bison/.test(o)), `only Gemini models that can write: ${opts.join(' | ')}`);
+    await page.selectOption('#ai-model', 'gemini-3.1-flash-lite');
+    await page.waitForFunction(() => /Using gemini-3.1-flash-lite/.test(document.getElementById('ai-status')?.textContent ?? ''));
+    eq(readJson(dataDir, 'ai.json').model, 'gemini-3.1-flash-lite');
+    await page.selectOption('#ai-model', '');
+    await page.waitForFunction(() => /Choosing automatically/.test(document.getElementById('ai-status')?.textContent ?? ''));
+    await shot(page, '70-settings-ai');
+  });
+
+  await step('"Test it" asks a tiny question and reports the answer', async () => {
+    gem.reply({ text: '{"ok": true}' });
+    await page.click('#ai-test');
+    await page.waitForFunction(() => /It answered/.test(document.getElementById('ai-status')?.textContent ?? ''));
+    ok(await page.locator('#ai-quota').count() === 1, 'today’s use is shown');
+  });
+
+  await step('Ask Gemini ▸ Watch the video: it is sent only the video’s public link, and its sections become the Follow-along list', async () => {
+    await goto(page, 'today');
+    await waitFeatured(page);
+    const id = await featuredId(page);
+    await page.waitForSelector('details[data-menu=ai] summary');
+    const before = generate().length;
+    await U(page, (i) => {   // things only you wrote: they must never be in a question to Google
+      const { state } = window.__unfurl;
+      state.library[i] = { addedAt: Date.now(), tags: ['SECRETTAG'], note: 'SECRETNOTE-4711', snapshot: {} };
+      state.history.push({ id: 'secret1', kind: 'video', videoId: i, title: 'x', date: '2026-10-01', note: 'SECRETSESSION', durationSec: 60, areas: [], ratings: {} });
+    }, id);
+    gem.reply({ text: JSON.stringify({
+      summary: 'A slow hip-opening flow with long holds.', kind: { id: 'yin', confidence: 0.8, evidence: ['long floor holds', 'slow cueing'] }, level: 'beginner', pace: 'slow', props: ['block'],
+      areas: { hip_flexors: 0.9, glutes: 0.7, not_a_muscle: 1 },
+      sections: [{ t: '0:00', label: 'Intro and breathing' }, { t: '1:00', label: 'Low lunge, right side' }, { t: '3:20', label: 'Pigeon pose' }, { t: '6:40', label: 'Child pose' }],
+      cautions: ['Go gently if your knees complain in pigeon pose.'] }) });
+    await page.click('details[data-menu=ai] summary');
+    await page.click('details[data-menu=ai] [data-ai=video]');
+    await page.waitForSelector('#ai-reading', { timeout: 10000 });
+    const sent = generate().at(-1);
+    eq(generate().length, before + 1, 'one request');
+    ok(JSON.stringify(sent.body).includes(`https://www.youtube.com/watch?v=${id}`), 'the video link is sent');
+    const asText = JSON.stringify(sent.body);
+    ok(!asText.includes(KEY), 'and not the key (it is a header, added by the server)');
+    ok(!/SECRETNOTE|SECRETTAG|SECRETSESSION/.test(asText), 'nothing you wrote (note, tag, what you wrote after a session) is in the question');
+    const r = await U(page, (i) => window.__unfurl.state.videos[i].ai, id);
+    eq(r.sections.length, 4); eq(r.kind.id, 'yin'); eq(Object.keys(r.areas).sort(), ['glutes', 'hip_flexors'], 'only muscle areas the app knows');
+    ok((await page.locator('#ai-reading').innerText()).includes('Go gently if your knees'), 'its caution is shown');
+    ok((await page.locator('#ai-reading').innerText()).includes('can misjudge'), 'with the reminder that it is an estimate');
+    await U(page, () => document.getElementById('practice').__poll());
+    eq(await page.locator('#pr-list li').count(), 4, 'four sections in the follow-along list');
+    ok((await page.locator('#pr-hint').innerText()).includes('Gemini’s reading'), await page.locator('#pr-hint').innerText());
+    await shot(page, '71-today-gemini');
+  });
+
+  await step('the reading is kept with the video, survives a reload, and can be removed again', async () => {
+    const id = await featuredId(page);
+    await page.waitForTimeout(900);
+    ok(readJson(dataDir, 'index.json').videos?.[id]?.ai?.sections?.length === 4 || JSON.stringify(readJson(dataDir, 'index.json')).includes('A slow hip-opening flow'), 'saved with the videos');
+    await page.reload();
+    await page.waitForSelector('#nav a');
+    eq(await U(page, (i) => window.__unfurl.state.videos[i]?.ai?.kind?.id, id), 'yin', 'still there after a reload');
+    await goto(page, 'today');
+    await waitFeatured(page);
+    if ((await featuredId(page)) === id) {
+      await page.click('#ai-remove-reading');
+      await page.waitForFunction(() => !document.getElementById('ai-reading'));
+      eq(await U(page, (i) => 'ai' in window.__unfurl.state.videos[i], id), false, 'taken away');
+    }
+  });
+
+  await step('Gemini’s trouble is told plainly: a busy Google, an unreadable answer and a blocked question each get a message, and nothing is stored', async () => {
+    const id = await featuredId(page);
+    if (await U(page, (i) => !!window.__unfurl.state.videos[i].ai, id)) await U(page, async (i) => { const m = await import('/js/aiwork.js'); m.removeReading(i); }, id);
+    await goto(page, 'today'); await waitFeatured(page);
+    const idNow = await featuredId(page);
+    const textRun = () => generate().filter((r) => !JSON.stringify(r.body).includes('file_data') && !JSON.stringify(r.body).includes('fileData'));
+    for (const [reply, expect] of [[{ status: 429, message: 'quota', errorStatus: 'RESOURCE_EXHAUSTED' }, /busy|limit|allowance|later/i], [{ text: 'sorry, I cannot do JSON' }, /form I could read/], [{ blockReason: 'SAFETY' }, /.+/]]) {
+      gem.reply(reply);
+      await page.click('details[data-menu=ai] summary');
+      await page.click('details[data-menu=ai] [data-ai=text]');
+      await page.waitForSelector('.toast.error, .toast[data-kind=error]', { timeout: 10000 }).catch(() => {});
+      const toasts = (await page.locator('.toast').allInnerTexts()).join(' | ');
+      ok(expect.test(toasts), `${JSON.stringify(reply)} -> ${toasts}`);
+      await page.waitForTimeout(300);
+    }
+    eq(await U(page, (i) => !!window.__unfurl.state.videos[i]?.ai, idNow), false, 'no reading was stored');
+    ok(textRun().length >= 3 && textRun().every((r) => !/SECRETNOTE|SECRETTAG|SECRETSESSION/.test(JSON.stringify(r.body))), 'the text-only question holds none of your notes either');
+  });
+
+  await step('Teachers ▸ Find more with Gemini: suggestions are labelled unchecked, their sources are links, and Keep adds one to your list', async () => {
+    await goto(page, 'teachers');
+    await page.waitForSelector('#t-ai-find');
+    gem.reply({ text: 'Here are some channels.\n```json\n' + JSON.stringify([
+      { name: 'Quiet Hips Studio', handle: '@quiethips', styles: ['yin', 'not_a_style'], focus: ['hips', 'sleep'], level: 'beginner', note: 'Slow floor-based hip openers.', voice: 'female', voiceSource: 'The About page says “she teaches”', url: 'https://example.com/about' },
+      { name: 'Yoga With Adriene', styles: ['yoga'], note: 'already known' },
+      { name: 'Nameless Voice', styles: ['yoga'], voice: 'male', voiceSource: '', note: 'no source for the voice' },
+    ]) + '\n```', grounding: { webSearchQueries: ['slow hip yoga channels'], groundingChunks: [{ web: { uri: 'https://example.com/list', title: 'A list of hip channels' } }] } });
+    await page.click('#t-ai-find');
+    await page.waitForSelector('#t-ai-results [data-suggestion]', { timeout: 10000 });
+    const names = await page.locator('#t-ai-results [data-suggestion]').evaluateAll((els) => els.map((e) => e.getAttribute('data-suggestion')));
+    eq(names, ['Quiet Hips Studio', 'Nameless Voice'], 'one the list already has is left out');
+    const card = page.locator('[data-suggestion="Quiet Hips Studio"]');
+    ok((await card.innerText()).includes('Female teacher?'), 'a voice only with a source, and marked as a guess');
+    ok(await page.locator('[data-suggestion="Nameless Voice"] .badge.voice').count() === 0, 'a voice without a source is dropped');
+    ok((await page.locator('#t-ai-results').innerText()).includes('unchecked'), 'labelled as unchecked');
+    ok(await page.locator('#t-ai-results details a[href="https://example.com/list"]').count() === 1, 'the pages it used are links');
+    const searchSent = generate().at(-1).body;
+    ok(JSON.stringify(searchSent.tools ?? []).includes('google_search'), 'Google Search is switched on for this question');
+    await shot(page, '72-teachers-gemini');
+    await card.locator('[data-action=keep-teacher]').click();
+    await page.waitForSelector('[data-suggestion="Quiet Hips Studio"]', { state: 'detached' });
+    const mine = await U(page, () => window.__unfurl.state.myTeachers.map((t) => ({ name: t.name, voice: t.voice, by: t.by })));
+    eq(mine, [{ name: 'Quiet Hips Studio', voice: 'female', by: 'gemini' }]);
+    await page.fill('#t-q', 'Quiet Hips');
+    await page.waitForSelector('.t-list [data-action=drop-teacher]');
+    ok((await page.locator('#t-list').innerText()).includes('Quiet Hips Studio'), 'now in the list, with a way to remove it');
+    await page.waitForTimeout(900);
+    ok(readJson(dataDir, 'profile.json').myTeachers?.[0]?.name === 'Quiet Hips Studio', 'saved with your data');
+    await page.reload(); await page.waitForSelector('#nav a');
+    eq(await U(page, () => window.__unfurl.state.myTeachers.length), 1, 'kept after a reload');
+  });
+
+  await step('the key can be removed again: the helper goes back to "set it up" and the server forgets it', async () => {
+    await goto(page, 'settings');
+    await page.waitForSelector('#ai-remove');
+    await page.click('#ai-remove');
+    await page.waitForSelector('#ai-own', { state: 'detached' });
+    ok(!fs.existsSync(path.join(dataDir, 'ai.json')) || !readJson(dataDir, 'ai.json').key, 'the key is gone from the server');
+    await goto(page, 'today'); await waitFeatured(page);
+    ok(await page.locator('#ai-setup').count() === 1 && await page.locator('details[data-menu=ai]').count() === 0, 'back to "set it up"');
+  });
+
+  await page.context_.close();
+  server.stop(); gem.close();
 }
 
 // ------------------------------------------------------------------ report

@@ -109,10 +109,11 @@ export function guessVoice({ channel, description, comments } = {}) {
 
 /**
  * Builds the function that says who teaches a video.
- * @param {{marks?:{key:string,name?:string,channelId?:string,voice:string}[], videos?:object[]}} o  marks = what you told the app; videos = everything known (a channel's other videos add evidence)
+ * @param {{marks?:{key:string,name?:string,channelId?:string,voice:string}[], videos?:object[], teachers?:object[]}} o  marks = what you told the app; videos = everything known (a channel's other videos add evidence); teachers = teachers you kept from Gemini (read like the built-in list, but always "probable")
  * @returns {(video:object)=>({gender:string, certainty:'sure'|'probable', source:'you'|'known'|'channel'|'video', evidence:string}|null)}
  */
-export function voiceResolver({ marks = [], videos = [] } = {}) {
+export function voiceResolver({ marks = [], videos = [], teachers = [] } = {}) {
+  const mine = new Map(teachers.filter((t) => VOICES.includes(t.voice) && t.name).map((t) => [normName(t.name), { gender: t.voice, certainty: 'probable', evidence: t.voiceSource || 'a source Gemini found' }]));
   const markFor = new Map();
   const matchers = marks.filter((x) => VOICES.includes(x.voice)).map((x) => [channelMatcher([x]), x.voice, x]);
   const tally = new Map();   // channel -> {female, male, mixed, n}
@@ -131,7 +132,7 @@ export function voiceResolver({ marks = [], videos = [] } = {}) {
     if (!markFor.has(key)) markFor.set(key, matchers.find(([is]) => is(video)) ?? null);
     const mark = markFor.get(key);
     if (mark) return { gender: mark[1], certainty: 'sure', source: 'you', evidence: SOURCE_TEXT.you };
-    const known = KNOWN.get(normName(video.channel));
+    const known = KNOWN.get(normName(video.channel)) ?? mine.get(normName(video.channel));
     if (known) return { gender: known.gender, certainty: known.certainty, source: 'known', evidence: known.evidence };
     const own = video.profile?.voice ?? null;
     const t = tally.get(key);

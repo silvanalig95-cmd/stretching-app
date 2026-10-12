@@ -7,6 +7,7 @@ import { toast } from './modal.js';
 import { mountToday, unmountToday } from './views/today.js';
 import { mountLibrary } from './views/library.js';
 import { mountTeachers } from './views/teachers.js';
+import { aiStatus } from './gemini.js';
 import { mountJournal } from './views/journal.js';
 import { mountSettings } from './views/settings.js';
 import { APP_NAME } from './brand.js';
@@ -59,6 +60,7 @@ async function main() {
   const store = await new Store().init();
   ctx.store = store;
   initFilters();
+  aiStatus();   // is the AI helper set up? (cached for the buttons that depend on it; nothing is sent to Google)
   ctx.hooks.toast = toast;
   ctx.hooks.navigate = navigate;
 

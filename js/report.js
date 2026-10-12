@@ -23,6 +23,7 @@ function whyArea(video, a) {
   else if ((src.desc?.[a] ?? 0) >= 0.4) bits.push('described in the description');
   if ((src.tags?.[a] ?? 0) >= 0.4) bits.push('in its tags');
   if ((src.transcript?.[a] ?? 0) >= 0.25) bits.push('the teacher talks about it');
+  if ((src.ai?.[a] ?? 0) >= 0.3) bits.push('Gemini saw it worked');
   const moves = (p.poses ?? []).map(({ id, count }) => ({ id, w: (POSE_BY_ID[id]?.areas[a] ?? 0) * count }))
     .filter((x) => x.w >= 0.5).sort((x, y) => y.w - x.w).slice(0, 3).map((x) => POSE_BY_ID[x.id].label);
   if (moves.length) bits.push(`exercises: ${moves.join(', ')}`);
@@ -72,7 +73,7 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
   const tl = timelineOf(p);
   const timeline = tl ? {
     source: tl.source,
-    label: { chapters: 'from the chapter list', transcript: 'from what the teacher says', comments: 'from viewers’ comments (approximate)' }[tl.source],
+    label: { chapters: 'from the chapter list', ai: 'from Gemini watching the video (an estimate)', transcript: 'from what the teacher says', comments: 'from viewers’ comments (approximate)' }[tl.source],
     items: tl.items.slice(0, 40).map((i) => ({ t: i.t, at: clock(i.t), label: i.label, poseId: i.poseId ?? null })),
   } : null;
   // the teacher's usual kind of routine, from the other videos of theirs that are clearly one thing
@@ -133,6 +134,7 @@ export function buildReport(video, { state, subscribers = video.subscribers ?? n
   return {
     id: video.id, title: video.title, channel: video.channel || '', durationSec: video.durationSec ?? null, durationApprox: !!video.durationApprox,
     level: LEVELS[p.level] ?? null, kind, traits: p.traits ?? null, traitLine: traitLine(p.traits), timeline, teacherUsually, fixedStyle: state.styleFixes?.[video.id] ?? null, styles, areas, fullBody, poses, chapters, transcript: spoken, viewers, quality, fit, limits,
+    ai: video.ai?.v === 1 ? { at: video.ai.at, model: video.ai.model, mode: video.ai.mode, summary: video.ai.summary, cautions: video.ai.cautions ?? [], sections: (video.ai.sections ?? []).length, level: video.ai.level, props: video.ai.props ?? [] } : null,
     summary: summarize(areas, fullBody),
   };
 }
