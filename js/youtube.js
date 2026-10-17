@@ -522,9 +522,9 @@ export async function importSource({ client, input, state, maxVideos = 150, prog
 }
 
 /** Check followed teachers for uploads we haven't seen. ~2 units per teacher. */
-export async function refreshFollowed({ client, state, perChannel = 15, progress = () => {} }) {
+export async function refreshFollowed({ client, state, perChannel = 15, only = null, progress = () => {} }) {
   const records = [], channels = {}, updated = [];
-  for (const f of state.following) {
+  for (const f of only ? state.following.filter((x) => x.channelId === only) : state.following) {
     progress(`Checking ${f.name}…`);
     const uploads = f.uploads ?? (await client.channel({ id: f.channelId }))?.uploads;
     if (!uploads) continue;

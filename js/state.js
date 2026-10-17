@@ -15,6 +15,7 @@ import { mergeVideo } from './youtube.js';
 import { STYLE_BY_ID } from './style.js';
 import { localDate, channelKey, channelBlocker, channelMatcher } from './model.js';
 import { APP_NAME } from './brand.js';
+import { normName } from './channel.js';
 
 export const SCHEMA = 2;
 export const MAX_VIDEOS = 2000;
@@ -46,6 +47,7 @@ export function emptyState() {
     favoriteChannels: [], // channels you love: their videos rank higher when they fit the request [{key, name, channelId?}]
     teacherVoices: [], // who teaches on a channel, as you told the app: [{key, name, channelId?, voice: 'female'|'male'|'mixed'}]
     myTeachers: [],   // teachers you kept from Gemini's suggestions: entries like the built-in teachers list, marked by: 'gemini'
+    teacherChannels: {},   // which YouTube channel a teacher in the list is, once you picked it: {normalised name: channelId} (their page matches videos by it)
     following: [],   // teachers whose uploads you track: [{channelId, name, addedAt}]
     savedSearches: [], // named library searches: [{id, name, q, area, len, tag, tab}]
     collections: [], // your own groups of library videos ("Morning", "After a run"): [{id, name, videoIds[], createdAt}]
@@ -62,7 +64,7 @@ export function emptyState() {
 /** The two documents that go to disk. */
 export function splitState(state) {
   return {
-    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
+    profile: { app: 'unfurl', schema: SCHEMA, library: state.library, history: state.history, blocked: state.blocked, blockedChannels: state.blockedChannels, favoriteChannels: state.favoriteChannels, teacherVoices: state.teacherVoices, myTeachers: state.myTeachers, teacherChannels: state.teacherChannels, collections: state.collections, styleFixes: state.styleFixes, following: state.following, savedSearches: state.savedSearches, prefs: state.prefs },
     index: { schema: SCHEMA, analysisVersion: state.analysisVersion, suggestionsVersion: state.suggestionsVersion, videos: state.videos, channels: state.channels, queryLog: state.queryLog, quota: state.quota },
   };
 }
@@ -159,6 +161,7 @@ export function loadState({ profile = null, index = null, legacy = null } = {}) 
     if (Array.isArray(p.favoriteChannels)) s.favoriteChannels = p.favoriteChannels.filter((c) => isObj(c) && typeof c.key === 'string');
     if (Array.isArray(p.teacherVoices)) s.teacherVoices = p.teacherVoices.filter((c) => isObj(c) && typeof c.key === 'string' && VOICES.includes(c.voice)).slice(0, MAX_TEACHER_MARKS);
     if (Array.isArray(p.myTeachers)) s.myTeachers = p.myTeachers.filter((t) => isObj(t) && typeof t.name === 'string' && t.name.trim() && Array.isArray(t.styles)).slice(0, 200);
+    if (isObj(p.teacherChannels)) s.teacherChannels = Object.fromEntries(Object.entries(p.teacherChannels).filter(([k, v]) => k && typeof v === 'string' && /^UC[\w-]{22}$/.test(v)).slice(0, MAX_TEACHER_CHANNELS));
     s.collections = cleanCollections(p.collections);
     if (isObj(p.styleFixes)) s.styleFixes = Object.fromEntries(Object.entries(p.styleFixes).filter(([k, v]) => typeof k === 'string' && STYLE_BY_ID[v]));
     if (Array.isArray(p.following)) s.following = p.following;
@@ -453,6 +456,16 @@ export function followChannel(state, { channelId, name }) {
   state.following.push({ channelId, name, addedAt: Date.now(), lastChecked: null });
   return true;
 }
+export const MAX_TEACHER_CHANNELS = 400;
+/** Remember which YouTube channel a teacher is (so their page finds their videos even if YouTube titles the channel differently). */
+export function linkTeacherChannel(state, name, channelId) {
+  const key = normName(name);
+  if (!key || !/^UC[\w-]{22}$/.test(channelId ?? '')) return false;
+  if (state.teacherChannels[key] === channelId) return false;
+  if (!(key in state.teacherChannels) && Object.keys(state.teacherChannels).length >= MAX_TEACHER_CHANNELS) delete state.teacherChannels[Object.keys(state.teacherChannels)[0]];
+  state.teacherChannels[key] = channelId;
+  return true;
+}
 export function unfollowChannel(state, channelId) { state.following = state.following.filter((f) => f.channelId !== channelId); }
 
 // ---------------------------------------------------------------- history
@@ -630,6 +643,7 @@ export function mergeImport(state, incoming) {
   for (const c of inc.blockedChannels ?? []) if (!state.blockedChannels.some((x) => x.key === c.key)) state.blockedChannels.push(c);
   for (const c of inc.favoriteChannels ?? []) if (!state.favoriteChannels.some((x) => x.key === c.key)) state.favoriteChannels.push(c);
   for (const c of inc.teacherVoices ?? []) if (!state.teacherVoices.some((x) => x.key === c.key) && state.teacherVoices.length < MAX_TEACHER_MARKS) state.teacherVoices.push(c);
+  for (const [k, v] of Object.entries(inc.teacherChannels ?? {})) if (!(k in state.teacherChannels) && Object.keys(state.teacherChannels).length < MAX_TEACHER_CHANNELS) state.teacherChannels[k] = v;
   for (const t of inc.myTeachers ?? []) if (!state.myTeachers.some((x) => x.name.toLowerCase() === t.name.toLowerCase()) && state.myTeachers.length < 200) state.myTeachers.push(t);
   // blocking wins over a favourite if the two copies disagree
   const isBlocked = channelMatcher(state.blockedChannels);

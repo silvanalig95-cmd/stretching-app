@@ -50,11 +50,11 @@ export function removeReading(videoId) {
   return true;
 }
 
-/** Which stored videos are worth asking about. 'video': library videos with no chapter list and no reading yet. 'text': any with comments or a transcript and no reading. */
-export function aiCandidates(mode = 'video', { state = ctx.state } = {}) {
-  const inLibrary = new Set(Object.keys(state.library));
+/** Which stored videos are worth asking about (`only` limits it to some ids). 'video': library videos with no chapter list and no reading yet. 'text': any with comments or a transcript and no reading. */
+export function aiCandidates(mode = 'video', { state = ctx.state, only = null } = {}) {
+  const allowed = new Set(only ?? Object.keys(state.library));   // `only`: just these videos (a teacher's page), library or not
   const hasChapters = (v) => (v.profile?.chapters?.length ?? 0) >= 3;
-  return Object.values(state.videos).filter((v) => inLibrary.has(v.id) && !v.ai && !v.broken && v.embeddable !== false && !state.blocked.includes(v.id)
+  return Object.values(state.videos).filter((v) => allowed.has(v.id) && !v.ai && !v.broken && v.embeddable !== false && !state.blocked.includes(v.id)
     && (mode === 'video' ? !hasChapters(v) && (v.durationSec ?? 0) > 0 && (v.durationSec ?? 0) <= 90 * 60 : !!(v.comments?.length || v.transcript || v.description))).map((v) => v.id);
 }
 

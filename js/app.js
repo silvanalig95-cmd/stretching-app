@@ -7,6 +7,7 @@ import { toast } from './modal.js';
 import { mountToday, unmountToday } from './views/today.js';
 import { mountLibrary } from './views/library.js';
 import { mountTeachers } from './views/teachers.js';
+import { mountTeacherPage } from './views/teacherpage.js';
 import { aiStatus } from './gemini.js';
 import { mountJournal } from './views/journal.js';
 import { mountSettings } from './views/settings.js';
@@ -15,23 +16,43 @@ import { APP_NAME } from './brand.js';
 const TABS = [['today', 'Today', mountToday], ['library', 'Library', mountLibrary], ['teachers', 'Teachers', mountTeachers], ['journal', 'Journal', mountJournal], ['settings', 'Settings', mountSettings]];
 let mounted = null;
 
-function show(tab) {
-  if (tab === mounted) return;
-  if (mounted === 'today') unmountToday();
-  mounted = tab;
-  ctx.ui.tab = tab;
-  for (const a of document.querySelectorAll('nav a')) a.toggleAttribute('aria-current', a.dataset.tab === tab);
-  const main = document.getElementById('main');
-  main.replaceChildren();
-  TABS.find(([t]) => t === tab)[2](main);
-  document.title = `${TABS.find(([t]) => t === tab)[1]} · ${APP_NAME}`;
+/** What the address says: a tab, or one teacher's page (#teacher/<name>, which counts as part of the Teachers tab). */
+function routeFromHash() {
+  const raw = location.hash.slice(1);
+  if (raw.startsWith('teacher/')) {
+    let name = '';
+    try { name = decodeURIComponent(raw.slice(8)).trim(); } catch { /* a broken link: fall through to the list */ }
+    if (name) return { tab: 'teachers', teacher: name };
+  }
+  return { tab: TABS.some(([t]) => t === raw) ? raw : 'today' };
 }
 
-const tabFromHash = () => (TABS.some(([t]) => t === location.hash.slice(1)) ? location.hash.slice(1) : 'today');
+function show(route) {
+  const key = route.teacher ? `teacher:${route.teacher}` : route.tab;
+  if (key === mounted) return;
+  if (mounted === 'today') unmountToday();
+  mounted = key;
+  ctx.ui.tab = route.tab;
+  for (const a of document.querySelectorAll('nav a')) a.toggleAttribute('aria-current', a.dataset.tab === route.tab);
+  const main = document.getElementById('main');
+  main.replaceChildren();
+  const [, label, mount] = TABS.find(([t]) => t === route.tab);
+  if (route.teacher) { mountTeacherPage(main, route.teacher); document.title = `${route.teacher} · ${APP_NAME}`; window.scrollTo(0, 0); } else { mount(main); document.title = `${label} · ${APP_NAME}`; }
+}
 
 function navigate(tab) {
-  show(tab);
+  show({ tab });
   if (location.hash.slice(1) !== tab) location.hash = tab;
+}
+
+/** Open a teacher's page: from a name, or anything with a channel name (a video). The Back button returns to where you were. */
+function openTeacher(ref) {
+  const name = String((typeof ref === 'string' ? ref : ref?.channel || ref?.name || ref?.channelId) ?? '').trim();
+  if (!name) return;
+  if (!mounted?.startsWith('teacher:')) ctx.ui.teacherFrom = ctx.ui.tab;
+  show({ tab: 'teachers', teacher: name });
+  const hash = `teacher/${encodeURIComponent(name)}`;
+  if (location.hash.slice(1) !== hash) location.hash = hash;
 }
 
 /** When the server is updated (a new build is deployed), say so and offer a reload; nothing is lost because everything is already saved. */
@@ -63,15 +84,16 @@ async function main() {
   aiStatus();   // is the AI helper set up? (cached for the buttons that depend on it; nothing is sent to Google)
   ctx.hooks.toast = toast;
   ctx.hooks.navigate = navigate;
+  ctx.hooks.openTeacher = openTeacher;
 
   document.getElementById('nav').replaceChildren(...TABS.map(([t, label]) =>
     h('a', { href: `#${t}`, 'data-tab': t, onclick: (e) => { e.preventDefault(); navigate(t); } }, label)));
 
-  window.addEventListener('hashchange', () => show(tabFromHash()));
+  window.addEventListener('hashchange', () => show(routeFromHash()));
   window.addEventListener('pagehide', () => store.flush());
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') store.flush(); });
 
-  show(tabFromHash());
+  show(routeFromHash());
   const where = store.mode === 'server' ? `${APP_NAME} ${store.server.version}${store.server.build ? ` · build ${store.server.build.slice(0, 7)}` : ''}${store.server.user ? ` · signed in as ${store.server.user}` : ''}` : 'Saving in this browser only. Run serve.py to keep your data in files.';
   document.getElementById('storage-note').textContent = where;
   if (store.hostProblem) {

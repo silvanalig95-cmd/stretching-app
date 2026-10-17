@@ -1840,6 +1840,180 @@ if (want(7)) {
   server.stop(); gem.close();
 }
 
+// ================================================================== World 8: a teacher's page (click a name: their videos, what they teach, find more)
+console.log('\nWorld 8: a teacher’s page — click a name to see their videos, what they teach, and to find more of them');
+if (want(8)) {
+  const KEY = 'AIzaSy-E2E-ONLY-0123456789abcdefWXYZ00';   // not a real key (fake Gemini)
+  const gem = await fakeGemini({ keys: [KEY] });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-teacher-'));
+  const server = await startServer({ dataDir, env: { UNFURL_GEMINI_BASE: gem.url } });
+  const page = await newPage(browser, server);
+  const hash = () => U(page, () => decodeURIComponent(location.hash));
+  const CALM = 'UC' + 'y8feajjx68cf98adpl1a9s';   // (Calm Hips Studio in the fake YouTube)
+
+  await step('a teacher in the list opens their own page: name, what the list says, the videos the app already knows; no key, so finding more says what it needs', async () => {
+    await goto(page, 'teachers');
+    await page.fill('#t-q', 'Adriene');
+    const card = page.locator('[data-teacher="Yoga With Adriene"]');
+    await card.locator('a.teacher-link.btn').click();
+    await page.waitForSelector('#teacher-head');
+    eq(await hash(), '#teacher/Yoga With Adriene');
+    eq(await page.locator('#teacher-name').innerText(), 'Yoga With Adriene');
+    eq(await page.locator('nav a[aria-current]').innerText(), 'Teachers', 'it belongs to the Teachers tab');
+    ok(await page.locator('#teacher-nokey').count() === 1 && await page.locator('#teacher-find-btn').count() === 0, 'reading a channel says it needs a YouTube key');
+    ok((await page.locator('#teacher-videos').innerText()).includes('videos'), 'the starter videos of theirs that the app knows are listed');
+    ok(await page.locator('#teacher-videos .vcard').count() >= 1, 'as cards');
+    ok(await page.locator('#teacher-summary li').count() >= 1 && (await page.locator('#teacher-basis').innerText()).startsWith('Based on'), 'what they teach, and what it is based on');
+    await shot(page, '80-teacher-nokey');
+    await page.click('#teacher-back');
+    await page.waitForSelector('#t-list');
+    eq(await page.locator('nav a[aria-current]').innerText(), 'Teachers', 'Back returns to the list');
+  });
+
+  await step('a name anywhere is a link: Today’s card and the "more that fit" cards (the rest of the card still plays), the Library, and Back returns to where you were', async () => {
+    await goto(page, 'today');
+    await waitFeatured(page);
+    const link = page.locator('.featured .meta a.teacher-link');
+    ok(await link.count() === 1, 'the featured video’s teacher is a link');
+    const name = await link.innerText();
+    await link.click();
+    await page.waitForSelector('#teacher-head');
+    eq(await page.locator('#teacher-name').innerText(), name);
+    await page.click('#teacher-back');
+    await page.waitForSelector('.featured h2');
+    eq(await page.locator('nav a[aria-current]').innerText(), 'Today', 'Back went to Today');
+    const card = page.locator('.vcard[data-video]').first();
+    const id = await card.getAttribute('data-video');
+    ok(await card.locator('a.teacher-link').count() === 1, 'a card has its teacher’s name as a link');
+    const before = await featuredId(page);
+    await card.click({ position: { x: 20, y: 20 } });   // anywhere else on the card plays it
+    await page.waitForFunction((i) => window.__unfurl.ui.featuredId === i, id);
+    await goto(page, 'library');
+    await page.click('#tab-suggestions');
+    ok(await page.locator('.row-card .meta a.teacher-link').count() >= 1, 'Library rows link to their teacher too');
+    await goto(page, 'today');
+  });
+
+  await step('a key makes "Find them on YouTube" available: the channel is found, its uploads read, and the page fills up', async () => {
+    await goto(page, 'settings');
+    await page.fill('#api-key', 'TESTKEY'); await page.click('#save-key');
+    await page.waitForFunction(() => document.getElementById('key-status').textContent.includes('✓'));
+    await U(page, () => window.__unfurl.hooks.openTeacher('Calm Hips Studio'));
+    await page.waitForSelector('#teacher-find-btn');
+    eq(await page.locator('#teacher-videos .vcard').count(), 0, 'nothing known yet');
+    ok((await page.locator('#teacher-find-btn').innerText()).startsWith('Find them on YouTube'), 'a name has to be looked up first');
+    ok((await page.locator('#teacher-find-btn').getAttribute('title')).includes('units'), 'and says roughly what it costs');
+    await page.click('#teacher-find-btn');
+    await page.waitForSelector('#teacher-videos .vcard', { timeout: 15000 });
+    eq(await page.locator('#teacher-count').innerText(), '12 of 12 videos', 'all twelve of their videos');
+    eq(await U(page, () => window.__unfurl.state.teacherChannels.calmhipsstudio), CALM, 'the channel is remembered for this name');
+    ok(await page.locator('#teacher-find-btn').innerText() === 'Read their newest 150 videos' && await page.locator('#teacher-find-deeper').count() === 1, 'now it can read them again, or further back');
+    ok(await page.locator('.badge', { hasText: 'Following' }).count() === 1, 'and they are followed (it was ticked)');
+    ok((await page.locator('#teacher-head .facts').innerText()).includes('subscribers'), 'with their size');
+    await shot(page, '81-teacher-found');
+  });
+
+  await step('what they teach: summary sentences, muscles, kinds, length, and how your own spots are covered', async () => {
+    const lines = await page.locator('#teacher-summary li').allInnerTexts();
+    ok(lines.length >= 2, lines.join(' | '));
+    ok(lines.some((l) => /minutes/.test(l)), 'how long: ' + lines.join(' | '));
+    ok((await page.locator('#teacher-basis').innerText()).includes('12 videos'), await page.locator('#teacher-basis').innerText());
+    ok(await page.locator('#teacher-areas .t-bar').count() >= 1, 'muscle bars');
+    ok((await page.locator('#teacher-areas').innerText()).toLowerCase().includes('hip'), 'a hip studio works the hips: ' + await page.locator('#teacher-areas').innerText());
+    // your tight and weak spots are compared with what they teach
+    await goto(page, 'settings'); await page.click('#spots .chip:has-text("Hip flexors")'); await page.waitForTimeout(600);
+    await U(page, () => window.__unfurl.hooks.openTeacher('Calm Hips Studio'));
+    await page.waitForSelector('#teacher-fit');
+    ok((await page.locator('#teacher-fit').innerText()).includes('Hip flexors'), await page.locator('#teacher-fit').innerText());
+  });
+
+  await step('browsing their videos: search, filters and orders; add one to your library; play one', async () => {
+    const total = await page.locator('#teacher-videos .vcard').count();
+    await page.selectOption('#teacher-sort', 'short');
+    const lens = await page.locator('#teacher-videos .vcard .len').allInnerTexts();
+    ok(lens.length === total, 'still all of them, in another order');
+    const opts = await page.locator('#teacher-length option').allInnerTexts();
+    ok(opts.length >= 2, `length choices exist: ${opts.join(' | ')}`);
+    await page.selectOption('#teacher-length', { index: 1 });
+    const n1 = await page.locator('#teacher-videos .vcard').count();
+    ok(n1 >= 1 && n1 <= total, 'a length narrows the list');
+    await page.selectOption('#teacher-length', '');
+    await page.fill('#teacher-q', 'zzzznothing');
+    ok((await page.locator('#teacher-videos').innerText()).includes('Nothing matches'), 'no match says so');
+    await page.fill('#teacher-q', '');
+    eq(await page.locator('#teacher-videos .vcard').count(), total, 'cleared');
+    const first = page.locator('#teacher-videos .vcard').first();
+    const id = await first.getAttribute('data-video');
+    await first.locator('[data-action=toggle-library]').click();
+    ok(await U(page, (i) => !!window.__unfurl.state.library[i], id), 'added to your library from here');
+    await page.check('#teacher-mine');
+    eq(await page.locator('#teacher-videos .vcard').count(), 1, '"only my library" shows just that one');
+    await page.uncheck('#teacher-mine');
+    await page.locator(`#teacher-videos .vcard[data-video="${id}"] .vplay`).click();
+    await page.waitForFunction((i) => window.__unfurl.ui.featuredId === i && window.__unfurl.ui.tab === 'today', id);
+  });
+
+  await step('it can be opened straight from its address, and the Teachers tab link still lists everyone', async () => {
+    await page.goto('about:blank');   // (a real reload, as when the address is opened in a new tab)
+    await page.goto(server.url + '#teacher/Calm%20Hips%20Studio');
+    await page.waitForSelector('#teacher-head');
+    eq(await page.locator('#teacher-name').innerText(), 'Calm Hips Studio');
+    ok(await page.locator('#teacher-videos .vcard').count() === 12, 'their videos are there after a reload (saved with your data)');
+    await page.click('#teacher-back');
+    await page.waitForSelector('#t-list');
+    await page.goto('about:blank');
+    await page.goto(server.url + '#teacher/%E0%A4%A');   // a broken link falls back to a normal page, not an error
+    await page.waitForSelector('#nav a');
+    ok(await page.locator('#teacher-head').count() === 0, 'a broken address shows the usual page');
+  });
+
+  await step('when no channel has exactly their name, YouTube’s closest channels are offered and the person picks', async () => {
+    await U(page, () => window.__unfurl.hooks.openTeacher('Calm Hips'));
+    await page.waitForSelector('#teacher-find-btn');
+    await page.click('#teacher-find-btn');
+    await page.waitForSelector('#teacher-candidates', { timeout: 15000 });
+    ok(await page.locator('#teacher-candidates li[data-channel]').count() >= 1, 'candidates are listed with a way to look at them');
+    await page.locator('#teacher-candidates li', { hasText: 'Calm Hips Studio' }).locator('[data-action=pick-channel]').click();
+    await page.waitForSelector('#teacher-videos .vcard', { timeout: 15000 });
+    eq(await U(page, () => window.__unfurl.state.teacherChannels.calmhips), CALM, 'the pick is remembered');
+    ok(await page.locator('#teacher-videos .vcard').count() >= 1, 'their videos show up under the name that was asked for, though YouTube titles the channel differently');
+    ok((await page.locator('#teacher-head .facts').innerText()).includes('On YouTube: “Calm Hips Studio”'), 'and the real channel name is shown');
+  });
+
+  await step('Block and favourite from the page; a blocked teacher can be allowed again', async () => {
+    await page.click('#teacher-head [data-action=favorite-channel]');
+    ok(await page.locator('#teacher-head .badge.fav').count() === 1, 'favourite badge');
+    await page.click('#teacher-head details[data-menu=block] summary');
+    ok(await page.locator('#teacher-head [data-block=video]').count() === 0, 'there is no "just this video" on a teacher’s page');
+    await page.click('#teacher-head [data-block=channel]');
+    await page.waitForSelector('#teacher-blocked');
+    ok(await page.locator('#teacher-head .badge.warn', { hasText: 'Blocked' }).count() === 1, 'marked as blocked');
+    ok(await page.locator('#teacher-head .badge.fav').count() === 0, 'a blocked teacher is no longer a favourite');
+    await page.click('#teacher-unblock');
+    await page.waitForFunction(() => !document.getElementById('teacher-blocked'));
+  });
+
+  await step('Gemini can read a teacher’s videos from their page, a few at a time', async () => {
+    await goto(page, 'settings');
+    await page.fill('#ai-key', KEY); await page.click('#ai-save');
+    await page.waitForSelector('#ai-own');
+    await U(page, () => window.__unfurl.hooks.openTeacher('Calm Hips Studio'));
+    await page.waitForSelector('#ai-teacher');
+    ok((await page.locator('#ai-teacher h3').innerText()).includes('their videos'), 'a section for their videos');
+    gem.reply({ text: JSON.stringify({ summary: 'Slow hips.', kind: { id: 'yin', confidence: 0.8, evidence: ['long holds'] }, level: 'beginner', pace: 'slow', props: [], areas: { hip_flexors: 0.9 }, sections: [{ t: '0:00', label: 'Intro' }, { t: '1:00', label: 'Low lunge' }, { t: '3:00', label: 'Pigeon pose' }, { t: '6:00', label: 'Child pose' }], cautions: [] }) });
+    const before = generate7().length;
+    await page.click('#ai-watch-all');
+    await page.waitForFunction((n) => document.querySelectorAll('#teacher-videos .badge').length && [...document.querySelectorAll('#teacher-videos .badge')].some((b) => b.textContent.includes('Gemini read')), null, { timeout: 15000 });
+    ok(generate7().length > before, 'Gemini was asked');
+    ok(generate7().every((r) => !JSON.stringify(r.body).includes('SECRET')), 'only public things were sent');
+    await shot(page, '82-teacher-gemini');
+  });
+
+  await page.context_.close();
+  server.stop(); gem.close();
+  function generate7() { return gem.seen.filter((r) => r.method === 'POST' && /:generateContent$/.test(r.path)); }
+}
+
 // ------------------------------------------------------------------ report
 
 await browser.close();

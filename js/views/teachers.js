@@ -13,6 +13,7 @@ import { favoriteButton } from './favorite.js';
 import { toast } from '../modal.js';
 import { emptyBlock } from './placeholders.js';
 import { aiGate } from './aiblock.js';
+import { teacherLink } from './teacherlink.js';
 import { suggestTeachers, keepTeacher, dropTeacher } from '../aiwork.js';
 import { levelText as lvl } from '../catalogue.js';
 import { voiceText as voiceTextOf } from '../teacher.js';
@@ -62,12 +63,13 @@ export function mountTeachers(root) {
         add.disabled = !hasKey; add.textContent = '＋ Add their videos';
       } }, '＋ Add their videos');
     return h('article', { class: 't-card', 'data-teacher': t.name },
-      h('h3', null, t.name),
+      h('h3', null, teacherLink(t.name)),
       h('div', { class: 'badges' }, voiceBadge(as), mine && h('span', { class: 'badge warn', title: 'Found by Gemini searching the web and kept by you. Not checked: open the YouTube link to see for yourself.' }, 'Found by Gemini · unchecked'), styles.map((s) => h('span', { class: 'badge kind' }, s)), bits.map((b) => h('span', { class: 'badge' }, b))),
       t.note ? h('p', { class: 't-note' }, t.note) : null,
       focus.length ? h('p', { class: 'hint' }, `Good for: ${focus.join(', ')}`) : null,
       have ? h('p', { class: 'hint' }, `${have} of their videos ${have === 1 ? 'is' : 'are'} already known to the app.`) : null,
       h('div', { class: 'row-actions' },
+        teacherLink(t.name, { cls: 'btn small primary', text: 'Videos & analysis →' }),
         h('a', { class: 'btn small ghost', href: youtubeUrl(t), target: '_blank', rel: 'noopener noreferrer' }, 'On YouTube ↗'),
         mine && t.source ? h('a', { class: 'btn small ghost', href: t.source, target: '_blank', rel: 'noopener noreferrer', title: 'The page Gemini found it on' }, 'Source ↗') : null,
         mine ? h('button', { class: 'btn small ghost', type: 'button', 'data-action': 'drop-teacher', onclick: () => { dropTeacher(t.name); toast(`Removed “${t.name}” from your list.`, 'info'); draw(); } }, 'Remove') : null,

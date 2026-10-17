@@ -144,7 +144,7 @@ fieldset.group legend { font-size: .8rem; text-transform: uppercase; letter-spac
 .quotes footer { padding: 0; margin-top: 2px; font-size: .78rem; color: var(--muted); text-align: left; }
 .section-title { margin-top: 28px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
-.vcard { text-align: left; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 0 14px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; overflow: hidden; box-shadow: var(--shadow); transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease); }
+.vcard { position: relative; text-align: left; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 0 14px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; overflow: hidden; box-shadow: var(--shadow); transition: transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease), border-color var(--dur) var(--ease); }
 .vcard:hover { border-color: var(--line-strong); box-shadow: var(--shadow-lg); transform: translateY(-2px); }
 .vcard:active { transform: none; }
 .vcard > *:not(.thumb) { padding: 0 12px; }
@@ -156,6 +156,10 @@ fieldset.group legend { font-size: .8rem; text-transform: uppercase; letter-spac
 .thumb .len { position: absolute; right: 8px; bottom: 8px; background: rgba(10, 14, 12, .78); color: #fff; font-size: .75rem; font-weight: 600; font-variant-numeric: tabular-nums; padding: 2px 7px; border-radius: 6px; z-index: 1; }
 .vtitle { font-weight: 620; line-height: 1.3; margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .vmeta { color: var(--muted); font-size: var(--fs-sm); }
+.vplay { all: unset; cursor: pointer; }
+.vplay::after { content: ""; position: absolute; inset: 0; }   /* the whole card plays the video; the teacher's name sits above it */
+.vplay:focus-visible::after { outline: 2px solid var(--accent); outline-offset: -3px; border-radius: var(--radius); }
+.vcard .teacher-link { position: relative; z-index: 1; }
 .empty h2 { margin-bottom: 8px; } .empty { padding: 22px; }
 .links { padding-left: 1.2rem; }
 
@@ -507,6 +511,22 @@ details.menu .menu-items button[aria-checked="true"] { font-weight: 600; }
 .t-card .row-actions { margin-top: auto; padding-top: 8px; }
 #t-about { margin-top: 12px; } #t-about p { margin-top: 8px; max-width: 72ch; }
 @media (max-width: 600px) { .t-list { grid-template-columns: 1fr; } }
+
+/* ---- teachers as links, and the teacher's page */
+.teacher-link { color: inherit; text-decoration: underline dotted var(--line-strong); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.teacher-link:hover, .teacher-link:focus-visible { color: var(--accent); text-decoration-style: solid; }
+.btn.teacher-link { text-decoration: none; } .btn.primary.teacher-link, .btn.primary.teacher-link:hover { color: var(--accent-ink); }
+.teacher-head h1 { margin: 6px 0 8px; } .teacher-head .facts { margin: 6px 0; } .teacher-head .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; align-items: center; }
+.t-sum { margin: 8px 0; padding-left: 1.1rem; } .t-sum li { margin: 4px 0; }
+.t-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 22px; margin-top: 14px; } .t-cols h3 { margin: 0 0 8px; font-size: var(--fs-md); }
+.t-bar { display: grid; grid-template-columns: minmax(80px, 42%) 1fr 3.2rem; gap: 8px; align-items: center; font-size: var(--fs-sm); margin: 5px 0; } .t-bar > .hint { text-align: right; }
+.t-fit { list-style: none; padding: 0; margin: 0 0 6px; } .t-fit li { margin: 4px 0; }
+.t-cands { list-style: none; padding: 0; margin: 10px 0; display: grid; gap: 8px; }
+.t-cands li { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); } .t-cands li strong { flex: 1 1 12rem; }
+.vactions { display: flex; gap: 6px; } .vcard .vactions { position: relative; z-index: 1; margin-top: 4px; }
+#teacher-ai .ai-library { border-top: 0; margin-top: 0; padding-top: 0; }
+.teacher-browse { margin-top: 18px; } .teacher-browse h2 { margin: 18px 0 4px; }
+label.check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
 
 /* ---- the AI helper */
 .ai-block { margin: 14px 0; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--surface-2); }

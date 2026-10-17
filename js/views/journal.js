@@ -8,6 +8,7 @@ import { deleteSession } from '../state.js';
 import { trainingLog } from './traininglog.js';
 import { sessionMinutes } from '../progress.js';
 import { emptyBlock } from './placeholders.js';
+import { teacherLink } from './teacherlink.js';
 
 const FACE = { much: ['😀', 'much better'], some: ['🙂', 'a little'], none: ['😐', 'not really'] };
 
@@ -48,7 +49,7 @@ export function mountJournal(root, { keep = false } = {}) {
             h('div', null,
               h('p', { class: 'when' }, s.date),
               h('p', null, v ? h('button', { class: 'link', type: 'button', onclick: () => play(v.id) }, v.title) : (s.kind === 'manual' ? (s.title ?? 'Something I did') : (s.title ? `${s.title} (video no longer in your data)` : 'Video no longer in library')),
-                v || s.kind === 'manual' ? h('small', { class: 'muted' }, ` · ${s.kind === 'manual' ? 'no video' : (v.channel || 'unknown')}${sessionMinutes(s, state.videos) ? ` · ${sessionMinutes(s, state.videos)} min` : ''}`) : null),
+                v || s.kind === 'manual' ? h('small', { class: 'muted' }, ' · ', s.kind === 'manual' ? 'no video' : (teacherLink(v) ?? 'unknown'), sessionMinutes(s, state.videos) ? ` · ${sessionMinutes(s, state.videos)} min` : '') : null),
               h('p', { class: 'rates' }, Object.entries(s.ratings).map(([a, r]) => h('span', { class: `badge rate-${r}`, title: FACE[r][1] }, `${FACE[r][0]} ${areaLabel(a)}`)),
                 s.intensity ? h('span', { class: 'badge' }, { easy: 'too easy', right: 'just right', hard: 'too hard' }[s.intensity]) : null),
               s.note ? h('p', { class: 'note-text' }, `“${s.note}”`) : null),

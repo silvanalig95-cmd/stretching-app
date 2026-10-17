@@ -5,6 +5,7 @@ import { h, fill, thumb, fmtViews } from '../dom.js';
 import { ctx, play, analyzeLink, commitAnalysis, addTranscriptToAnalysis, setAiOnAnalysis } from '../ctx.js';
 import { askAboutVideo } from '../aiwork.js';
 import { aiMenu, aiReadingBlock } from './aiblock.js';
+import { teacherLink } from './teacherlink.js';
 import { toast } from '../modal.js';
 import { areaLabel } from '../lexicon.js';
 import { youtubeWatchUrl } from '../query.js';
@@ -66,7 +67,7 @@ function reportCard({ video, report: r, notes }, { onChange }) {
       h('img', { class: 'a-thumb', src: thumb(video.id), alt: '', width: 160, height: 90, loading: 'lazy' }),
       h('div', null,
         h('h3', { id: 'analysis-title' }, r.title),
-        h('p', { class: 'meta' }, r.channel ? h('span', { class: 'channel' }, r.channel) : null, h('span', null, len), fmtViews(q.views) && h('span', null, fmtViews(q.views)), q.likePct != null && h('span', null, `${q.likePct}% like it`)),
+        h('p', { class: 'meta' }, r.channel ? h('span', { class: 'channel' }, teacherLink({ channel: r.channel })) : null, h('span', null, len), fmtViews(q.views) && h('span', null, fmtViews(q.views)), q.likePct != null && h('span', null, `${q.likePct}% like it`)),
         h('div', { class: 'badges' },
           inLib && badge('✓ In your library', 'lib'),
           r.kind && badge(r.kind.confidence < 0.45 && !r.kind.fixed ? `${r.kind.label}?` : r.kind.label, `kind${r.kind.fixed ? ' fixed' : ''}`, r.kind.fixed ? 'You set this' : `${r.kind.certainty}: ${r.kind.evidence.join('; ')}`),

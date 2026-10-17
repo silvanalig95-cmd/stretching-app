@@ -14,10 +14,11 @@ import { buildReport } from './report.js';
 import { SearchIndex } from './index.js';
 import { areaLabel } from './lexicon.js';
 import { voiceText } from './teacher.js';
+import { normName } from './channel.js';
 
 export const ctx = {
   store: null,
-  hooks: { renderResults() {}, renderFilters() {}, renderLog() {}, toast(msg) { console.log(msg); }, navigate() {} },
+  hooks: { renderResults() {}, renderFilters() {}, renderLog() {}, toast(msg) { console.log(msg); }, navigate() {}, openTeacher() {} },
   ui: {
     tab: 'today',
     filters: { areas: [], minMin: 10, maxMin: 25, styles: [], hints: [], terms: [], source: 'all', voice: '' },
@@ -402,10 +403,10 @@ export async function readMissingComments({ max = 300, progress = () => {} } = {
   return res;
 }
 
-export async function importInputs(text, { toLibrary = false, follow = false, progress = () => {} } = {}) {
+export async function importInputs(text, { toLibrary = false, follow = false, maxVideos = undefined, progress = () => {} } = {}) {
   const { state } = ctx;
   const items = splitInputs(text);
-  const out = { videos: 0, imported: 0, followed: [], names: [], problems: [], commentsRead: 0 };
+  const out = { videos: 0, imported: 0, followed: [], names: [], channels: [], problems: [], commentsRead: 0 };
   if (!items.length) { out.problems.push('Nothing to add yet. Paste a YouTube link, playlist, or teacher.'); return out; }
   const api = client();
   const classified = items.map((i) => ({ raw: i, ...parseSourceInput(i) }));
@@ -438,10 +439,11 @@ export async function importInputs(text, { toLibrary = false, follow = false, pr
   for (const c of classified.filter((x) => x.type !== 'video')) {
     if (!api) { out.problems.push(`“${c.raw}” needs a YouTube key (Settings) to import.`); continue; }
     try {
-      const res = await importSource({ client: api, input: c, state, progress });
+      const res = await importSource({ client: api, input: c, state, progress, ...(maxVideos ? { maxVideos } : {}) });
       importRecords(state, res.records, { toLibrary });
       Object.assign(state.channels, res.channels);
       out.imported += res.records.length; out.names.push(res.title);
+      if (res.channel) out.channels.push({ id: res.channel.id, name: res.channel.name });
       // Always read what viewers say about what was just imported: that is where the muscle evidence comes from.
       const cr = await readCommentsFor({ client: api, state, ids: res.records.map((r) => r.id), max: IMPORT_COMMENTS_MAX, budget: quotaInfo().left - 20, priority: libraryIds(), progress });
       out.commentsRead += cr.read;
@@ -455,10 +457,10 @@ export async function importInputs(text, { toLibrary = false, follow = false, pr
   return out;
 }
 
-export async function refreshFollowedNow(progress = () => {}) {
+export async function refreshFollowedNow(progress = () => {}, { only = null } = {}) {
   const api = client();
   if (!api) throw new Error('Add a YouTube key in Settings first.');
-  const res = await refreshFollowed({ client: api, state: ctx.state, progress });
+  const res = await refreshFollowed({ client: api, state: ctx.state, progress, only });
   const added = importRecords(ctx.state, res.records);
   for (const u of res.updated) {
     const f = ctx.state.following.find((x) => x.channelId === u.channelId);
@@ -466,6 +468,20 @@ export async function refreshFollowedNow(progress = () => {}) {
   }
   ctx.store.save();
   return { added, checked: res.updated.length, records: res.records };
+}
+
+/**
+ * YouTube's closest channels for a teacher's name (a search: 100 units), the exact match first when there is one:
+ * [{id, name, subscribers}]. Nothing is stored; the person picks.
+ */
+export async function findTeacherChannels(name) {
+  const api = client();
+  if (!api) throw new Error('Add a YouTube key in Settings first.');
+  const found = await api.searchChannels(name);
+  const info = found.length ? await api.channels(found.map((c) => c.id)).catch(() => ({})) : {};
+  const key = normName(name);
+  const rows = found.map((c) => ({ id: c.id, name: info[c.id]?.name || c.name, subscribers: info[c.id]?.subscribers ?? null }));
+  return [...rows.filter((c) => normName(c.name) === key), ...rows.filter((c) => normName(c.name) !== key)];
 }
 
 // ---------------------------------------------------------------- your body

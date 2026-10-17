@@ -20,9 +20,9 @@ function undoToast(message, undo) {
 
 /**
  * @param {object} video
- * @param {{onChange?:()=>void, label?:string, cls?:string}} [o] onChange runs after something was blocked or unblocked
+ * @param {{onChange?:()=>void, label?:string, cls?:string, channelOnly?:boolean}} [o] onChange runs after something was blocked or unblocked; channelOnly: a teacher's page (there is no one video to hide)
  */
-export function blockMenu(video, { onChange = () => {}, label = 'Not for me', cls = 'btn ghost' } = {}) {
+export function blockMenu(video, { onChange = () => {}, label = 'Not for me', cls = 'btn ghost', channelOnly = false } = {}) {
   const { state } = ctx;
   const channelName = video.channel || '';
   const channelIsBlocked = channelBlocker(state.blockedChannels)(video);
@@ -31,7 +31,7 @@ export function blockMenu(video, { onChange = () => {}, label = 'Not for me', cl
     h('summary', { class: cls, title: 'Stop suggesting this video, or everything from its channel' }, `${label} ▾`),
     h('div', { class: 'menu-items', role: 'menu' },
       h('p', { class: 'menu-note' }, 'Hide from suggestions:'),
-      h('button', { type: 'button', role: 'menuitem', 'data-block': 'video', disabled: videoIsBlocked, onclick: () => {
+      channelOnly ? null : h('button', { type: 'button', role: 'menuitem', 'data-block': 'video', disabled: videoIsBlocked, onclick: () => {
         details.open = false;
         blockVideo(state, video.id); ctx.store.save();
         undoToast('Won’t suggest this video again.', () => { unblockVideo(state, video.id); onChange(); });

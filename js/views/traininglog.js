@@ -3,6 +3,7 @@
 
 import { h, fill, download } from '../dom.js';
 import { ctx } from '../ctx.js';
+import { teacherLink } from './teacherlink.js';
 import { localDate } from '../model.js';
 import { formatDuration } from '../analyze.js';
 import { openFeedback } from './feedback.js';
@@ -104,7 +105,7 @@ export function trainingLog(redraw, { keep = false } = {}) {
     return h('li', { class: 'day-entry', 'data-session': rec.id },
       h('div', { class: 'body' },
         h('p', { class: 'ttl' }, v ? h('button', { class: 'link', type: 'button', onclick: () => play(v.id) }, rec.title ?? v.title) : (rec.title ?? 'Something I did'),
-          h('small', { class: 'muted' }, ` · ${rec.kind === 'manual' ? 'no video' : (rec.channel ?? v?.channel ?? '')}${mins ? ` · ${mins} min` : ''}`)),
+          h('small', { class: 'muted' }, ' · ', rec.kind === 'manual' ? 'no video' : (teacherLink(rec.channel ?? v?.channel ?? '') ?? ''), mins ? ` · ${mins} min` : '')),
         h('p', { class: 'badges' }, areas.map((a) => h('span', { class: `badge${rec.ratings?.[a] ? ` rate-${rec.ratings[a]}` : ''}` }, `${rec.ratings?.[a] ? { much: '😀 ', some: '🙂 ', none: '😐 ' }[rec.ratings[a]] : ''}${areaLabel(a)}`)),
           rec.intensity ? h('span', { class: 'badge' }, { easy: 'too easy', right: 'just right', hard: 'too hard' }[rec.intensity]) : null),
         rec.watch ? h('p', { class: 'hint watched', title: rec.watch.skipped?.length ? `Skipped: ${rec.watch.skipped.join(', ')}` : '' }, `played ${watchLine(rec.watch, rec.durationSec)}${rec.watch.skipped?.length ? ` · skipped ${rec.watch.skipped.length} section${rec.watch.skipped.length === 1 ? '' : 's'}` : ''}`) : null,

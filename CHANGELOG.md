@@ -10,6 +10,16 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.12.0
+
+**A page for every teacher.** Click a teacher's name anywhere (on Today, the “More that fit” cards, the Library, Look at a video first, the Journal, or in the Teachers list) and their page opens (`#teacher/<name>`, so it can be bookmarked or opened in a new tab; Back returns to where you were). On the “More that fit” cards the name is a link while the rest of the card still plays the video.
+
+- **Their videos**: everything the app knows from them, with search (title, poses, your own tags and notes), filters by muscle, kind of routine and length, five orders (yours first, most viewed, newest, shortest, longest), “＋ Library” on each, and play.
+- **What they teach**, worked out from their videos: the usual kind of routine, typical length, the muscles they work most (with how many of their videos), poses they name, level, pace and props, how well they cover *your* tight and weak spots, and what happened when you did their routines. It says how many videos it is based on, and that a handful is a small sample.
+- **Find more of their videos** (needs a YouTube key): reads their newest 150 uploads (or up to 500) together with what viewers say, adds them to “Discovered”, and can follow the teacher so “Check for new uploads” is one press. It shows roughly what that costs in YouTube's daily allowance first (a name has to be searched for once: 100 units; after that it is a few units plus the comments). When no channel has exactly the teacher's name, YouTube's closest channels are shown and you pick; the pick is remembered, so the page finds their videos even if YouTube titles the channel differently.
+- **Also on the page**: favourite, follow, “Teacher ▾” (woman / man), “Not for me” for the whole teacher, “On YouTube ↗”, and (with the AI helper) “Let Gemini read their videos”, ten watched or forty read at a time.
+- New in your saved data: `teacherChannels` (which channel you picked for a name). Older data loads unchanged.
+
 ## 0.11.0
 
 **An optional AI helper (Gemini).** If you add a free Google AI key (Settings → AI helper), Google’s Gemini can help the app learn about videos and teachers. Nothing happens until you press one of its buttons, and without a key the app works exactly as before.

@@ -59,16 +59,20 @@ export function aiReadingBlock(video, { onRemove = () => {} } = {}) {
       ' ', h('button', { class: 'link', type: 'button', id: 'ai-remove-reading', onclick: onRemove }, 'Remove this reading')));
 }
 
-/** The Library's "Let Gemini read my videos" (inside the add menu): the videos worth asking about, run a few at a time, with a Stop. */
-export function aiLibrarySection({ onDone = () => {} } = {}) {
+/**
+ * "Let Gemini read my videos": the videos worth asking about, run a few at a time, with a Stop. The Library uses it for your own videos
+ * (inside the add menu); a teacher's page uses it for that teacher's.
+ * @param {{onDone?:()=>void, candidates?:(mode:'video'|'text')=>string[], title?:string, rootId?:string, perWatch?:number, perRead?:number}} [o]
+ */
+export function aiLibrarySection({ onDone = () => {}, candidates = (mode) => aiCandidates(mode), title = 'Let Gemini read my videos', rootId = 'ai-library', perWatch = 25, perRead = 60 } = {}) {
   const gate = aiGate();
   if (!gate) return null;
-  const root = h('div', { class: 'ai-library', id: 'ai-library' });
+  const root = h('div', { class: 'ai-library', id: rootId });
   let stop = false, busy = false;
   const draw = () => {
-    if (gate === 'setup') { fill(root, h('h3', null, 'Let Gemini read my videos'), h('p', { class: 'hint' }, 'Gemini can watch the videos that have no chapter list and give them sections and poses. ', h('a', { href: '#settings', onclick: (e) => { e.preventDefault(); ctx.hooks.navigate('settings'); } }, 'Set up the AI helper'), ' first (it is free).')); return; }
-    const watch = aiCandidates('video'), text = aiCandidates('text');
-    const mins = Math.round(watch.slice(0, 25).reduce((a, id) => a + (ctx.state.videos[id]?.durationSec ?? 0), 0) / 60);
+    if (gate === 'setup') { fill(root, h('h3', null, title), h('p', { class: 'hint' }, 'Gemini can watch the videos that have no chapter list and give them sections and poses. ', h('a', { href: '#settings', onclick: (e) => { e.preventDefault(); ctx.hooks.navigate('settings'); } }, 'Set up the AI helper'), ' first (it is free).')); return; }
+    const watch = candidates('video'), text = candidates('text');
+    const mins = Math.round(watch.slice(0, perWatch).reduce((a, id) => a + (ctx.state.videos[id]?.durationSec ?? 0), 0) / 60);
     const go = async (mode, ids, per) => {
       if (busy) return;
       busy = true; stop = false; draw();
@@ -78,13 +82,13 @@ export function aiLibrarySection({ onDone = () => {} } = {}) {
       toast(`Gemini ${mode === 'video' ? 'watched' : 'read'} ${res.done} video${res.done === 1 ? '' : 's'}${res.failed.length ? `; ${res.failed.length} could not be read` : ''}${res.stopped && res.stopped !== 'you' ? `. Stopped early: ${res.message}` : ''}.`, res.stopped && res.stopped !== 'you' ? 'error' : 'success', 9000);
       draw(); onDone();
     };
-    fill(root, h('h3', null, 'Let Gemini read my videos'),
+    fill(root, h('h3', null, title),
       h('p', { class: 'hint' }, 'Gemini adds a timeline, poses and a kind to videos that the words alone can’t describe. A few at a time, so you stay inside Google’s free limits; you can stop at any point.'),
       h('div', { class: 'actions' },
-        h('button', { class: 'btn', type: 'button', id: 'ai-watch-all', disabled: busy || !watch.length, title: 'Watches each video (Google’s free tier covers about 8 hours of YouTube video a day)', onclick: () => go('video', watch, 25) },
-          watch.length ? `Watch ${Math.min(25, watch.length)} of ${watch.length} videos without chapters (about ${mins} min of video)` : 'No video here is missing its chapters'),
-        h('button', { class: 'btn', type: 'button', id: 'ai-read-all', disabled: busy || !text.length, onclick: () => go('text', text, 60) },
-          text.length ? `Read the text of ${Math.min(60, text.length)} of ${text.length} videos` : 'Every video has been read'),
+        h('button', { class: 'btn', type: 'button', id: 'ai-watch-all', disabled: busy || !watch.length, title: 'Watches each video (Google’s free tier covers about 8 hours of YouTube video a day)', onclick: () => go('video', watch, perWatch) },
+          watch.length ? `Watch ${Math.min(perWatch, watch.length)} of ${watch.length} videos without chapters (about ${mins} min of video)` : 'No video here is missing its chapters'),
+        h('button', { class: 'btn', type: 'button', id: 'ai-read-all', disabled: busy || !text.length, onclick: () => go('text', text, perRead) },
+          text.length ? `Read the text of ${Math.min(perRead, text.length)} of ${text.length} videos` : 'Every video has been read'),
         busy ? h('button', { class: 'btn ghost', type: 'button', id: 'ai-stop', onclick: () => { stop = true; } }, 'Stop') : null),
       h('p', { class: 'hint', id: 'ai-progress', 'aria-live': 'polite' }, busy ? 'Starting…' : ''));
   };

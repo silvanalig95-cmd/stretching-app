@@ -13,6 +13,7 @@ import { areaPicker } from './areapicker.js';
 import { blockMenu } from './blockmenu.js';
 import { favoriteButton } from './favorite.js';
 import { voiceBadge, voiceMenu } from './voice.js';
+import { teacherLink } from './teacherlink.js';
 import { aiMenu, aiReadingBlock } from './aiblock.js';
 import { readStoredVideo, removeReading } from '../aiwork.js';
 import { VOICE_CHOICES } from '../teacher.js';
@@ -319,7 +320,7 @@ function featuredInfo(entry) {
       ctx.ui.combo.ids.indexOf(v.id) + 1 < ctx.ui.combo.ids.length ? h('button', { class: 'link', type: 'button', onclick: () => advanceCombo(v.id) }, ' skip to the next part') : null) : null,
     h('h2', null, v.title),
     h('p', { class: 'meta' },
-      v.channel ? h('span', { class: 'channel' }, v.channel) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
+      v.channel ? h('span', { class: 'channel' }, teacherLink(v)) : h('span', { class: 'channel muted' }, 'channel not checked yet'),
       h('span', null, lengthText(v)), fmtViews(v.views) && h('span', null, fmtViews(v.views)), likePct && h('span', null, likePct)),
     h('div', { class: 'badges' },
       styleBadge(v), voiceBadge(v),
@@ -417,10 +418,11 @@ function renderAlts() {
 
 function videoCard(r) {
   const v = r.video, f = r.flags;
-  return h('button', { class: 'vcard', type: 'button', onclick: () => { play(v.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }, 'aria-label': `Play ${v.title}` },
+  // the whole card plays the video (the title button covers it); the teacher's name on top of it opens their page
+  return h('article', { class: 'vcard', 'data-video': v.id },
     h('span', { class: 'thumb' }, h('img', { src: thumb(v.id), alt: '', loading: 'lazy', onerror: (e) => e.target.remove() }), h('span', { class: 'len' }, lengthText(v))),
-    h('span', { class: 'vtitle' }, v.title),
-    h('span', { class: 'vmeta' }, v.channel || 'unknown channel', ' · fit ', `${Math.round((r.parts.match ?? 0) * 100)}%`),
+    h('span', { class: 'vtitle' }, h('button', { class: 'vplay', type: 'button', onclick: () => { play(v.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }, 'aria-label': `Play ${v.title}` }, v.title)),
+    h('span', { class: 'vmeta' }, teacherLink(v) ?? 'unknown channel', ' · fit ', `${Math.round((r.parts.match ?? 0) * 100)}%`),
     h('span', { class: 'badges' },
       styleBadge(v), voiceBadge(v),
       inLibrary(ctx.state, v.id) && badge('In library', 'lib'), f.suggestion && !inLibrary(ctx.state, v.id) && badge('Suggested'),

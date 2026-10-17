@@ -17,6 +17,7 @@ import { toast } from '../modal.js';
 import { analyzePanel } from './analyze.js';
 import { styleBadge } from './stylebadge.js';
 import { voiceBadge, voiceMenu } from './voice.js';
+import { teacherLink } from './teacherlink.js';
 import { aiLibrarySection } from './aiblock.js';
 import { voiceResolver, voiceFit } from '../teacher.js';
 import { STYLE_LIST } from '../style.js';
@@ -309,7 +310,7 @@ export function mountLibrary(root) {
         h('span', { class: 'len' }, v.durationSec == null ? '?' : `${v.durationApprox ? '~' : ''}${formatDuration(v.durationSec)}`)),
       h('div', { class: 'body' },
         h('h4', null, v.title),
-        h('p', { class: 'meta' }, v.channel || 'channel unknown', fmtViews(v.views) && ` · ${fmtViews(v.views)}`,
+        h('p', { class: 'meta' }, teacherLink(v) ?? 'channel unknown', fmtViews(v.views) && ` · ${fmtViews(v.views)}`,
           done ? ` · done ${done}×${help != null ? `, ${Math.round(help * 100)}% helpful` : ''}` : ''),
         h('div', { class: 'badges' },
           styleBadge(v), voiceBadge(v),
