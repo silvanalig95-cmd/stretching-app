@@ -26,11 +26,13 @@ const WHY = { done: 'it ran out of useful things to do', budget: 'it reached the
 
 export function sweepPanel() {
   const el = h('section', { class: 'panel', id: 'sweep-panel' }, h('h2', null, 'Use up the day’s leftover allowance'), h('p', { class: 'hint' }, 'Loading…'));
-  let timer = null, sawRunning = false;   // sawRunning: a run finished while this page was open, so the page doesn't know what it found yet
+  let timer = null, seq = 0, sawRunning = false;   // sawRunning: a run finished while this page was open, so the page doesn't know what it found yet
 
   async function draw() {
     clearTimeout(timer);
+    const mine = ++seq;   // changes made in quick succession each redraw: only the newest answer may be shown (an older one would put old values back)
     const res = await api('GET', '/api/sweep');
+    if (mine !== seq) return;
     const st = res.ok ? res.json : null;
     const head = [h('h2', null, 'Use up the day’s leftover allowance'),
       h('p', null, 'YouTube’s free allowance (10,000 units a day) starts again at midnight in California, and whatever is left until then is simply lost. Olympus can spend it for you shortly before that on what it does by hand: reading the comments of videos that have none, reading more of the teachers you like, searching for the muscles your library covers least, and (if the AI helper is set up) letting Gemini read videos with its leftover requests. It keeps a reserve and only uses what you haven’t.')];

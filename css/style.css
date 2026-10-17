@@ -529,7 +529,9 @@ details.menu .menu-items button[aria-checked="true"] { font-weight: 600; }
 label.check { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--muted); }
 
 /* ---- the nightly sweep */
-.sweep-opts { display: grid; gap: 10px; margin: 12px 0; } .sweep-opts input[type=number] { width: 6rem; }
+.sweep-opts { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 12px 0; } .sweep-opts > * { min-width: 0; } .sweep-opts input[type=number] { width: 6rem; }
+.sweep-opts .inline-field { flex-wrap: wrap; } .sweep-opts select { max-width: 100%; min-width: 0; text-overflow: ellipsis; }
+#sweep-panel label.check { align-items: flex-start; } #sweep-panel .check input { margin-top: .2rem; flex: none; }
 .sweep-last { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); } .sweep-last h3 { margin: 0 0 4px; font-size: 1rem; } .sweep-last p { margin: 4px 0; }
 .warn-note { color: var(--warm); }
 label.check.sweep-main { font-size: var(--fs-md); color: var(--ink); font-weight: 600; }
