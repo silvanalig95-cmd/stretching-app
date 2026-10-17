@@ -24,6 +24,7 @@ WHERE THE DATA LIVES
     index.json     everything the app has discovered and analysed (rebuildable)
     config.json    your API key (private, mode 600)
     ai.json        your Gemini key for the optional AI helper, if you saved one (private, mode 600; never sent back to the browser)
+    sweep.json     the nightly sweep's settings and last report (see deploy/README.md)
     backups/       rolling daily backups of profile.json + one before every
                    data-format upgrade
   With several users, each gets their own folder under users/.
@@ -47,6 +48,7 @@ SETTINGS (environment variables; every one has a command-line flag too)
   UNFURL_GEMINI_KEY_FILE  same, read from a file
   UNFURL_GEMINI_MODEL     the Gemini model to use (default gemini-flash-latest; people can pick another in Settings)
   UNFURL_USER_DAILY_AI_CALLS  per-user daily cap on AI-helper requests (default 60; 0 = no cap)
+  UNFURL_NODE             the Node.js program the nightly sweep uses (default: the one on the PATH; the sweep needs Node 18 or newer)
   UNFURL_BUILD            a label for this build (default: the git commit)
   UNFURL_POLL_SECONDS     how often open pages check for a new version (default 60)
   Passwords may be plain text or hashed: run  python3 serve.py --hash-password
@@ -89,7 +91,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qsl, urlencode, unquote, quote
 
-APP_VERSION = "0.12.0"
+APP_VERSION = "0.13.0"
 ROOT = Path(__file__).resolve().parent
 PUBLIC = {"index.html", "css", "js", "data", "favicon.svg"}  # the only things served
 MAX_BODY = 40 * 1024 * 1024
@@ -108,6 +110,9 @@ GEMINI_DEFAULT_MODEL = "gemini-flash-latest"                        # an alias G
 GEMINI_MAX_TEXT = 60_000      # characters of instructions or of question
 GEMINI_MAX_TOKENS = 16_000
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
+SWEEP_DEFAULTS = {"enabled": False, "hoursBefore": 2.0, "reserve": 300, "ai": True}
+SWEEP_IDLE_SECONDS = 600     # a scheduled sweep waits until nobody has used the app for this long
+SWEEP_MAX_MINUTES = 90
 LOGIN_FAILS_BEFORE_LOCK = 5
 LOGIN_LOCK_SECONDS = 60
 
@@ -144,6 +149,7 @@ class Config:
         self.gemini_upstream = GEMINI_UPSTREAM
         self.gemini_model = GEMINI_DEFAULT_MODEL
         self.user_daily_ai_calls = 60
+        self.node = ""                 # the Node.js program the nightly sweep runs with (default: the one on the PATH)
         self.build = ""
         self.poll_seconds = 60
         self.open_browser = True
@@ -250,6 +256,7 @@ def build_config(args, env) -> Config:
             sys.exit(f"UNFURL_GEMINI_MODEL={gm!r} doesn't look like a Gemini model name (for example {GEMINI_DEFAULT_MODEL}).")
         c.gemini_model = gm
     c.user_daily_ai_calls = int(env.get("UNFURL_USER_DAILY_AI_CALLS", c.user_daily_ai_calls))
+    c.node = env.get("UNFURL_NODE", "").strip()
     c.build = env.get("UNFURL_BUILD") or git_build()
     c.poll_seconds = int(env.get("UNFURL_POLL_SECONDS", c.poll_seconds))
     c.open_browser = not args.no_open
@@ -465,6 +472,37 @@ def adopt_legacy_data(data_dir: Path, legacy_dir: Path) -> str:
 
 # ---------------------------------------------------------------- shared-key YouTube proxy usage
 
+# ---------------------------------------------------------------- YouTube's day (US Pacific time, with daylight saving)
+
+def _nth_sunday(year: int, month: int, n: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def pacific_offset(utc: datetime) -> timedelta:
+    """UTC-7 while US daylight saving time is on (second Sunday of March 2:00 to first Sunday of November 2:00), else UTC-8."""
+    y = utc.year
+    start = datetime.combine(_nth_sunday(y, 3, 2), datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=10)
+    end = datetime.combine(_nth_sunday(y, 11, 1), datetime.min.time(), tzinfo=timezone.utc) + timedelta(hours=9)
+    return timedelta(hours=-7) if start <= utc < end else timedelta(hours=-8)
+
+
+def pacific_day(utc=None) -> str:
+    utc = utc or datetime.now(timezone.utc)
+    return (utc + pacific_offset(utc)).date().isoformat()
+
+
+def next_quota_reset(utc=None) -> datetime:
+    """When YouTube's daily allowance next starts again: the coming midnight in Pacific time (an aware UTC datetime)."""
+    utc = utc or datetime.now(timezone.utc)
+    midnight = datetime.combine((utc + pacific_offset(utc)).date() + timedelta(days=1), datetime.min.time(), tzinfo=timezone.utc)
+    for off in (timedelta(hours=-8), timedelta(hours=-7)):
+        cand = midnight - off
+        if pacific_offset(cand) == off:
+            return cand
+    return midnight + timedelta(hours=8)
+
+
 class UsageMeter:
     """Per-user daily quota units spent through the server's shared YouTube key (YouTube's day is Pacific time).
 
@@ -485,7 +523,7 @@ class UsageMeter:
 
     @staticmethod
     def today():
-        return (datetime.now(timezone.utc) - timedelta(hours=8)).date().isoformat()
+        return pacific_day()
 
     def charge(self, user, units, cap):
         with self.lock:
@@ -519,6 +557,205 @@ class UsageMeter:
                 pass  # counting is best effort; never fail a request over it
 
 
+# ---------------------------------------------------------------- the nightly sweep
+# Near the end of YouTube's day, spend what is left of the daily allowance on widening and reading the library (js/autopilot.js).
+# The logic is the app's own JavaScript, so it is run headless by Node (sweep.mjs), started here at the chosen time. It talks to this
+# server over the loopback address with a secret that only exists in this process and its child.
+
+def user_data_dir(c: Config, user) -> Path:
+    return c.data_dir / "users" / safe_user_dir(user) if (c.per_user and user) else c.data_dir
+
+
+def sweep_clean(raw) -> dict:
+    """Settings as a dict with every key present; anything that is not valid is replaced by its default."""
+    s = dict(SWEEP_DEFAULTS)
+    if isinstance(raw, dict):
+        if isinstance(raw.get("enabled"), bool):
+            s["enabled"] = raw["enabled"]
+        h = raw.get("hoursBefore")
+        if isinstance(h, (int, float)) and not isinstance(h, bool) and 0.5 <= h <= 12:
+            s["hoursBefore"] = round(float(h) * 2) / 2
+        r = raw.get("reserve")
+        if isinstance(r, int) and not isinstance(r, bool) and 0 <= r <= 9000:
+            s["reserve"] = r
+        if isinstance(raw.get("ai"), bool):
+            s["ai"] = raw["ai"]
+    return s
+
+
+def sweep_valid(key: str, v) -> bool:
+    if key in ("enabled", "ai"):
+        return isinstance(v, bool)
+    if key == "hoursBefore":
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and 0.5 <= v <= 12
+    if key == "reserve":
+        return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 9000
+    return False
+
+
+def read_sweep_file(d: Path) -> dict:
+    try:
+        doc = json.loads((d / "sweep.json").read_text("utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except (ValueError, OSError):
+        return {}
+
+
+class SweepManager:
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        self.lock = threading.Lock()
+        self.file_lock = threading.Lock()
+        self.running = None                       # {"user", "since", "trigger"} while a sweep is under way
+        self.token = secrets.token_urlsafe(32)    # lets the child talk to /api as the person it works for
+        self._node = None
+
+    def now(self) -> datetime:
+        fake = os.environ.get("UNFURL_SWEEP_NOW")  # for tests: pretend it is this moment (ISO, UTC)
+        return datetime.fromisoformat(fake).replace(tzinfo=timezone.utc) if fake else datetime.now(timezone.utc)
+
+    def node(self):
+        """(path, version, reason): the Node.js to run with, or why there is none."""
+        if self._node is None:
+            path = self.cfg.node or shutil.which("node") or ""
+            version, reason = "", ""
+            if not path:
+                reason = "Node.js was not found on this computer, and the sweep runs on it. Install Node 18 or newer (the Docker image has to be rebuilt once: see deploy/README.md)."
+            else:
+                try:
+                    version = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout.strip()
+                    major = int(re.match(r"v?(\d+)", version).group(1))
+                    if major < 18:
+                        reason = f"Node {version} is too old: the sweep needs Node 18 or newer."
+                except (OSError, subprocess.SubprocessError, AttributeError, ValueError):
+                    reason = f"Couldn't run Node ({path})."
+            self._node = (path, version, reason)
+        return self._node
+
+    def scheduled_users(self):
+        c = self.cfg
+        if c.trust_proxy_user:
+            return []   # who the people are is only known when one of them shows up: they can run it by hand
+        return sorted(c.users) if c.users else [None]
+
+    def settings(self, user) -> dict:
+        return sweep_clean(read_sweep_file(user_data_dir(self.cfg, user)).get("settings"))
+
+    def update(self, user, patch: dict):
+        """Apply a change to the settings; returns (settings, error)."""
+        for k, v in patch.items():
+            if k not in SWEEP_DEFAULTS:
+                return None, f"Unknown setting “{k}”."
+            if not sweep_valid(k, v):
+                return None, f"“{k}” has a value that isn't allowed."
+        d = user_data_dir(self.cfg, user)
+        with self.file_lock:
+            doc = read_sweep_file(d)
+            doc["settings"] = sweep_clean({**sweep_clean(doc.get("settings")), **patch})
+            d.mkdir(parents=True, exist_ok=True)
+            atomic_write(d / "sweep.json", json.dumps(doc).encode(), private=True)
+        return doc["settings"], None
+
+    def status(self, user) -> dict:
+        now = self.now()
+        d = user_data_dir(self.cfg, user)
+        doc = read_sweep_file(d)
+        s = sweep_clean(doc.get("settings"))
+        path, version, reason = self.node()
+        reset = next_quota_reset(now)
+        start = reset - timedelta(hours=s["hoursBefore"])
+        scheduled = bool(path and not reason and not self.cfg.trust_proxy_user)
+        next_run = None
+        if s["enabled"] and scheduled:
+            if doc.get("scheduledDay") == pacific_day(now):
+                nxt_reset = next_quota_reset(reset + timedelta(hours=1))
+                next_run = nxt_reset - timedelta(hours=s["hoursBefore"])
+            else:
+                next_run = max(now, start) if now >= start else start
+        run = self.running
+        return {
+            "available": bool(path and not reason), "reason": reason, "node": version or None, "scheduled": scheduled,
+            "settings": s, "last": doc.get("last"), "running": bool(run and run["user"] == user), "busy": bool(run),
+            "today": pacific_day(now), "resetAt": reset.isoformat(), "startsAt": start.isoformat(), "nextRunAt": next_run.isoformat() if next_run else None,
+        }
+
+    def start(self, user, trigger: str) -> str:
+        path, _, reason = self.node()
+        if not path or reason:
+            return "unavailable"
+        with self.lock:
+            if self.running:
+                return "busy"
+            self.running = {"user": user, "since": time.time(), "trigger": trigger}
+        threading.Thread(target=self._run, args=(user, trigger), daemon=True).start()
+        return "started"
+
+    def _record(self, user, trigger, last: dict):
+        d = user_data_dir(self.cfg, user)
+        with self.file_lock:
+            doc = read_sweep_file(d)
+            doc["last"] = last
+            if trigger == "schedule":
+                doc["scheduledDay"] = pacific_day(self.now())
+            d.mkdir(parents=True, exist_ok=True)
+            atomic_write(d / "sweep.json", json.dumps(doc).encode(), private=True)
+
+    def _run(self, user, trigger):
+        c = self.cfg
+        started = time.time()
+        last = {"at": datetime.now(timezone.utc).isoformat(), "trigger": trigger, "ok": False, "report": None, "error": ""}
+        try:
+            s = self.settings(user)
+            host = "127.0.0.1" if c.host in ("0.0.0.0", "::", "", "localhost") else c.host
+            cmd = [self.node()[0], str(ROOT / "sweep.mjs"), "--base", f"http://{host}:{c.port}", "--reserve", str(s["reserve"]), "--ai", "1" if s["ai"] else "0",
+                   "--max-minutes", str(SWEEP_MAX_MINUTES)] + (["--user", user] if user else [])
+            env = dict(os.environ, UNFURL_SWEEP_TOKEN=self.token)
+            if c.yt_upstream != YT_UPSTREAM:
+                env["UNFURL_SWEEP_YT_BASE"] = c.yt_upstream   # (tests point YouTube at a stand-in)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=SWEEP_MAX_MINUTES * 60 + 180, env=env, cwd=str(ROOT))
+            line = next((ln for ln in reversed(proc.stdout.splitlines()) if ln.startswith("SWEEP_RESULT ")), None)
+            if line:
+                res = json.loads(line[len("SWEEP_RESULT "):])
+                last.update(ok=bool(res.get("ok")), report=res.get("report"), error=str(res.get("error") or "")[:400])
+            else:
+                last["error"] = (proc.stderr.strip().splitlines() or ["The sweep ended without a report."])[-1][:400]
+        except subprocess.TimeoutExpired:
+            last["error"] = "The sweep took too long and was stopped."
+        except (OSError, ValueError) as e:
+            last["error"] = f"The sweep couldn't run: {e}"[:400]
+        finally:
+            last["seconds"] = round(time.time() - started)
+            try:
+                self._record(user, trigger, last)
+            finally:
+                self.running = None
+
+    def tick(self):
+        """Start a scheduled sweep if one is due. Returns the user it started for (or None)."""
+        if self.running or time.monotonic() - Handler.last_activity < float(os.environ.get("UNFURL_SWEEP_IDLE", SWEEP_IDLE_SECONDS)):
+            return None   # busy, or someone is using the app: wait (the window lasts hours)
+        path, _, reason = self.node()
+        if not path or reason:
+            return None
+        now = self.now()
+        today, reset = pacific_day(now), next_quota_reset(now)
+        for user in self.scheduled_users():
+            doc = read_sweep_file(user_data_dir(self.cfg, user))
+            s = sweep_clean(doc.get("settings"))
+            if s["enabled"] and doc.get("scheduledDay") != today and now >= reset - timedelta(hours=s["hoursBefore"]):
+                if self.start(user, "schedule") == "started":
+                    return user if user is not None else ""
+        return None
+
+    def loop(self):
+        while True:
+            time.sleep(float(os.environ.get("UNFURL_SWEEP_TICK", 30)))   # (tests shorten this)
+            try:
+                self.tick()
+            except Exception as e:  # a scheduler must never die of a surprise
+                print(f"sweep scheduler: {e}", file=sys.stderr)
+
+
 # ---------------------------------------------------------------- HTTP
 
 class Handler(SimpleHTTPRequestHandler):
@@ -527,9 +764,12 @@ class Handler(SimpleHTTPRequestHandler):
     ai_usage = UsageMeter()   # the same, for AI-helper requests (ai-usage.json)
     failures = {}   # ip -> [count, locked_until, window_start]
     auth_cache = {}  # sha256(Authorization header) -> (name, valid_until); only successful logins
+    sweeper = None   # the nightly sweep (set in main())
+    last_activity = 0.0   # when somebody last used the app (monotonic seconds): a scheduled sweep waits for quiet
 
     def __init__(self, *args, **kwargs):
         self.user = None
+        self.internal = False
         self.bad_host = ""
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
@@ -593,6 +833,11 @@ class Handler(SimpleHTTPRequestHandler):
     def _authenticate(self) -> bool:
         """Sets self.user. Returns False (after answering) if the request may not continue."""
         c = self.cfg
+        token = self.headers.get("X-Unfurl-Internal")
+        if token and self.sweeper and hmac.compare_digest(token.encode(), self.sweeper.token.encode()) and self.client_address[0] in ("127.0.0.1", "::1"):
+            self.internal = True   # the nightly sweep (our own child process), acting for the person named in X-Unfurl-User
+            self.user = (self.headers.get("X-Unfurl-User") or "").strip() or None
+            return True
         if c.trust_proxy_user:
             if not self._from_proxy():  # a header anyone could forge is worthless unless it came from the proxy itself
                 self._challenge(HTTPStatus.FORBIDDEN, "Reach this server through its login proxy.")
@@ -766,6 +1011,8 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden", "reason": "host", "host": self.bad_host, "allowed": sorted(self.cfg.allowed_hosts)})
             return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden", "reason": "header"})
         c, d = self.cfg, self.data_dir
+        if path != "/api/ping" and not self.internal:
+            Handler.last_activity = time.monotonic()   # (an open but untouched page only polls /api/ping)
         if path == "/api/ping" and method == "GET":
             info = {
                 "app": "unfurl", "version": APP_VERSION, "build": c.build, "pollSeconds": c.poll_seconds,
@@ -777,6 +1024,30 @@ class Handler(SimpleHTTPRequestHandler):
 
         if path.startswith("/api/yt/") and method == "GET":
             return self._youtube_proxy(path[len("/api/yt/"):])
+
+        if path.startswith("/api/sweep") and self.sweeper is None:
+            return self._json(HTTPStatus.NOT_FOUND, {"error": "not available"})
+        if path == "/api/sweep" and method == "GET":
+            return self._json(HTTPStatus.OK, self.sweeper.status(self.user))
+        if path == "/api/sweep" and method == "PUT":
+            raw = self._body()
+            try:
+                patch = json.loads(raw) if raw else None
+            except ValueError:
+                patch = None
+            if not isinstance(patch, dict):
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "bad_request", "message": "Send the settings as a JSON object."})
+            _, err = self.sweeper.update(self.user, patch)
+            if err:
+                return self._json(HTTPStatus.BAD_REQUEST, {"error": "bad_setting", "message": err})
+            return self._json(HTTPStatus.OK, self.sweeper.status(self.user))
+        if path == "/api/sweep/run" and method == "POST":
+            if self.internal:
+                return self._json(HTTPStatus.FORBIDDEN, {"error": "forbidden", "message": "The sweep can't start a sweep."})
+            how = self.sweeper.start(self.user, "manual")
+            if how == "started":
+                return self._json(HTTPStatus.ACCEPTED, {"started": True})
+            return self._json(HTTPStatus.CONFLICT, {"error": how, "message": "A sweep is already running." if how == "busy" else self.sweeper.node()[2]})
 
         if path == "/api/gemini/status" and method == "GET":
             return self._json(HTTPStatus.OK, self._gemini_status())
@@ -1156,6 +1427,7 @@ def selftest() -> int:
     c.build = "selftest"
     Handler.cfg = c
     Handler.quiet = True
+    Handler.sweeper = SweepManager(c)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     c.port = httpd.server_address[1]
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -1199,6 +1471,13 @@ def selftest() -> int:
         expect(st == 200, f"saving data should work (got {st})")
         st, _, body = get("/api/profile", api=True)
         expect(st == 200 and json.loads(body)["data"]["probe"] is True, "saved data should read back")
+        st, _, body = get("/api/sweep", api=True)
+        expect(st == 200 and json.loads(body).get("settings", {}).get("enabled") is False, "the nightly sweep should exist and be off until switched on")
+        st, _, _ = get("/sweep.mjs")
+        expect(st == 404, f"/sweep.mjs must not be served (got {st})")
+        expect(next_quota_reset(datetime(2026, 7, 1, 12, tzinfo=timezone.utc)) == datetime(2026, 7, 2, 7, tzinfo=timezone.utc)
+               and next_quota_reset(datetime(2026, 12, 1, 12, tzinfo=timezone.utc)) == datetime(2026, 12, 2, 8, tzinfo=timezone.utc),
+               "YouTube's day should end at midnight Pacific time, in summer and in winter")
     except Exception as e:   # noqa: BLE001 - any failure means the build is not fit to deploy
         problems.append(f"unexpected error: {e!r}")
     finally:
@@ -1215,7 +1494,7 @@ def selftest() -> int:
 
 ARCHIVE_NAME = re.compile(r"^unfurl-backup-\d{4}-\d{2}-\d{2}\.zip$")
 _USER = r"users/[a-z0-9_-][a-z0-9._-]{0,63}/"
-RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage|ai|ai-usage)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
+RESTORABLE = re.compile(rf"^(?:{_USER})?(?:(?:profile|index|config|usage|ai|ai-usage|sweep)\.json|backups/profile-[A-Za-z0-9._-]+\.json)$")
 USER_FOLDER = re.compile(r"^[a-z0-9_-][a-z0-9._-]{0,63}$")
 RECENT_COPIES = 3            # of the app's own rolling profile backups, per person, that go into the archive
 MAX_RESTORE_BYTES = 4 << 30
@@ -1227,7 +1506,7 @@ def backup_sources(data_dir: Path, small: bool = False):
     found = []
 
     def folder(path: Path, prefix: str):
-        for name in ("profile.json", "config.json", "ai.json", "usage.json", "ai-usage.json") + (() if small else ("index.json",)):
+        for name in ("profile.json", "config.json", "ai.json", "sweep.json", "usage.json", "ai-usage.json") + (() if small else ("index.json",)):
             f = path / name
             if f.is_file() and not f.is_symlink():
                 found.append((prefix + name, f))
@@ -1405,6 +1684,7 @@ def main(argv=None, env=None):
     Handler.cfg = c
     Handler.usage = UsageMeter(c.data_dir / "usage.json")
     Handler.ai_usage = UsageMeter(c.data_dir / "ai-usage.json")
+    Handler.sweeper = SweepManager(c)
     try:
         httpd = Server((c.host, c.port), Handler)
     except OSError as e:
@@ -1427,6 +1707,7 @@ def main(argv=None, env=None):
     if note:
         print(note)
     print("Press Ctrl+C to stop.")
+    threading.Thread(target=Handler.sweeper.loop, daemon=True).start()
     if c.open_browser and c.loopback_only:
         threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 

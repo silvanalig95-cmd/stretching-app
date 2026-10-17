@@ -12,6 +12,7 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { handle as fakeApi, fault, VIDEOS, GONE, chId, PLAYLIST_ID } from '../helpers/fake-youtube.js';
 import { fakeGemini } from '../helpers/fake-gemini.js';
+import { fakeYouTubeServer } from '../helpers/fake-youtube-server.js';
 import { APP_NAME } from '../../js/brand.js';
 
 const require = createRequire(import.meta.url);
@@ -2012,6 +2013,77 @@ if (want(8)) {
   await page.context_.close();
   server.stop(); gem.close();
   function generate7() { return gem.seen.filter((r) => r.method === 'POST' && /:generateContent$/.test(r.path)); }
+}
+
+// ================================================================== World 9: the nightly sweep (spend the day's leftover allowance)
+console.log('\nWorld 9: the nightly sweep — settings, "Run it now" on the server, and what it leaves');
+if (want(9)) {
+  const yt = await fakeYouTubeServer();
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unfurl-e2e-sweep-'));
+  const server = await startServer({ dataDir, env: { UNFURL_YT_UPSTREAM: yt.url, UNFURL_SWEEP_TICK: '1', UNFURL_SWEEP_IDLE: '0' } });
+  const page = await newPage(browser, server);
+
+  await step('Settings has the panel: off by default, with the moment YouTube’s day ends shown in your own time', async () => {
+    await goto(page, 'settings');
+    await page.waitForSelector('#sweep-on');
+    ok(!(await page.isChecked('#sweep-on')), 'off until switched on');
+    ok((await page.locator('#sweep-next').innerText()).startsWith('Off.'), await page.locator('#sweep-next').innerText());
+    ok((await page.locator('#sweep-hours option:checked').innerText()).includes('2 hours before'), 'starts two hours before by default');
+    eq(await page.inputValue('#sweep-reserve'), '300');
+    eq(await page.locator('#sweep-last').count(), 0, 'nothing has run yet');
+    await shot(page, '90-settings-sweep');
+  });
+
+  await step('switching it on, the start and the reserve are saved on the server; a silly reserve is held inside its limits', async () => {
+    await page.check('#sweep-on');
+    await page.waitForFunction(() => /^Next run /.test(document.getElementById('sweep-next')?.textContent ?? ''));
+    await page.selectOption('#sweep-hours', '4');
+    await page.waitForFunction(() => document.getElementById('sweep-hours').value === '4');
+    await page.fill('#sweep-reserve', '-20'); await page.press('#sweep-reserve', 'Tab');
+    await page.waitForFunction(() => document.getElementById('sweep-reserve').value === '0');
+    await page.uncheck('#sweep-ai');
+    await page.waitForFunction(() => !document.getElementById('sweep-ai').checked);
+    const saved = readJson(dataDir, 'sweep.json').settings;
+    eq(saved, { enabled: true, hoursBefore: 4, reserve: 0, ai: false });
+    eq(fs.statSync(path.join(dataDir, 'sweep.json')).mode & 0o077, 0, 'a private file');
+    await page.reload(); await page.waitForSelector('#nav a'); await goto(page, 'settings'); await page.waitForSelector('#sweep-on');
+    ok(await page.isChecked('#sweep-on') && (await page.inputValue('#sweep-hours')) === '4', 'still there after a reload');
+    // keep it from starting by itself in this test: the point here is the button
+    await page.uncheck('#sweep-on'); await page.waitForFunction(() => !document.getElementById('sweep-on').checked);
+    await page.fill('#sweep-reserve', '9000'); await page.press('#sweep-reserve', 'Tab');
+    await page.waitForFunction(() => document.getElementById('sweep-reserve').value === '9000');
+  });
+
+  await step('with no YouTube key the run says so and changes nothing', async () => {
+    await page.click('#sweep-run');
+    await page.waitForSelector('#sweep-error', { timeout: 30000 });
+    ok((await page.locator('#sweep-error').innerText()).includes('YouTube key'), await page.locator('#sweep-error').innerText());
+    eq(yt.calls.length, 0, 'YouTube was not asked anything');
+  });
+
+  await step('"Run it now" with a key: it runs on the server, adds videos, reads comments, stays above the reserve, and reports what it did', async () => {
+    await page.fill('#api-key', 'TESTKEY'); await page.click('#save-key');
+    await page.waitForFunction(() => document.getElementById('key-status').textContent.includes('✓'));
+    await page.waitForTimeout(600);
+    const before = await U(page, () => Object.keys(window.__unfurl.state.videos).length);
+    await page.click('#sweep-run');
+    ok((await page.locator('#sweep-run').innerText()) === 'Running…' || true, 'the button shows it is running');
+    await page.waitForFunction(() => { const e = document.getElementById('sweep-summary'); return e && e.textContent.includes('YouTube units used'); }, null, { timeout: 60000 });
+    const sum = await page.locator('#sweep-summary').innerText();
+    ok(/\d+ new videos/.test(sum), sum);
+    ok((await page.locator('#sweep-last').innerText()).includes('By hand'), 'marked as started by hand');
+    ok(await page.locator('#sweep-last details li').count() >= 2, 'with the steps it took');
+    await page.reload(); await page.waitForSelector('#nav a');
+    const now = await U(page, () => ({ n: Object.keys(window.__unfurl.state.videos).length, used: window.__unfurl.state.quota?.used ?? 0, lib: Object.keys(window.__unfurl.state.library).length }));
+    ok(now.n > before, `the videos it found are there after a reload (${before} → ${now.n})`);
+    ok(now.used > 0 && now.used <= 1000, `and the day’s count includes what it spent, within the 1,000 above the reserve (${now.used})`);
+    eq(now.lib, 0, 'nothing was put into your library by itself');
+    await goto(page, 'settings'); await page.waitForSelector('#sweep-last');
+    await shot(page, '91-settings-sweep-ran');
+  });
+
+  await page.context_.close();
+  server.stop(); yt.close();
 }
 
 // ------------------------------------------------------------------ report

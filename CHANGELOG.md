@@ -10,6 +10,18 @@ Your library, history and ratings are never left behind by an update:
 - When the **analysis** gets smarter, the app re-analyses everything you already have from the raw text and comments it stored; nothing is re-fetched and nothing is lost.
 - A damaged file is set aside (never deleted) and the latest good backup is restored.
 
+## 0.13.0
+
+**Use up the day's leftover YouTube allowance.** YouTube's free allowance (10,000 units a day) starts again at midnight in California, which is 09:00 in Germany, and whatever is left until then is simply lost. Settings now has **“Use up the day's leftover allowance”**: a little before that moment the server spends what is left, on what Olympus otherwise does by hand, and keeps a reserve you choose untouched.
+
+- **What it does, in turns** (so one big job can't use everything up before the others get a go): checks followed teachers for new uploads; reads the viewer comments of library videos that have none (this is where the muscle evidence comes from); reads more of the channels you like (favourites, followed, most of your library: first their newest 150 uploads, later up to 500); searches for the muscle areas your library covers least; reads the comments of the other videos found so far; and, if the AI helper is set up, lets Gemini watch a few library videos and read others with what is left of its daily requests (never more than the server's cap allows).
+- **When**: once a day, 0.5 to 8 hours before YouTube's day ends (your choice, shown in your own time; default 2 hours), and only when nobody has used Olympus for ten minutes (an open but untouched page doesn't count), so it never gets in the way of an evening or a morning routine. If you stretch right before the reset, choose an earlier start: the sweep leaves nothing for after it.
+- **Where**: on the server, with the key saved there, whether or not a page is open. It runs the app's own JavaScript with Node.js (`sweep.mjs`), which loads and saves your data the same careful way as the page. **Node.js 18 or newer must be installed next to the server**: the Docker image includes it, so Docker needs **one rebuild** (`rebuild-docker.bat`; see deploy/WINDOWS.md); with `start.bat` install Node from nodejs.org. Without it the panel says so.
+- **“Run it now”** does a run immediately; the panel shows what the last run did, step by step. Everything found goes to “Discovered”; nothing is added to your library by itself.
+- With several logins each person has their own settings, report and key (a shared server key keeps each person's daily share). It can't run by itself behind a login proxy that only names people when they show up; “Run it now” works there.
+- Also fixed: the server counted the shared key's day in Pacific *standard* time all year, an hour off in summer; it now follows daylight saving like YouTube does.
+- Tested against stand-ins for YouTube and Google, never the real services.
+
 ## 0.12.0
 
 **A page for every teacher.** Click a teacher's name anywhere (on Today, the “More that fit” cards, the Library, Look at a video first, the Journal, or in the Teachers list) and their page opens (`#teacher/<name>`, so it can be bookmarked or opened in a new tab; Back returns to where you were). On the “More that fit” cards the name is a link while the rest of the card still plays the video.

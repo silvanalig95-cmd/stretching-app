@@ -160,7 +160,7 @@ open pages show "A new version of Olympus is ready — Reload"
 
 **Automatic** (nothing for you to do, usually live within a minute of my push): everything the app is made of: the pages, the search and analysis, the muscle lists, the server code, and, once you have done the one rebuild below, the updater itself.
 
-**Not automatic: a rebuild is needed** only when the *container recipe* changes: `Dockerfile`, `docker-compose.yml`, the supervisor script `deploy\run.sh`, or the settings template. I'll say so whenever that happens ("needs a rebuild"). To do it, double-click **`rebuild-docker.bat`** with Docker Desktop running. It downloads the newest recipe into `C:\Unfurl`, rebuilds the box and restarts it; your settings (`deploy\unfurl.env`) and your data are not touched. (If you set up before that file existed, do the same by hand once, in PowerShell:
+**Not automatic: a rebuild is needed** only when the *container recipe* changes (the nightly sweep of version 0.13.0 needs Node.js inside the box, so that version needs **one rebuild**): `Dockerfile`, `docker-compose.yml`, the supervisor script `deploy\run.sh`, or the settings template. I'll say so whenever that happens ("needs a rebuild"). To do it, double-click **`rebuild-docker.bat`** with Docker Desktop running. It downloads the newest recipe into `C:\Unfurl`, rebuilds the box and restarts it; your settings (`deploy\unfurl.env`) and your data are not touched. (If you set up before that file existed, do the same by hand once, in PowerShell:
 ```powershell
 cd C:\
 Invoke-WebRequest https://github.com/silvanalig95-cmd/stretching-app/archive/refs/heads/claude/sharp-cray-hko5xu.zip -OutFile unfurl-new.zip
@@ -173,7 +173,7 @@ The ZIP contains no `unfurl.env`, so yours is never overwritten.)
 
 **Checking that an update arrived** (any one of these):
 
-1. **The footer of the app** shows `Olympus 0.12.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
+1. **The footer of the app** shows `Olympus 0.13.0 · build 1a2b3c4`. Compare those 7 characters with the newest commit on <https://github.com/silvanalig95-cmd/stretching-app/commits/claude/sharp-cray-hko5xu>. I'll also tell you the short commit id each time I push.
 2. **Settings → Your data → Versions** shows the same build.
 3. <http://localhost/healthz> shows `"build": "…"` (12 characters, starting with the same 7).
 4. **The log:** `docker compose -f deploy/docker-compose.yml logs --tail 20` shows a line like `update to 1a2b3c4d5e6f is live and healthy`. A refused update says `NOT updating to …`, and one that didn't start says `putting … back`.

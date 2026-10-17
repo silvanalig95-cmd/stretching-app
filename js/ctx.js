@@ -61,9 +61,9 @@ export const quotaInfo = () => {
 };
 
 /** Options for one discovery run, capped so it can never spend more than what is left of today's allowance. */
-export function runOptions(name = ctx.state.prefs.thoroughness) {
+export function runOptions(name = ctx.state.prefs.thoroughness, { keep = 20 } = {}) {
   const effort = effortFor(name);
-  return { ...effort, budget: Math.min(effort.budget, quotaInfo().left - 20) };
+  return { ...effort, budget: Math.min(effort.budget, quotaInfo().left - Math.max(20, keep)) };   // `keep`: units to leave untouched (the nightly sweep's reserve)
 }
 
 /** Sync the filters' length with saved preferences (first load). */
@@ -273,14 +273,14 @@ async function verifySuggestions(api) {
   if (gone) say(`${gone} suggested video(s) no longer exist and were removed.`);
 }
 
-export async function growLibrary(areaIds) {
+export async function growLibrary(areaIds, { keep = 20 } = {}) {
   const prev = { ...ctx.ui.filters, areas: ctx.ui.filters.areas.map((a) => ({ ...a })) };
   ctx.ui.filters = { areas: areaIds.map((id) => ({ id, mode: 'tight' })), minMin: null, maxMin: null, styles: [], hints: [], terms: [], source: 'all', voice: '' };
   const api = client();
   if (!api) { ctx.ui.filters = prev; throw new Error('Add a YouTube key in Settings first.'); }
   ctx.ui.log = [];
   try {
-    const res = await discover({ client: api, filters: ctx.ui.filters, state: ctx.state, rng: freshRng(), progress: say, opts: runOptions() });
+    const res = await discover({ client: api, filters: ctx.ui.filters, state: ctx.state, rng: freshRng(), progress: say, opts: runOptions(undefined, { keep }) });
     const added = applyDiscovery(ctx.state, res);
     ctx.store.save();
     return { added, report: res.report };
@@ -394,16 +394,17 @@ const IMPORT_COMMENTS_MAX = 300;   // comments read per import (1 unit each); th
 export const missingCommentsCount = () => Object.values(ctx.state.videos).filter(needsComments).length;
 
 /** Read comments for videos that never had them (your library first). Returns what happened. */
-export async function readMissingComments({ max = 300, progress = () => {} } = {}) {
+export async function readMissingComments({ max = 300, keep = 20, onlyLibrary = false, progress = () => {} } = {}) {
   const api = client();
   if (!api) throw new Error('Reading comments needs a YouTube key (Settings), or the server’s shared one.');
   const { state } = ctx;
-  const res = await readCommentsFor({ client: api, state, ids: Object.keys(state.videos), max, budget: quotaInfo().left - 20, priority: new Set(Object.keys(state.library)), progress });
+  const ids = onlyLibrary ? Object.keys(state.library).filter((id) => state.videos[id]) : Object.keys(state.videos);
+  const res = await readCommentsFor({ client: api, state, ids, max, budget: quotaInfo().left - Math.max(20, keep), priority: new Set(Object.keys(state.library)), progress });
   if (res.read) { ctx.store.save(); ctx.hooks.renderResults?.(); }
   return res;
 }
 
-export async function importInputs(text, { toLibrary = false, follow = false, maxVideos = undefined, progress = () => {} } = {}) {
+export async function importInputs(text, { toLibrary = false, follow = false, maxVideos = undefined, keep = 20, progress = () => {} } = {}) {
   const { state } = ctx;
   const items = splitInputs(text);
   const out = { videos: 0, imported: 0, followed: [], names: [], channels: [], problems: [], commentsRead: 0 };
@@ -445,7 +446,7 @@ export async function importInputs(text, { toLibrary = false, follow = false, ma
       out.imported += res.records.length; out.names.push(res.title);
       if (res.channel) out.channels.push({ id: res.channel.id, name: res.channel.name });
       // Always read what viewers say about what was just imported: that is where the muscle evidence comes from.
-      const cr = await readCommentsFor({ client: api, state, ids: res.records.map((r) => r.id), max: IMPORT_COMMENTS_MAX, budget: quotaInfo().left - 20, priority: libraryIds(), progress });
+      const cr = await readCommentsFor({ client: api, state, ids: res.records.map((r) => r.id), max: IMPORT_COMMENTS_MAX, budget: quotaInfo().left - Math.max(20, keep), priority: libraryIds(), progress });
       out.commentsRead += cr.read;
       if (cr.stopped === 'quota' || cr.stopped === 'budget') out.problems.push(`Today’s YouTube allowance ran out after reading comments on ${cr.read} videos; “Read missing comments” in the Library finishes the rest tomorrow (${cr.remaining} left).`);
       else if (cr.stopped === 'cap') out.problems.push(`Read comments on ${cr.read} videos; ${cr.remaining} more are waiting (“Read missing comments” in the Library).`);

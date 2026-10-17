@@ -22,6 +22,7 @@ Your server only makes **outgoing** connections (to GitHub). Nothing from the in
 
 - A Linux machine you control (a small VM or Raspberry Pi is plenty) with `python3` and `git`. **systemd** for the simple setup, or **Docker** if you prefer containers.
 - Outgoing access to `github.com` (HTTPS or SSH).
+- Optional: **Node.js 18 or newer**, only for the nightly sweep (see below; the Docker image already has it).
 - The repository: `silvanalig95-cmd/stretching-app` (or wherever you keep it).
 - **Decide the branch the server follows** (`UNFURL_BRANCH`). Right now the repository has a single branch, `claude/sharp-cray-hko5xu` (also its default, so a plain `git clone` is on it); there is no `main` yet. Whoever can push to that branch can change the code that runs on your server, so make it a branch only you (and Claude, on your request) push to, and turn on GitHub *branch protection* for it if you like.
 
@@ -60,7 +61,7 @@ The image contains a copy of the app and, if `UNFURL_REPO_URL` is set, updates i
 
 ## How to tell which version is running
 
-The footer of the app shows the build (`Olympus 0.12.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
+The footer of the app shows the build (`Olympus 0.13.0 · build 1a2b3c4`), as does Settings → Your data → Versions; `/healthz` returns it; and `update.sh --status` shows the live, previous and rejected builds. Compare with the newest commit of the followed branch on GitHub. What the updater can change by itself is the app, the server code and the updater; what only a rebuild of the Docker image changes is the container recipe (`Dockerfile`, `docker-compose.yml`, `run.sh`).
 
 ## Who can use it (logins)
 
@@ -116,6 +117,16 @@ Searching YouTube needs a free API key. Either each person pastes their own in *
 ## AI helper (Gemini) for everyone
 
 Optional. Each person can paste their own free Google AI key in **Settings → AI helper**, or you keep **one key on the server** (`UNFURL_GEMINI_KEY` or `UNFURL_GEMINI_KEY_FILE`; keys come from <https://aistudio.google.com/apikey>) and nobody needs one: the browser never sees it, and each person is capped at `UNFURL_USER_DAILY_AI_CALLS` requests a day (default 60, counted in Pacific time and remembered across restarts). `UNFURL_GEMINI_MODEL` pins a model; without it the server asks Google which models the key can use and picks a current Flash one. A person's own key is used instead of the shared one. Only public data (a video's link, its public text) is sent to Google, never anyone's history, notes or library. On Google's free tier, Google may use submitted content to improve its products; if that matters, put a paid key on the server. The container needs outbound HTTPS to `generativelanguage.googleapis.com`.
+
+## The nightly sweep (spend the day's leftover allowance)
+
+Optional, per person (Settings → “Use up the day's leftover allowance”). Near the end of YouTube's day (midnight Pacific time) the server runs `sweep.mjs` with Node.js to spend what is left of that person's YouTube allowance (and of the AI helper's daily requests) on widening and reading their library, keeping a reserve. Things to know when you run the server:
+
+- **Node.js 18 or newer** must be on the server's PATH (or set `UNFURL_NODE`). The Docker image includes it, so an existing Docker install needs **one rebuild**; the Linux/systemd install needs `apt install nodejs` (or equivalent). Without Node the Settings panel says so, and nothing else is affected.
+- The key used is the one saved for that person on the server, or the shared one (`UNFURL_YOUTUBE_KEY`, still limited to each person's daily share).
+- A scheduled run starts only inside the window the person chose, once per Pacific day, and only when the app has not been used for ten minutes (open but untouched pages poll `/api/ping`, which doesn't count). Behind a login proxy that names people with a header (`UNFURL_TRUST_PROXY_USER`) there is no list of people to schedule for, so only “Run it now” works.
+- The sweep reaches the server over the loopback address with a secret generated each time the server starts and given only to the sweep; it is never written to disk or sent anywhere else.
+- Each person's settings and last report are in `sweep.json` in their data folder (included in backups). Logs: look for “sweep” in the server's output.
 
 ## Private repository
 
