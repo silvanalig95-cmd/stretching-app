@@ -1133,6 +1133,8 @@ if (want(2)) {
     await page.fill('#add-text', `https://youtu.be/${VIDEOS[40].id}\n${VIDEOS[41].id}`);
     await page.click('#add-btn');
     await page.waitForFunction((a) => window.__unfurl.state.library[a]?.snapshot, VIDEOS[40].id);
+    // (the library entry appears when the video is added; its comments are read right after, one video at a time)
+    await page.waitForFunction((ids) => ids.every((id) => window.__unfurl.state.videos[id]?.comments?.length > 0), [VIDEOS[40].id, VIDEOS[41].id], { timeout: 10000 });
     for (const v of [VIDEOS[40], VIDEOS[41]]) ok(await U(page, (id) => window.__unfurl.state.videos[id].comments?.length > 0, v.id), 'comments attached');
   });
 
